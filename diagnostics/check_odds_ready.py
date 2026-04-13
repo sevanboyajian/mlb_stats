@@ -31,11 +31,17 @@ EXIT CODES
     2  DB not found or query error
 """
 
+# CHANGE LOG (latest first)
+# -------------------------
+# 2026-04-13 16:24 ET  Refactor: route sqlite3.connect() calls through core.db.connection.connect().
+
 import argparse
 import os
 import sqlite3
 import sys
 from datetime import date, datetime, timedelta, timezone
+
+from core.db.connection import connect as db_connect
 
 DEFAULT_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mlb_stats.db")
 
@@ -45,7 +51,7 @@ def get_connection(db_path: str) -> sqlite3.Connection:
         print(f"\n  ✗  Database not found: {db_path}")
         print("     Run from your mlb_stats folder.")
         sys.exit(2)
-    con = sqlite3.connect(db_path)
+    con = db_connect(db_path)
     con.row_factory = sqlite3.Row
     return con
 

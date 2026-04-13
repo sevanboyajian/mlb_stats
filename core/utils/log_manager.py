@@ -32,6 +32,10 @@ Default: keep the 7 most recent files per prefix.
 Override: rotate_logs("load_today", keep=14)
 """
 
+# CHANGE LOG (latest first)
+# -------------------------
+# 2026-04-13 16:24 ET  Chore: add persistent top-of-file change log header.
+
 import os
 from contextlib import contextmanager
 from datetime import date

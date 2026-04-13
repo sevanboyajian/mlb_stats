@@ -11,6 +11,10 @@
 ╚══════════════════════════════════════════════════════════════╝
 """
 
+# CHANGE LOG (latest first)
+# -------------------------
+# 2026-04-13 16:24 ET  Refactor: route sqlite3.connect() calls through core.db.connection.connect().
+
 import os
 import sqlite3
 import subprocess
@@ -20,6 +24,8 @@ from typing import Optional
 
 import pandas as pd
 import streamlit as st
+
+from core.db.connection import connect as db_connect
 
 # ─────────────────────────────────────────────────────────────
 #  PAGE CONFIG  (must be first Streamlit call)
@@ -256,7 +262,7 @@ button[data-testid="baseButton-primary"]:hover { background:#0ed494 !important; 
 def get_connection():
     if not os.path.exists(DB_PATH):
         return None
-    con = sqlite3.connect(DB_PATH, check_same_thread=False)
+    con = db_connect(DB_PATH, check_same_thread=False)
     con.row_factory = sqlite3.Row
     return con
 

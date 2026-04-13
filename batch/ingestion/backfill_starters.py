@@ -36,6 +36,10 @@ NOTES
     Unplayed games use hydrate=probablePitchers.
 """
 
+# CHANGE LOG (latest first)
+# -------------------------
+# 2026-04-13 16:24 ET  Refactor: route sqlite3.connect() calls through core.db.connection.connect().
+
 import argparse
 import json
 import sqlite3
@@ -44,6 +48,8 @@ import time
 import urllib.request
 from datetime import date, datetime, timedelta
 from pathlib import Path
+
+from core.db.connection import connect as db_connect
 
 try:
     from zoneinfo import ZoneInfo as _ZI
@@ -63,7 +69,7 @@ def get_connection(db_path: Path) -> sqlite3.Connection:
     if not db_path.exists():
         print(f"✗  Database not found: {db_path}")
         sys.exit(1)
-    con = sqlite3.connect(db_path, timeout=30)
+    con = db_connect(str(db_path), timeout=30)
     con.row_factory = sqlite3.Row
     return con
 

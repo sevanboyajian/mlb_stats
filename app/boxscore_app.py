@@ -19,6 +19,10 @@ Shares the scout.py colour palette and font system via .streamlit/config.toml.
 No files are written; every render is built from a fresh DB query.
 """
 
+# CHANGE LOG (latest first)
+# -------------------------
+# 2026-04-13 16:24 ET  Refactor: route sqlite3.connect() calls through core.db.connection.connect().
+
 import re
 import sqlite3
 from datetime import date, datetime, timedelta
@@ -26,6 +30,7 @@ from pathlib import Path
 
 import streamlit as st
 import streamlit.components.v1 as components
+from core.db.connection import connect as db_connect
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -196,7 +201,7 @@ button[data-testid="baseButton-secondary"] {
 def get_conn():
     if not DB_PATH.exists():
         return None
-    con = sqlite3.connect(str(DB_PATH), check_same_thread=False)
+    con = db_connect(str(DB_PATH), check_same_thread=False)
     con.row_factory = sqlite3.Row
     return con
 

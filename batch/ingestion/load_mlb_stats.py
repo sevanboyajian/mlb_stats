@@ -45,6 +45,10 @@ DEPENDENCIES:
 ────────────────────────────────────────────────────────────────────────────
 """
 
+# CHANGE LOG (latest first)
+# -------------------------
+# 2026-04-13 16:24 ET  Refactor: route sqlite3.connect() calls through core.db.connection.connect().
+
 import argparse
 import json
 import logging
@@ -57,6 +61,8 @@ import urllib.error
 import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
+
+from core.db.connection import connect as db_connect
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 MLB_API      = "https://statsapi.mlb.com/api/v1"
@@ -135,7 +141,7 @@ def get_connection(db_path: str) -> sqlite3.Connection:
         log.error("Run create_db.py first to create the database.")
         sys.exit(1)
 
-    con = sqlite3.connect(db_path, timeout=30)  # wait up to 30s if Scout holds a lock
+    con = db_connect(db_path, timeout=30)  # wait up to 30s if Scout holds a lock
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys = OFF")   # OFF during bulk load — re-enabled in verify step
     con.execute("PRAGMA journal_mode = WAL")

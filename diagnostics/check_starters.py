@@ -9,6 +9,10 @@ Run:  python check_starters.py
       python check_starters.py --date 2026-04-05
 """
 
+# CHANGE LOG (latest first)
+# -------------------------
+# 2026-04-13 16:24 ET  Chore: add persistent top-of-file change log header.
+
 import argparse
 import json
 import urllib.request

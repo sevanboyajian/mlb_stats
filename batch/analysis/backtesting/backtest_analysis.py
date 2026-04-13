@@ -24,6 +24,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from core.db.connection import connect as db_connect
+
 DEFAULT_DB  = r"C:\Users\sevan\OneDrive\Documents\Python\mlb_stats\mlb_stats.db"
 REPORTS_DIR = r"C:\Users\sevan\OneDrive\Documents\Python\mlb_stats\reports"
 DEFAULT_OUT = r"C:\Users\sevan\OneDrive\Documents\Python\mlb_stats\reports\backtest_report.md"
@@ -62,7 +64,7 @@ BOOKMAKER_CONFIG = {
 # -- Helpers -------------------------------------------------------------------
 
 def connect(db_path):
-    con = sqlite3.connect(db_path)
+    con = db_connect(db_path)
     con.row_factory = sqlite3.Row
     return con
 
@@ -805,7 +807,7 @@ def run_h4_standalone():
         args.out = str(Path(REPORTS_DIR) / f"h4_rolling_era_report_{args.bookmaker}.md")
 
     os.makedirs(str(Path(args.out).parent), exist_ok=True)
-    con = sqlite3.connect(args.db)
+    con = db_connect(args.db)
     con.row_factory = sqlite3.Row
 
     print(f"Running H4 rolling ERA [{cfg['label']} {cfg['seasons_label']}]...")

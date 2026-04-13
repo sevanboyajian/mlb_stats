@@ -13,11 +13,17 @@ Usage:
     python add_f5_table.py --check   (verify state only, no changes)
 """
 
+# CHANGE LOG (latest first)
+# -------------------------
+# 2026-04-13 16:24 ET  Refactor: route sqlite3.connect() calls through core.db.connection.connect().
+
 import argparse
 import os
 import sqlite3
 import sys
 from datetime import datetime
+
+from core.db.connection import connect as db_connect
 
 # ── Default DB location: same folder as this script ───────────────────────────
 DEFAULT_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mlb_stats.db")
@@ -217,7 +223,7 @@ EXAMPLES:
         print("  Run create_db.py first to initialise the database.")
         sys.exit(1)
 
-    con = sqlite3.connect(args.db)
+    con = db_connect(args.db)
     con.row_factory = sqlite3.Row
 
     # ── Verify this is the right DB (check for games table) ───────────────

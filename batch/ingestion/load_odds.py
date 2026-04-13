@@ -34,6 +34,10 @@ API key:
   environment variable.  Get a key at https://the-odds-api.com
 """
 
+# CHANGE LOG (latest first)
+# -------------------------
+# 2026-04-13 16:24 ET  Refactor: route sqlite3.connect() calls through core.db.connection.connect().
+
 import argparse
 import json
 import logging
@@ -45,6 +49,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 import requests
+from core.db.connection import connect as db_connect
 
 # ── Optional .env support ─────────────────────────────────────────────────────
 try:
@@ -114,7 +119,7 @@ def get_connection(db_path: str) -> sqlite3.Connection:
     # timeout=30: wait up to 30 seconds for any write lock to clear before failing.
     # This allows load_odds.py to run while Scout (Streamlit) is open, since WAL
     # mode permits one writer + multiple readers simultaneously.
-    con = sqlite3.connect(db_path, timeout=30)
+    con = db_connect(db_path, timeout=30)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA journal_mode = WAL")
     con.execute("PRAGMA foreign_keys = OFF")   # off during bulk inserts

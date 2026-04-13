@@ -6,6 +6,8 @@ Reads from mlb_stats.db and outputs the formatted betting brief.
 
 CHANGE LOG (latest first)
 ──────────────────────────
+2026-04-13 16:24 ET  Refactor: route sqlite3.connect() calls through core.db.connection.connect().
+
 2026-04-11 19:00 ET  Feature: ⚡ MOVEMENT ALERT added to every pick in action
                      session briefs (early/afternoon/primary/late). When total
                      or ML moves ≥0.5 pts/10¢ since the earliest prior session
@@ -118,6 +120,8 @@ import sqlite3
 import sys
 import textwrap
 from pathlib import Path
+
+from core.db.connection import connect as db_connect
 
 # ── ET timezone helper ────────────────────────────────────────────────────
 try:
@@ -374,7 +378,7 @@ def open_db(db_path: Path) -> sqlite3.Connection:
         print(f"\n✗  Database not found: {db_path}")
         print("   Ensure you are running from the mlb_stats folder.")
         sys.exit(1)
-    conn = sqlite3.connect(db_path, timeout=30)  # wait up to 30s if Scout holds a lock
+    conn = db_connect(str(db_path), timeout=30)  # wait up to 30s if Scout holds a lock
     conn.row_factory = sqlite3.Row
     return conn
 

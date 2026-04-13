@@ -75,6 +75,8 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from core.db.connection import connect as db_connect
+
 # ── Paths ──────────────────────────────────────────────────────────────────────
 DEFAULT_DB = r"C:\Users\sevan\OneDrive\Documents\Python\mlb_stats\mlb_stats.db"
 REPORTS_DIR = Path(r"C:\Users\sevan\OneDrive\Documents\Python\mlb_stats\reports")
@@ -121,7 +123,7 @@ def get_bookmaker_filter(bookmaker_arg: str) -> set:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def connect(db_path: str) -> sqlite3.Connection:
-    con = sqlite3.connect(db_path)
+    con = db_connect(db_path)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA journal_mode=WAL")
     con.execute("PRAGMA foreign_keys=ON")

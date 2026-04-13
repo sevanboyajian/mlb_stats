@@ -1,4 +1,8 @@
 # paste this into a new file: check_api_starters.py
+# CHANGE LOG (latest first)
+# -------------------------
+# 2026-04-13 16:24 ET  Chore: add persistent top-of-file change log header.
+
 import json, urllib.request
 
 date = "2026-04-08"

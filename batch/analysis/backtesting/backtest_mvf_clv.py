@@ -52,6 +52,8 @@ import sqlite3
 import sys
 from pathlib import Path
 
+from core.db.connection import connect as db_connect
+
 # ── Constants — mirror generate_daily_brief.py exactly ────────────────────────
 WIND_IN_MIN_MPH     = 10
 HOME_FAV_MV_F_LOW   = -130   # less negative bound
@@ -68,7 +70,7 @@ PASS_N      = 20    # minimum fires for a sub-population verdict
 # ── DB helpers ─────────────────────────────────────────────────────────────────
 
 def connect(db_path: str) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path)
+    conn = db_connect(db_path)
     conn.row_factory = sqlite3.Row
     return conn
 

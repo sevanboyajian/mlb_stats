@@ -46,6 +46,10 @@ Notes:
     - 2022-2024 not available from SBRO; use Odds Warehouse for those years
 """
 
+# CHANGE LOG (latest first)
+# -------------------------
+# 2026-04-13 16:24 ET  Refactor: route sqlite3.connect() calls through core.db.connection.connect().
+
 import argparse
 import logging
 import sqlite3
@@ -54,6 +58,7 @@ from datetime import datetime
 from pathlib import Path
 
 import openpyxl
+from core.db.connection import connect as db_connect
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 DEFAULT_DB   = r"C:\Users\sevan\OneDrive\Documents\Python\mlb_stats\mlb_stats.db"
@@ -446,7 +451,7 @@ def main():
     log.info("Files to process: %s", [f.name for f in files])
 
     # Connect
-    con = sqlite3.connect(args.db)
+    con = db_connect(args.db)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA journal_mode=WAL")
     con.execute("PRAGMA foreign_keys=ON")
@@ -500,7 +505,7 @@ def main():
         seasons_loaded = [str(r["season"]) for r in all_results if r["rows_inserted"] > 0]
         total_matched  = sum(r["matched"]  for r in all_results)
         try:
-            con2 = sqlite3.connect(args.db)
+            con2 = db_connect(args.db)
             con2.execute("""
                 INSERT INTO odds_ingest_log
                     (pulled_at_utc, pull_type, sport, markets_pulled,

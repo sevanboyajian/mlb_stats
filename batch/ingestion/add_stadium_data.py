@@ -49,11 +49,17 @@ WIND EFFECT KEY
                DO NOT apply MV-B / MV-F signals at SUPPRESSED venues
 """
 
+# CHANGE LOG (latest first)
+# -------------------------
+# 2026-04-13 16:24 ET  Refactor: route sqlite3.connect() calls through core.db.connection.connect().
+
 import argparse
 import datetime
 import sqlite3
 import sys
 from pathlib import Path
+
+from core.db.connection import connect as db_connect
 
 DB_PATH = Path(__file__).parent / "mlb_stats.db"
 
@@ -548,7 +554,7 @@ def open_db(path: Path) -> sqlite3.Connection:
         print(f"\n✗  Database not found: {path}")
         print("   Run from the mlb_stats folder.")
         sys.exit(1)
-    conn = sqlite3.connect(path)
+    conn = db_connect(str(path))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")

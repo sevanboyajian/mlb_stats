@@ -2,6 +2,11 @@
 Check what dates the MLB Stats API files Apr 9 games under.
 Run this locally to see the full picture.
 """
+
+# CHANGE LOG (latest first)
+# -------------------------
+# 2026-04-13 16:24 ET  Chore: add persistent top-of-file change log header.
+
 import json, urllib.request
 
 def fetch(url):

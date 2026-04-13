@@ -16,9 +16,15 @@ What it shows:
 ────────────────────────────────────────────────────────────────
 """
 
+# CHANGE LOG (latest first)
+# -------------------------
+# 2026-04-13 16:24 ET  Refactor: route sqlite3.connect() calls through core.db.connection.connect().
+
 import os
 import sqlite3
 import sys
+
+from core.db.connection import connect as db_connect
 
 DB_NAME = "mlb_stats.db"
 
@@ -54,7 +60,7 @@ print(f"  File : {db_path}")
 print(f"  Size : {size_mb:.1f} MB")
 print()
 
-con = sqlite3.connect(db_path)
+con = db_connect(db_path)
 con.row_factory = sqlite3.Row
 
 # ── 1. Table list and row counts ──────────────────────────────

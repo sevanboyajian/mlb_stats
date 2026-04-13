@@ -48,6 +48,8 @@ import sqlite3
 import sys
 from pathlib import Path
 
+from core.db.connection import connect as db_connect
+
 DB_PATH = Path(__file__).parent / "mlb_stats.db"
 
 # ── Import signal helpers from the brief generator ────────────────────────────
@@ -87,7 +89,7 @@ def open_db():
     if not DB_PATH.exists():
         print(f"✗  Database not found: {DB_PATH}")
         sys.exit(1)
-    conn = sqlite3.connect(DB_PATH)
+    conn = db_connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     return conn
 

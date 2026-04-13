@@ -69,6 +69,8 @@ import sys
 import textwrap
 from pathlib import Path
 
+from core.db.connection import connect as db_connect
+
 # ── Locate generate_daily_brief.py in the same folder ──────────────────────
 _SCRIPT_DIR = Path(__file__).parent
 _BRIEF_PATH = _SCRIPT_DIR / "generate_daily_brief.py"
@@ -113,7 +115,7 @@ def get_connection(db_path: str) -> sqlite3.Connection:
     if not os.path.exists(db_path):
         print(f"\n✗  Database not found: {db_path}")
         sys.exit(1)
-    con = sqlite3.connect(db_path, timeout=30)
+    con = db_connect(db_path, timeout=30)
     con.row_factory = sqlite3.Row
     return con
 

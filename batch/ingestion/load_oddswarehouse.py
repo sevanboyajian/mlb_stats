@@ -29,11 +29,17 @@ Data quality issues handled (confirmed by inspection):
   10. Totals edge cases: 4.0 and 20.5 are valid (confirmed real games)
 """
 
+# CHANGE LOG (latest first)
+# -------------------------
+# 2026-04-13 16:24 ET  Refactor: route sqlite3.connect() calls through core.db.connection.connect().
+
 import argparse
 import sqlite3
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+from core.db.connection import connect as db_connect
 
 try:
     import openpyxl
@@ -346,7 +352,7 @@ def main():
     print("  Odds Warehouse MLB Importer  —  2022-2025")
     print("=" * 60)
 
-    con = sqlite3.connect(args.db)
+    con = db_connect(args.db)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA journal_mode=WAL")
     con.execute("PRAGMA foreign_keys=ON")

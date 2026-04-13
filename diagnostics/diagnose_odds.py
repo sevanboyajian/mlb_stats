@@ -4,10 +4,16 @@ Queries DB directly for actual game_pks, then shows what the Odds API
 returns and whether each event correctly maps to today's game_pks.
 Run from mlb_stats folder: python diagnose_odds.py
 """
+
+# CHANGE LOG (latest first)
+# -------------------------
+# 2026-04-13 16:24 ET  Refactor: route sqlite3.connect() calls through core.db.connection.connect().
+
 import sqlite3, os
 from datetime import date, timedelta
 from dotenv import load_dotenv
 import requests
+from core.db.connection import connect as db_connect
 
 load_dotenv()
 API_KEY = os.getenv("THE_ODDS_API_KEY")
@@ -15,7 +21,7 @@ DB_PATH = "mlb_stats.db"
 TARGET  = date.today().isoformat()
 NEXT    = (date.today() + timedelta(days=1)).isoformat()
 
-con = sqlite3.connect(DB_PATH)
+con = db_connect(DB_PATH)
 con.row_factory = sqlite3.Row
 
 # ── Pull ALL games for today + tomorrow directly ──────────────────────────────

@@ -51,6 +51,10 @@ source.  Actual post-game wind from MLB Stats API overwrites forecasts
 once games complete (load_mlb_stats.py runs at 6 AM next morning).
 """
 
+# CHANGE LOG (latest first)
+# -------------------------
+# 2026-04-13 16:24 ET  Refactor: route sqlite3.connect() calls through core.db.connection.connect().
+
 import argparse
 import math
 import os
@@ -61,6 +65,8 @@ import urllib.request
 import json
 from datetime import date, datetime, timezone, timedelta
 from typing import Optional
+
+from core.db.connection import connect as db_connect
 
 DEFAULT_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mlb_stats.db")
 
@@ -313,7 +319,7 @@ def get_connection(db_path: str) -> sqlite3.Connection:
     if not os.path.exists(db_path):
         print(f"\n  ✗  Database not found: {db_path}")
         sys.exit(2)
-    con = sqlite3.connect(db_path, timeout=30)
+    con = db_connect(db_path, timeout=30)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA journal_mode = WAL")
     return con
