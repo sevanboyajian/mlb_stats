@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+
+mlb_stats.db
+mlb_stats.db-shm
+mlb_stats.db-wal
+
+.env
+secrets.toml
+
+outputs/
+archive/

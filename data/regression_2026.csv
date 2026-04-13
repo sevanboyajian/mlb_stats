@@ -1,0 +1,6 @@
+game_date,game_pk,matchup,venue,signal,bet_side,market,bet_odds,wind,home_ml,away_ml,total,score,result,pnl,reason
+2026-03-30,823484,WSH@PHI,Citizens Bank Park,MV-B,over,TOTAL,-112,16 mph OUT,-171,+141,9.0,13-2,WIN,0.8928571428571429,"Wind OUT 16 mph, home dog -171"
+2026-03-30,824702,LAA@CHC,Wrigley Field,MV-B,over,TOTAL,-102,18 mph OUT,-186,+153,9.5,2-7,LOSS,-1.0,"Wind OUT 18 mph, home dog -186"
+2026-03-30,824702,LAA@CHC,Wrigley Field,H3b,over,TOTAL,-102,18 mph OUT,-186,+153,9.5,2-7,LOSS,-1.0,"Wind OUT 18 mph, Wrigley Field, PF 103"
+2026-03-31,823485,WSH@PHI,Citizens Bank Park,MV-B,over,TOTAL,-108,16 mph OUT,-186,+153,9.0,2-3,LOSS,-1.0,"Wind OUT 16 mph, home dog -186"
+2026-03-31,824699,LAA@CHC,Wrigley Field,MV-F,away,ML,119,14 mph IN,-143,+119,7.0,2-0,WIN,1.19,"Wind IN 14 mph, home fav -143"
