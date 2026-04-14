@@ -91,7 +91,7 @@ def check_odds_ready(game_date: str, auto_fix: bool, warn_only: bool, db_path: s
         FROM games g
         JOIN teams th ON th.team_id = g.home_team_id
         JOIN teams ta ON ta.team_id = g.away_team_id
-        WHERE g.game_date = ?
+        WHERE g.game_date_et = ?
           AND g.game_type = 'R'
           AND g.status NOT IN ('Final', 'Cancelled', 'Postponed')
         ORDER BY g.game_start_utc

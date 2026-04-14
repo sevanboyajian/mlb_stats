@@ -371,7 +371,7 @@ def load_today_games(con: sqlite3.Connection, game_date: str) -> list:
         JOIN   teams  th ON th.team_id = g.home_team_id
         JOIN   teams  ta ON ta.team_id = g.away_team_id
         LEFT JOIN venues v ON v.venue_id = g.venue_id
-        WHERE  g.game_date = ?
+        WHERE  g.game_date_et = ?
           AND  g.game_type = 'R'
           AND  g.status NOT IN ('Final', 'Cancelled', 'Postponed')
         ORDER  BY g.game_start_utc

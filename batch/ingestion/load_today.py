@@ -125,7 +125,7 @@ def main():
     games = con.execute("""
         SELECT
             g.game_pk,
-            g.game_date,
+            g.game_date_et AS game_date,
             g.game_start_utc,
             g.status,
             ta.abbreviation AS away_abbr,
@@ -137,7 +137,7 @@ def main():
         JOIN   teams th ON th.team_id = g.home_team_id
         JOIN   teams ta ON ta.team_id = g.away_team_id
         LEFT JOIN venues v ON v.venue_id = g.venue_id
-        WHERE  g.game_date = ?
+        WHERE  g.game_date_et = ?
           AND  g.game_type = 'R'
         ORDER  BY g.game_start_utc
     """, (target,)).fetchall()

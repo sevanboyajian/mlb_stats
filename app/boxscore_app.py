@@ -301,8 +301,8 @@ def get_streak(team_id: int, game_date: str) -> int:
                END AS result
         FROM   games
         WHERE  (home_team_id=? OR away_team_id=?)
-          AND  status='Final' AND game_date < ?
-        ORDER  BY game_date DESC, game_start_utc DESC LIMIT 15
+          AND  status='Final' AND game_date_et < ?
+        ORDER  BY game_date_et DESC, game_start_utc DESC LIMIT 15
     """, (team_id, team_id, team_id, game_date))
     if not rows:
         return 0
@@ -672,7 +672,7 @@ game_list = q("""
     FROM   games g
     JOIN   teams th ON th.team_id = g.home_team_id
     JOIN   teams ta ON ta.team_id = g.away_team_id
-    WHERE  g.game_date = ? AND g.game_type = 'R'
+    WHERE  g.game_date_et = ? AND g.game_type = 'R'
     ORDER  BY g.game_start_utc
 """, (str(sel_date),))
 
