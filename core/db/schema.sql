@@ -219,8 +219,7 @@ CREATE TABLE IF NOT EXISTS games (
     -- Double header
     double_header       TEXT    CHECK (double_header IN ('N','Y','S')),
                             -- N=No, Y=Yes, S=Split doubleheader
-    game_number         INTEGER NOT NULL DEFAULT 1,
-    game_date_est       DATE
+    game_number         INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE INDEX IF NOT EXISTS idx_games_date    ON games (game_date);
