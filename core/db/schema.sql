@@ -17,6 +17,7 @@
 --       (never use outcome data in a pre-game prediction query)
 --    3. ingest_log tracks every pull — script is always resumable
 --    4. model_predictions must be written BEFORE game_start_utc
+
 --    5. backtest_results is written AFTER final score is known
 --
 --  TABLE ORDER (dependency safe):
@@ -27,6 +28,14 @@
 --    5. Backtesting   : model_predictions, backtest_results
 --    6. Operations    : ingest_log, odds_ingest_log
 -- ============================================================
+-- # CHANGE LOG (latest first)
+-- # -------------------------
+-- # 2026-04-14 09:15 ET  
+-- Eastern Time normalized date for all daily logic and reporting
+-- MUST be used instead of game_date for filtering
+-- ============================================================
+
+game_date_et DATE,
 
 PRAGMA foreign_keys = ON;
 PRAGMA journal_mode = WAL;     -- allows reads during writes
@@ -161,6 +170,7 @@ CREATE TABLE IF NOT EXISTS players (
 -- One row per game. The universal anchor for all other tables.
 -- game_start_utc is CRITICAL — all odds must be captured before
 -- this timestamp to be valid for backtesting.
+-- Added date_et column to store the game date in EST.
 -- ------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS games (
     game_pk             INTEGER PRIMARY KEY,  -- MLB's gamePk — used in all API calls
@@ -208,7 +218,8 @@ CREATE TABLE IF NOT EXISTS games (
     -- Double header
     double_header       TEXT    CHECK (double_header IN ('N','Y','S')),
                             -- N=No, Y=Yes, S=Split doubleheader
-    game_number         INTEGER NOT NULL DEFAULT 1
+    game_number         INTEGER NOT NULL DEFAULT 1,
+    game_date_est       DATE
 );
 
 CREATE INDEX IF NOT EXISTS idx_games_date    ON games (game_date);
