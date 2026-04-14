@@ -35,8 +35,6 @@
 -- MUST be used instead of game_date for filtering
 -- ============================================================
 
-game_date_et DATE,
-
 PRAGMA foreign_keys = ON;
 PRAGMA journal_mode = WAL;     -- allows reads during writes
 PRAGMA synchronous  = NORMAL;  -- safe + faster than FULL for bulk inserts
@@ -219,7 +217,8 @@ CREATE TABLE IF NOT EXISTS games (
     -- Double header
     double_header       TEXT    CHECK (double_header IN ('N','Y','S')),
                             -- N=No, Y=Yes, S=Split doubleheader
-    game_number         INTEGER NOT NULL DEFAULT 1
+    game_number         INTEGER NOT NULL DEFAULT 1,
+    game_date_est       DATE
 );
 
 CREATE INDEX IF NOT EXISTS idx_games_date    ON games (game_date);

@@ -730,7 +730,7 @@ def load_schedule(con: sqlite3.Connection, start_date: str, end_date: str,
                   AND  pgs.player_role = 'pitcher'
                   AND  g.season = ?
                   AND  pgs.era IS NOT NULL
-                ORDER  BY g.game_date DESC, g.game_pk DESC
+                ORDER  BY g.game_date_et DESC, g.game_pk DESC
                 LIMIT  1
             )
             WHERE EXISTS (
@@ -1221,7 +1221,7 @@ def get_pbp_pending(con: sqlite3.Connection,
     """
     season_clause = "AND g.season = :season" if season else ""
     rows = con.execute(f"""
-        SELECT il.game_pk, g.game_date, g.season
+        SELECT il.game_pk, g.game_date_et AS game_date, g.season
         FROM   ingest_log il
         JOIN   games g ON g.game_pk = il.game_pk
         WHERE  il.status        = 'success'
@@ -1229,7 +1229,7 @@ def get_pbp_pending(con: sqlite3.Connection,
           AND  il.pbp_rows      = 0
           AND  g.game_type      = 'R'
           {season_clause}
-        ORDER  BY g.game_date
+        ORDER  BY g.game_date_et
     """, {"season": season} if season else {}).fetchall()
     return [{"game_pk": r[0], "game_date": r[1], "season": r[2]} for r in rows]
 
@@ -1237,11 +1237,11 @@ def get_pbp_pending(con: sqlite3.Connection,
 def get_error_games(con: sqlite3.Connection) -> list[dict]:
     """Return games with status='error' for retry."""
     rows = con.execute("""
-        SELECT il.game_pk, g.game_date, g.season
+        SELECT il.game_pk, g.game_date_et AS game_date, g.season
         FROM ingest_log il
         JOIN games g ON g.game_pk = il.game_pk
         WHERE il.status = 'error'
-        ORDER BY g.game_date
+        ORDER BY g.game_date_et
     """).fetchall()
     return [{"game_pk": r[0], "game_date": r[1], "season": r[2]} for r in rows]
 

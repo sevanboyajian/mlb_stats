@@ -306,7 +306,7 @@ def show_signal_preview(con: sqlite3.Connection, game_date: str) -> None:
             ON go_ml.game_pk = g.game_pk AND go_ml.market_type = 'moneyline'
         LEFT JOIN v_closing_game_odds go_tot
             ON go_tot.game_pk = g.game_pk AND go_tot.market_type = 'total'
-        WHERE g.game_date = ?
+        WHERE g.game_date_et = ?
           AND g.game_type = 'R'
           AND g.status NOT IN ('Final', 'Cancelled', 'Postponed')
         ORDER BY g.game_start_utc
@@ -436,7 +436,7 @@ def show_signal_preview(con: sqlite3.Connection, game_date: str) -> None:
                 ON gp_a.game_pk = g.game_pk AND gp_a.team_id = g.away_team_id
             LEFT JOIN players ph ON ph.player_id = gp_h.player_id
             LEFT JOIN players pa ON pa.player_id = gp_a.player_id
-            WHERE g.game_date = ?
+            WHERE g.game_date_et = ?
               AND g.game_type = 'R'
               AND g.status NOT IN ('Final', 'Cancelled', 'Postponed')
             ORDER BY g.game_start_utc

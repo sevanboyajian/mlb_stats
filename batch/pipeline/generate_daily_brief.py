@@ -1059,7 +1059,7 @@ def load_games(conn: sqlite3.Connection, game_date: str, verbose: bool) -> list:
         """
         SELECT
             g.game_pk,
-            g.game_date,
+            g.game_date_et AS game_date,
             g.game_start_utc,
             v.name          AS venue_name,
             g.temp_f,
@@ -1110,7 +1110,7 @@ def load_games(conn: sqlite3.Connection, game_date: str, verbose: bool) -> list:
                                          AND tot.market_type = 'total'
         LEFT JOIN v_closing_game_odds rl  ON rl.game_pk  = g.game_pk
                                          AND rl.market_type = 'runline'
-        WHERE  g.game_date = ?
+        WHERE  g.game_date_et = ?
           AND  g.game_type = 'R'          -- regular season only; Spring Training / Exhibition excluded
           AND  g.status    != 'Final'          -- skip already-completed games
         ORDER  BY g.game_start_utc
@@ -1148,8 +1148,8 @@ def load_streaks(conn: sqlite3.Connection, game_date: str, team_ids: list, verbo
             FROM   games
             WHERE  (home_team_id = ? OR away_team_id = ?)
               AND  status  = 'Final'
-              AND  game_date < ?
-            ORDER  BY game_date DESC, game_start_utc DESC
+              AND  game_date_et < ?
+            ORDER  BY game_date_et DESC, game_start_utc DESC
             LIMIT  15
             """,
             (tid, tid, tid, game_date),
@@ -1194,7 +1194,7 @@ def load_starters(conn: sqlite3.Connection, game_date: str, verbose: bool) -> di
             FROM   game_probable_pitchers gp
             JOIN   players p ON p.player_id = gp.player_id
             JOIN   games   g ON g.game_pk   = gp.game_pk
-            WHERE  g.game_date = ?
+            WHERE  g.game_date_et = ?
             """,
             (game_date,),
         )
@@ -1234,7 +1234,7 @@ def load_line_movement(conn: sqlite3.Connection, game_date: str, verbose: bool) 
                 lm.reverse_line_move
             FROM   line_movement lm
             JOIN   games g ON g.game_pk = lm.game_pk
-            WHERE  g.game_date = ?
+            WHERE  g.game_date_et = ?
             """,
             (game_date,),
         )
@@ -1791,7 +1791,7 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
                                              AND go_ml.market_type  = 'moneyline'
         LEFT JOIN v_closing_game_odds go_tot ON go_tot.game_pk = g.game_pk
                                              AND go_tot.market_type = 'total'
-        WHERE  g.game_date = ?
+        WHERE  g.game_date_et = ?
           AND  g.game_type = 'R'
           AND  g.status    = 'Final'
         ORDER  BY g.game_start_utc, g.game_pk
@@ -3368,7 +3368,7 @@ def main():
                     # Load completed games so build_docx_brief has data to render
                     prior_games_cur = conn.execute("""
                         SELECT
-                            g.game_pk, g.game_date, g.game_start_utc,
+                            g.game_pk, g.game_date_et AS game_date, g.game_start_utc,
                             g.home_score, g.away_score,
                             g.wind_mph, g.wind_direction, g.temp_f, g.sky_condition,
                             th.team_id   AS home_team_id,
@@ -3392,7 +3392,7 @@ def main():
                         LEFT JOIN v_closing_game_odds go_tot
                                ON go_tot.game_pk = g.game_pk
                               AND go_tot.market_type = 'total'
-                        WHERE  g.game_date = ?
+                        WHERE  g.game_date_et = ?
                           AND  g.game_type = 'R'
                           AND  g.status    = 'Final'
                         ORDER  BY g.game_start_utc, g.game_pk

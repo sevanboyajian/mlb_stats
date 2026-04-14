@@ -143,7 +143,7 @@ def build_game_lookup(con: sqlite3.Connection) -> dict:
     (confirmed 91 duplicate IDs in 2022-2025 mapping to different games).
     """
     rows = con.execute("""
-        SELECT g.game_pk, g.game_date,
+        SELECT g.game_pk, g.game_date_et AS game_date,
                th.abbreviation AS home_abbr,
                ta.abbreviation AS away_abbr
         FROM   games g

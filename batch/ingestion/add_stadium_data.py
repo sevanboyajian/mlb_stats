@@ -756,7 +756,7 @@ def seed_2025_venues(conn: sqlite3.Connection, dry_run: bool, verbose: bool) -> 
         FROM   venues v
         JOIN   games  g ON g.venue_id = v.venue_id
         WHERE  v.wind_effect IS NULL
-          AND  g.game_date >= '2025-01-01'
+          AND  g.game_date_et >= '2025-01-01'
         GROUP  BY v.venue_id, v.name, v.city, v.state, v.roof_type
         ORDER  BY v.name
     """).fetchall()

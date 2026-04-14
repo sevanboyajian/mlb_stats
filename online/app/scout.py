@@ -555,7 +555,7 @@ def view_home():
                 FROM   games g
                 JOIN   teams th ON th.team_id = g.home_team_id
                 JOIN   teams ta ON ta.team_id = g.away_team_id
-                WHERE  g.game_date = ?
+                WHERE  g.game_date_et = ?
                   AND  g.status    = 'Final'
                   AND  g.game_type = 'R'
                 ORDER  BY g.game_pk
@@ -872,7 +872,7 @@ def view_explorer():
             try:
                 if p_role == "batter":
                     df = query("""
-                        SELECT g.game_date,
+                        SELECT g.game_date_et AS game_date,
                                COALESCE(t_opp.abbreviation, '???') AS opponent,
                                CASE WHEN g.home_team_id = pgs.team_id THEN 'H' ELSE 'A' END AS h_a,
                                pgs.at_bats, pgs.hits, pgs.doubles, pgs.triples,
@@ -888,11 +888,11 @@ def view_explorer():
                         WHERE  LOWER(p.full_name) = LOWER(?)
                           AND  g.season    = ?
                           AND  pgs.player_role = 'batter'
-                        ORDER  BY g.game_date
+                        ORDER  BY g.game_date_et
                     """, (p_name, p_season))
                 else:
                     df = query("""
-                        SELECT g.game_date,
+                        SELECT g.game_date_et AS game_date,
                                COALESCE(t_opp.abbreviation, '???') AS opponent,
                                pgs.innings_pitched, pgs.hits_allowed, pgs.runs_allowed,
                                pgs.earned_runs, pgs.walks_allowed,
@@ -908,7 +908,7 @@ def view_explorer():
                         WHERE  LOWER(p.full_name) = LOWER(?)
                           AND  g.season    = ?
                           AND  pgs.player_role = 'pitcher'
-                        ORDER  BY g.game_date
+                        ORDER  BY g.game_date_et
                     """, (p_name, p_season))
 
                 if df.empty:
@@ -955,7 +955,7 @@ def view_explorer():
             if g_team != "All":
                 team_clause = "AND (th.abbreviation = :team OR ta.abbreviation = :team)"
             df = query(f"""
-                SELECT g.game_date,
+                SELECT g.game_date_et AS game_date,
                        ta.abbreviation || ' @ ' || th.abbreviation AS matchup,
                        g.away_score, g.home_score,
                        CASE WHEN g.home_score > g.away_score THEN th.abbreviation
@@ -969,10 +969,10 @@ def view_explorer():
                 FROM   games g
                 JOIN   teams th ON th.team_id = g.home_team_id
                 JOIN   teams ta ON ta.team_id = g.away_team_id
-                WHERE  g.game_date BETWEEN :start AND :end
+                WHERE  g.game_date_et BETWEEN :start AND :end
                   AND  g.game_type IN ({type_in})
                   {team_clause}
-                ORDER  BY g.game_date DESC, g.game_pk
+                ORDER  BY g.game_date_et DESC, g.game_pk
             """, {"start": str(g_start), "end": str(g_end),
                   "team": g_team if g_team != "All" else ""})
             if df.empty:

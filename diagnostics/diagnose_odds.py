@@ -35,14 +35,14 @@ con.row_factory = sqlite3.Row
 
 # ── Pull ALL games for today + tomorrow directly ──────────────────────────────
 rows = con.execute("""
-    SELECT g.game_pk, g.game_date, g.game_start_utc,
+    SELECT g.game_pk, g.game_date_et AS game_date, g.game_start_utc,
            th.abbreviation AS home_abbr, th.name AS home_name,
            ta.abbreviation AS away_abbr, ta.name AS away_name,
            (SELECT COUNT(*) FROM game_odds WHERE game_pk = g.game_pk) AS odds_rows
     FROM   games g
     JOIN   teams th ON th.team_id = g.home_team_id
     JOIN   teams ta ON ta.team_id = g.away_team_id
-    WHERE  g.game_date IN (?, ?) AND g.game_type = 'R'
+    WHERE  g.game_date_et IN (?, ?) AND g.game_type = 'R'
     ORDER  BY g.game_start_utc
 """, (TARGET, NEXT)).fetchall()
 

@@ -96,7 +96,7 @@ def load_completed_games(con: sqlite3.Connection, game_date: str) -> list:
     rows = con.execute("""
         SELECT
             g.game_pk,
-            g.game_date,
+            g.game_date_et AS game_date,
             g.home_score,
             g.away_score,
             g.wind_mph,
@@ -143,7 +143,7 @@ def load_completed_games(con: sqlite3.Connection, game_date: str) -> list:
         LEFT JOIN v_closing_game_odds rl
                ON rl.game_pk    = g.game_pk
               AND rl.market_type = 'runline'
-        WHERE  g.game_date = ?
+        WHERE  g.game_date_et = ?
           AND  g.game_type = 'R'
           AND  g.status    = 'Final'
         ORDER  BY g.game_start_utc, g.game_pk
@@ -164,13 +164,13 @@ def load_streaks_for_date(con: sqlite3.Connection, game_date: str, team_ids: lis
             SELECT
                 home_team_id AS team_id,
                 home_score > away_score AS won,
-                game_date
+                game_date_et AS game_date
             FROM games
             WHERE game_type = 'R'
               AND status = 'Final'
-              AND game_date < ?
+              AND game_date_et < ?
               AND home_team_id IN ({placeholders})
-            ORDER BY game_date DESC
+            ORDER BY game_date_et DESC
         )
         GROUP BY team_id
     """, [game_date] + team_ids).fetchall()
@@ -670,9 +670,9 @@ def build_season_summary(con: sqlite3.Connection, season: int) -> str:
 
     # Get all completed game dates for the season
     dates = [r[0] for r in con.execute("""
-        SELECT DISTINCT game_date FROM games
+        SELECT DISTINCT game_date_et AS game_date FROM games
         WHERE season = ? AND game_type = 'R' AND status = 'Final'
-        ORDER BY game_date
+        ORDER BY game_date_et
     """, (season,)).fetchall()]
 
     if not dates:

@@ -96,7 +96,7 @@ VIEW_DDL = """
 CREATE VIEW IF NOT EXISTS v_closing_f5_odds AS
 SELECT
     f5.game_pk,
-    g.game_date,
+    g.game_date_et AS game_date,
     g.season,
     f5.bookmaker,
     f5.home_f5_ml,

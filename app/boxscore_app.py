@@ -461,7 +461,7 @@ def build_game_card(game_pk: int, game_date: str) -> str:
     """Build complete HTML card for one game. Returns empty string on error."""
     # ── Game header ───────────────────────────────────────────────────────────
     game_rows = q("""
-        SELECT g.game_pk, g.game_date, g.game_start_utc, g.status,
+        SELECT g.game_pk, g.game_date_et AS game_date, g.game_start_utc, g.status,
                g.home_score, g.away_score, g.innings_played,
                g.wind_mph, g.wind_direction, g.temp_f, g.wind_source,
                th.team_id AS home_tid, th.abbreviation AS home_abbr,

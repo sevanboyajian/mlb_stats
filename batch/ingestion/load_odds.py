@@ -265,14 +265,14 @@ def build_game_lookup(con: sqlite3.Connection,
         next_day = game_date
 
     rows = con.execute("""
-        SELECT g.game_pk, g.game_date,
+        SELECT g.game_pk, g.game_date_et AS game_date,
                th.abbreviation AS home_abbr, th.name AS home_name,
                ta.abbreviation AS away_abbr, ta.name AS away_name,
                g.game_start_utc
         FROM   games g
         JOIN   teams th ON th.team_id = g.home_team_id
         JOIN   teams ta ON ta.team_id = g.away_team_id
-        WHERE  g.game_date IN (?, ?)
+        WHERE  g.game_date_et IN (?, ?)
           AND  g.game_type = 'R'
     """, (game_date, next_day)).fetchall()
 
@@ -1039,7 +1039,7 @@ def get_games_missing_odds(con: sqlite3.Connection, target_date: str) -> list:
         FROM games g
         JOIN teams th ON th.team_id = g.home_team_id
         JOIN teams ta ON ta.team_id = g.away_team_id
-        WHERE g.game_date = ?
+        WHERE g.game_date_et = ?
           AND g.game_type = 'R'
           AND g.status NOT IN ('Cancelled', 'Postponed')
           AND g.game_pk NOT IN (
@@ -1311,7 +1311,7 @@ def compute_movement(con: sqlite3.Connection,
     games = con.execute("""
         SELECT g.game_pk, g.game_start_utc
         FROM   games g
-        WHERE  g.game_date = ? AND g.game_type = 'R'
+        WHERE  g.game_date_et = ? AND g.game_type = 'R'
     """, (target_date,)).fetchall()
 
     upserted = 0

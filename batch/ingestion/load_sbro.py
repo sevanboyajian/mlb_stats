@@ -125,7 +125,7 @@ def build_game_lookup(con: sqlite3.Connection, season: int) -> dict:
     Value: list of game_pk (list because doubleheaders share the same key)
     """
     rows = con.execute("""
-        SELECT game_pk, game_date, home_team_id, away_team_id
+        SELECT game_pk, game_date_et AS game_date, home_team_id, away_team_id
         FROM   games
         WHERE  season    = ?
         AND    game_type = 'R'

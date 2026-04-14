@@ -226,13 +226,13 @@ print("  " + "-" * 50)
 
 # Most recent game
 row = con.execute(
-    "SELECT g.game_date, t1.abbreviation, g.away_score, "
+    "SELECT g.game_date_et AS game_date, t1.abbreviation, g.away_score, "
     "t2.abbreviation, g.home_score, g.status "
     "FROM games g "
     "JOIN teams t1 ON t1.team_id = g.away_team_id "
     "JOIN teams t2 ON t2.team_id = g.home_team_id "
     "WHERE g.status = 'Final' AND g.game_type = 'R' "
-    "ORDER BY g.game_date DESC LIMIT 1"
+    "ORDER BY g.game_date_et DESC LIMIT 1"
 ).fetchone()
 if row:
     print(f"  Most recent game : {row[0]}  "
@@ -267,11 +267,11 @@ if errors > 0:
     print()
     print("  Recent errors:")
     err_rows = con.execute(
-        "SELECT il.game_pk, g.game_date, il.error_message "
+        "SELECT il.game_pk, g.game_date_et AS game_date, il.error_message "
         "FROM ingest_log il "
         "JOIN games g ON g.game_pk = il.game_pk "
         "WHERE il.status = 'error' "
-        "ORDER BY g.game_date DESC LIMIT 5"
+        "ORDER BY g.game_date_et DESC LIMIT 5"
     ).fetchall()
     for r in err_rows:
         msg = (r[2] or "")[:60]
@@ -301,7 +301,7 @@ game_rows = con.execute("""
     FROM games g
     JOIN teams th ON th.team_id = g.home_team_id
     JOIN teams ta ON ta.team_id = g.away_team_id
-    WHERE g.game_date = ?
+    WHERE g.game_date_et = ?
       AND g.game_type = 'R'
     ORDER BY g.game_start_utc
 """, (today_date,)).fetchall()
@@ -327,7 +327,7 @@ if total_today > 0:
         JOIN teams th ON th.team_id = g.home_team_id
         JOIN teams ta ON ta.team_id = g.away_team_id
         LEFT JOIN game_odds go ON go.game_pk = g.game_pk
-        WHERE g.game_date = ? AND g.game_type = 'R'
+        WHERE g.game_date_et = ? AND g.game_type = 'R'
         GROUP BY g.game_pk
         ORDER BY g.game_start_utc
     """, (today_date,)).fetchall()
@@ -375,7 +375,7 @@ if total_today > 0:
         FROM games g
         JOIN teams th ON th.team_id = g.home_team_id
         JOIN teams ta ON ta.team_id = g.away_team_id
-        WHERE g.game_date = ? AND g.game_type = 'R'
+        WHERE g.game_date_et = ? AND g.game_type = 'R'
         ORDER BY g.game_start_utc
     """, (today_date,)).fetchall()
 
@@ -405,7 +405,7 @@ if total_today > 0:
             JOIN teams th ON th.team_id = g.home_team_id
             JOIN teams ta ON ta.team_id = g.away_team_id
             LEFT JOIN game_probable_pitchers gp ON gp.game_pk = g.game_pk
-            WHERE g.game_date = ? AND g.game_type = 'R'
+            WHERE g.game_date_et = ? AND g.game_type = 'R'
             GROUP BY g.game_pk
             ORDER BY g.game_start_utc
         """, (today_date,)).fetchall()
