@@ -1065,7 +1065,7 @@ def view_explorer():
                     JOIN   games g  ON g.game_pk    = go.game_pk
                     JOIN   teams th ON th.team_id   = g.home_team_id
                     JOIN   teams ta ON ta.team_id   = g.away_team_id
-                    WHERE  g.game_date   = :gdate
+                    WHERE  g.game_date_et   = :gdate
                       AND  go.market_type = :market
                       {book_clause}
                     ORDER  BY go.bookmaker, th.abbreviation
@@ -1097,7 +1097,7 @@ def view_explorer():
                     JOIN   games g  ON g.game_pk    = lm.game_pk
                     JOIN   teams th ON th.team_id   = g.home_team_id
                     JOIN   teams ta ON ta.team_id   = g.away_team_id
-                    WHERE  g.game_date = :gdate {book_clause}
+                    WHERE  g.game_date_et = :gdate {book_clause}
                     ORDER  BY lm.steam_move DESC, lm.ml_move_cents DESC
                 """, {"gdate": str(lm_date),
                       "book": lm_book if lm_book != "All" else ""})
@@ -1127,7 +1127,7 @@ def view_explorer():
             if st.button("Load CLV Data", key="clv_run", type="primary"):
                 book_clause = "" if clv_book == "All" else "AND go_open.bookmaker = :book"
                 df_clv = query(f"""
-                    SELECT g.game_date,
+                    SELECT g.game_date_et AS game_date,
                            th.abbreviation AS home,
                            ta.abbreviation AS away,
                            go_open.bookmaker,
@@ -1157,10 +1157,10 @@ def view_explorer():
                                              AND go_close.market_type = 'moneyline'
                                              AND go_close.is_closing_line = 1
                                              AND go_close.bookmaker = go_open.bookmaker
-                    WHERE  g.game_date BETWEEN :dfrom AND :dto
+                    WHERE  g.game_date_et BETWEEN :dfrom AND :dto
                       AND  g.game_type = 'R'
                       {book_clause}
-                    ORDER  BY g.game_date DESC, home_clv_pp DESC
+                    ORDER  BY g.game_date_et DESC, home_clv_pp DESC
                 """, {"dfrom": str(clv_from), "dto": str(clv_to),
                       "book": clv_book if clv_book != "All" else ""})
                 if df_clv.empty:
@@ -1184,7 +1184,7 @@ def view_explorer():
         if run_st or True:
             name_clause = "AND LOWER(p.full_name) LIKE LOWER(:nm)" if st_player.strip() else ""
             df_st = query(f"""
-                SELECT g.game_date,
+                SELECT g.game_date_et AS game_date,
                        ta.abbreviation || '@' || th.abbreviation AS matchup,
                        CASE WHEN gpp.team_id=g.home_team_id THEN 'HOME' ELSE 'AWAY' END AS side,
                        p.full_name AS pitcher,
@@ -1195,7 +1195,7 @@ def view_explorer():
                 JOIN   players p  ON p.player_id = gpp.player_id
                 JOIN   teams   th ON th.team_id  = g.home_team_id
                 JOIN   teams   ta ON ta.team_id  = g.away_team_id
-                WHERE  g.game_date = :dt AND g.game_type = 'R'
+                WHERE  g.game_date_et = :dt AND g.game_type = 'R'
                   {name_clause}
                 ORDER  BY g.game_start_utc, side
             """, {"dt": str(st_date), "nm": f"%{st_player.strip()}%" if st_player.strip() else ""})
@@ -1217,7 +1217,7 @@ def view_explorer():
             run_sp = st.button("Search", key="sp_run", type="primary")
         if run_sp and sp_name:
             df_sp = query("""
-                SELECT g.game_date,
+                SELECT g.game_date_et AS game_date,
                        ta.abbreviation || '@' || th.abbreviation AS matchup,
                        CASE WHEN gpp.team_id=g.home_team_id THEN 'H' ELSE 'A' END AS ha,
                        p.full_name AS pitcher, g.away_score, g.home_score, g.status
@@ -1228,7 +1228,7 @@ def view_explorer():
                 JOIN   teams   ta ON ta.team_id  = g.away_team_id
                 WHERE  LOWER(p.full_name) LIKE LOWER(:nm)
                   AND  g.season = :s AND g.game_type = 'R'
-                ORDER  BY g.game_date
+                ORDER  BY g.game_date_et
             """, {"nm": f"%{sp_name.strip()}%", "s": sp_season})
             if df_sp.empty:
                 st.markdown(f'<div class="warn-box">No starts found for {sp_name} in {sp_season}.</div>', unsafe_allow_html=True)
@@ -1409,7 +1409,7 @@ def view_explorer():
                 try: return con.execute(sql, p).fetchall()
                 except: return []
             gr = qq("""
-                SELECT g.game_pk,g.game_date,g.game_start_utc,g.status,
+                SELECT g.game_pk,g.game_date_et AS game_date,g.game_start_utc,g.status,
                        g.home_score,g.away_score,g.wind_mph,g.wind_direction,
                        g.temp_f,g.wind_source,
                        th.team_id AS home_tid,th.abbreviation AS home_abbr,
@@ -1565,7 +1565,7 @@ body{margin:0;padding:0;background:transparent;font-family:'IBM Plex Mono',monos
             FROM   games g
             JOIN   teams th ON th.team_id=g.home_team_id
             JOIN   teams ta ON ta.team_id=g.away_team_id
-            WHERE  g.game_date=? AND g.game_type='R'
+            WHERE  g.game_date_et=? AND g.game_type='R'
             ORDER  BY g.game_start_utc
         """, (str(bs_date),))
         with bc2:
@@ -1726,7 +1726,7 @@ def view_workbench():
             FROM   games g
             JOIN   teams th ON th.team_id = g.home_team_id
             JOIN   teams ta ON ta.team_id = g.away_team_id
-            WHERE  g.game_date = ? AND g.game_type = 'R'
+            WHERE  g.game_date_et = ? AND g.game_type = 'R'
             ORDER  BY g.game_start_utc
         """, (str(pred_date),))
 
@@ -1795,7 +1795,7 @@ def view_workbench():
             bt_end   = st.date_input("To",   value=date.today(),      key="bt_end")
 
         if st.button("Run Backtest", key="bt_run", type="primary"):
-            clauses = ["g.game_date BETWEEN :start AND :end",
+            clauses = ["g.game_date_et BETWEEN :start AND :end",
                        "mp.predicted_at_utc < g.game_start_utc"]  # enforced pre-game only
             params  = {"start": str(bt_start), "end": str(bt_end)}
 
@@ -1809,7 +1809,7 @@ def view_workbench():
             where = " AND ".join(clauses)
             df = query(f"""
                 SELECT mp.model_version, mp.prediction_type,
-                       g.season, g.game_date,
+                       g.season, g.game_date_et AS game_date,
                        th.abbreviation AS home, ta.abbreviation AS away,
                        mp.predicted_side, mp.confidence, mp.edge_over_market,
                        mp.bet_odds_used, mp.bet_size_units,
@@ -1821,7 +1821,7 @@ def view_workbench():
                 JOIN   teams   ta ON ta.team_id   = g.away_team_id
                 LEFT JOIN backtest_results br ON br.prediction_id = mp.id
                 WHERE  {where}
-                ORDER  BY g.game_date DESC
+                ORDER  BY g.game_date_et DESC
             """, params)
 
             if df.empty:
@@ -1908,7 +1908,7 @@ def view_operations():
         st.markdown("<hr class='sec-div'>", unsafe_allow_html=True)
         st.markdown("#### Recent Ingest Errors")
         df_err = query("""
-            SELECT il.game_pk, g.game_date,
+            SELECT il.game_pk, g.game_date_et AS game_date,
                    th.abbreviation || ' @ ' || ta.abbreviation AS matchup,
                    il.status, il.error_message, il.last_attempted_utc
             FROM   ingest_log il
@@ -2308,8 +2308,8 @@ def view_scorecard():
                    ROUND(100.0 * SUM(COALESCE(br.profit_loss_units,0))
                        / NULLIF(SUM(mp.bet_made),0), 2)              AS roi_pct,
                    ROUND(AVG(COALESCE(br.closing_line_value,0)), 4)  AS avg_clv,
-                   MIN(g.game_date)                                  AS first_game,
-                   MAX(g.game_date)                                  AS last_game
+                   MIN(g.game_date_et)                               AS first_game,
+                   MAX(g.game_date_et)                               AS last_game
             FROM   model_predictions mp
             JOIN   games g ON g.game_pk = mp.game_pk
             LEFT JOIN backtest_results br ON br.prediction_id = mp.id
