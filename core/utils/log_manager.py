@@ -24,7 +24,7 @@ LOG FILE NAMING
 Files are named:  <prefix>_<date>.log
 Example:          load_today_2026-04-09.log
 
-All log files live in:  <mlb_stats folder>/logs/
+All log files live in:  <repo root>/outputs/logs/
 
 RETENTION
 ---------
@@ -44,17 +44,18 @@ from typing import Optional
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 DEFAULT_KEEP = 7          # number of log files to retain per prefix
-LOG_DIR_NAME = "logs"     # subdirectory name relative to the calling script
+LOG_DIR_NAME = Path("outputs") / "logs"   # relative to repo root
+
+# core/utils/log_manager.py -> parents[2] == repository root
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _log_dir(script_path: Optional[Path] = None) -> Path:
     """Return the logs/ directory, creating it if absent.
 
-    Uses the directory of the calling script if provided,
-    otherwise falls back to the directory of this file.
+    `script_path` is accepted for backward compatibility but is no longer used.
     """
-    base = Path(script_path).parent if script_path else Path(__file__).parent
-    d = base / LOG_DIR_NAME
+    d = _REPO_ROOT / LOG_DIR_NAME
     d.mkdir(parents=True, exist_ok=True)
     return d
 

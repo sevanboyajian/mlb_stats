@@ -30,8 +30,8 @@ Requirements:
   pip install requests python-dotenv
 
 API key:
-  Set THE_ODDS_API_KEY in a .env file next to this script, or as an
-  environment variable.  Get a key at https://the-odds-api.com
+  Set THE_ODDS_API_KEY in `config/.env` (recommended), repo root `.env`,
+  or as an environment variable. Get a key at https://the-odds-api.com
 """
 
 # CHANGE LOG (latest first)
@@ -60,7 +60,10 @@ from core.db.connection import connect as db_connect, get_db_path
 # ── Optional .env support ─────────────────────────────────────────────────────
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    # Load in a stable order; avoids relying on "current working directory".
+    load_dotenv(os.path.join(_REPO_ROOT, "config", ".env"), override=False)
+    load_dotenv(os.path.join(_REPO_ROOT, ".env"), override=False)
+    load_dotenv(override=False)  # fallback: cwd / parent-chain
 except ImportError:
     pass
 
@@ -120,7 +123,8 @@ def configure_logging(verbose: bool = False):
 def get_connection(db_path: str) -> sqlite3.Connection:
     if not os.path.exists(db_path):
         log.error("Database not found: %s", db_path)
-        log.error("Run create_db.py then add_f5_table.py first.")
+        log.error("To initialize the DB, apply `core/db/schema.sql` and then run:")
+        log.error("  python batch/ingestion/add_f5_table.py --db \"%s\"", db_path)
         sys.exit(1)
     # timeout=30: wait up to 30 seconds for any write lock to clear before failing.
     # This allows load_odds.py to run while Scout (Streamlit) is open, since WAL
@@ -178,7 +182,7 @@ def get_api_key() -> str:
     key = os.environ.get("THE_ODDS_API_KEY", "").strip()
     if not key:
         log.error("THE_ODDS_API_KEY not set.")
-        log.error("Add it to a .env file next to this script:")
+        log.error("Add it to `config/.env` (recommended) or repo root `.env`:")
         log.error("  THE_ODDS_API_KEY=your_key_here")
         log.error("Or set it as an environment variable.")
         sys.exit(1)
