@@ -74,6 +74,16 @@ if _REPO_ROOT not in sys.path:
 
 from core.db.connection import connect as db_connect, get_db_path
 
+# ── Optional .env support ─────────────────────────────────────────────────────
+try:
+    from dotenv import load_dotenv
+    # Load in a stable order; avoids relying on "current working directory".
+    load_dotenv(os.path.join(_REPO_ROOT, "config", ".env"), override=False)
+    load_dotenv(os.path.join(_REPO_ROOT, ".env"), override=False)
+    load_dotenv(override=False)  # fallback: cwd / parent-chain
+except ImportError:
+    pass
+
 DEFAULT_DB = get_db_path()
 
 # ── Pause between API calls (polite rate limiting) ────────────────────────────

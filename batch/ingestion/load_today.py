@@ -82,9 +82,10 @@ def main():
     from datetime import timedelta
     end_date = (target_dt + timedelta(days=1)).isoformat()
 
-    script = Path(__file__).parent / "load_mlb_stats.py"
+    # Use repo-root-relative path (avoid "same directory" assumptions).
+    script = Path(_REPO_ROOT) / "batch" / "ingestion" / "load_mlb_stats.py"
     if not script.exists():
-        print(f"✗  load_mlb_stats.py not found in {script.parent}")
+        print(f"✗  load_mlb_stats.py not found: {script}")
         sys.exit(1)
 
     cmd = [
