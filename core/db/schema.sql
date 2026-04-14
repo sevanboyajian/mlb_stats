@@ -176,6 +176,7 @@ CREATE TABLE IF NOT EXISTS games (
     game_pk             INTEGER PRIMARY KEY,  -- MLB's gamePk — used in all API calls
     season              INTEGER NOT NULL REFERENCES seasons (season),
     game_date           DATE    NOT NULL,
+    game_date_et        DATE,            -- Game date in US/Eastern (official local date); use for ET-based daily grouping/reporting
     game_type           TEXT    NOT NULL
                             CHECK (game_type IN ('R','S','P','A','E','D')),
                             -- R=Regular, S=Spring, P=Postseason
