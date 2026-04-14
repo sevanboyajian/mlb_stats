@@ -8,7 +8,7 @@ before writing a new one. Safe to call from any script.
 
 USAGE (from any script)
 -----------------------
-    from log_manager import rotate_logs, open_log
+    from core.utils.log_manager import rotate_logs, open_log
 
     # Option 1 — just rotate (delete old logs), then open file yourself:
     log_path = rotate_logs("load_today", date_str="2026-04-09")
@@ -16,7 +16,7 @@ USAGE (from any script)
         ...
 
     # Option 2 — rotate and get an open file handle in one call:
-    with open_log("load_mlb_stats", date_str="2026-04-09") as fh:
+    with open_log("load_mlb_stats", date_str="2026-04-09") as (fh, log_path):
         ...
 
 LOG FILE NAMING
@@ -80,11 +80,11 @@ def rotate_logs(
         date_str:    Date string for the new log filename, e.g. '2026-04-09'.
                      Defaults to today's date.
         keep:        Maximum number of log files to retain (default 7).
-        script_path: Path of the calling script — used to locate the logs/
-                     directory. Pass __file__ from the calling script.
+        script_path: Backward-compatible parameter (ignored). Logs are always
+                     written under <repo root>/outputs/logs/.
 
     Returns:
-        Path object for the new log file (e.g. logs/load_today_2026-04-09.log).
+        Path object for the new log file (e.g. outputs/logs/load_today_2026-04-09.log).
     """
     if date_str is None:
         date_str = date.today().isoformat()
@@ -123,7 +123,7 @@ def open_log(
         with open_log("load_today", script_path=__file__) as fh:
             subprocess.run(cmd, stdout=fh, stderr=fh)
 
-    Yields an open file handle. The file is closed automatically on exit.
+    Yields a tuple: (open file handle, log_path). The file is closed automatically on exit.
     """
     log_path = rotate_logs(prefix, date_str=date_str, keep=keep,
                            script_path=script_path)
