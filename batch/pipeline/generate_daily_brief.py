@@ -148,8 +148,10 @@ except Exception:
     _ET = datetime.timezone(datetime.timedelta(hours=-4))
 
 
-def _now_et() -> datetime.datetime:
+def _now_et(override: datetime.datetime | None = None) -> datetime.datetime:
     """Current datetime in US/Eastern. Use for all user-facing timestamps."""
+    if override is not None:
+        return override
     return datetime.datetime.now(tz=_ET)
 
 
