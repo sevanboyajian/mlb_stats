@@ -79,11 +79,11 @@ RECOVERY / RERUN FLAGS
 --verbose               Print extra diagnostic rows from the DB (line counts,
                         data freshness, signal evaluation details).
 
---docx                  Also write a formatted Word (.docx) brief alongside the
-                        .txt file.  Requires: pip install python-docx
-                        File saved as briefs/YYYY-MM-DD_SESSION.docx.
-                        Example:
-                          python generate_daily_brief.py --session primary --docx
+DOCX OUTPUT (DEFAULT)
+--------------------
+This script attempts to write a formatted Word (.docx) brief alongside the .txt
+file by default (no flag required). Requires: pip install python-docx
+File saved under outputs/briefs/YYYY-MM-DD_SESSION.docx.
 
 SESSION FILTERING MODEL
 -----------------------
@@ -128,6 +128,16 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from core.db.connection import connect as db_connect, get_db_path
+
+# ── Optional .env support ────────────────────────────────────────────────────
+try:
+    from dotenv import load_dotenv
+    # Load in a stable order; avoids relying on "current working directory".
+    load_dotenv(os.path.join(_REPO_ROOT, "config", ".env"), override=False)
+    load_dotenv(os.path.join(_REPO_ROOT, ".env"), override=False)
+    load_dotenv(override=False)  # fallback: cwd / parent-chain
+except ImportError:
+    pass
 
 # ── ET timezone helper ────────────────────────────────────────────────────
 try:
@@ -184,7 +194,8 @@ except ImportError:
 DB_PATH = Path(get_db_path())
 
 # ── Output directory for saved briefs ──────────────────────────────────────
-OUTPUT_DIR = Path(__file__).parent / "briefs"
+# Standard location across the repo: <repo root>/outputs/briefs
+OUTPUT_DIR = Path(_REPO_ROOT) / "outputs" / "briefs"
 
 # ── Signal thresholds ──────────────────────────────────────────────────────
 WIND_OUT_MIN_MPH   = 10     # H3b standalone OVER threshold (unchanged)
@@ -382,7 +393,7 @@ def missing(label: str, warn_only: bool) -> None:
 def open_db(db_path: Path) -> sqlite3.Connection:
     if not db_path.exists():
         print(f"\n✗  Database not found: {db_path}")
-        print("   Ensure you are running from the mlb_stats folder.")
+        print("   Set MLB_DB_PATH or add MLB_DB_PATH=... to config/.env")
         sys.exit(1)
     conn = db_connect(str(db_path), timeout=30)  # wait up to 30s if Scout holds a lock
     conn.row_factory = sqlite3.Row
@@ -2476,9 +2487,7 @@ def build_closing_brief(games, streaks, starters, movement, game_date):
 # WORD (DOCX) OUTPUT
 # ═══════════════════════════════════════════════════════════════════════════
 # Requires: pip install python-docx
-# Produces briefs/YYYY-MM-DD_SESSION.docx alongside the .txt file.
-# Add --docx flag to any session command:
-#   python generate_daily_brief.py --session primary --docx
+# Produces outputs/briefs/YYYY-MM-DD_SESSION.docx alongside the .txt file (default).
 #
 # Design:
 #   · Dark accent colour (#1F3864 navy) for headers — readable on print
@@ -3282,7 +3291,7 @@ def parse_args():
     )
     p.add_argument(
         "--output", default=None,
-        help="Write brief to this file path (appends). Default: briefs/YYYY-MM-DD_SESSION.txt",
+        help="Write brief to this file path (appends). Default: outputs/briefs/YYYY-MM-DD_SESSION.txt",
     )
     p.add_argument(
         "--no-file", action="store_true",
@@ -3299,12 +3308,6 @@ def parse_args():
     p.add_argument(
         "--verbose", action="store_true",
         help="Print extra DB diagnostic info during execution.",
-    )
-    p.add_argument(
-        "--docx", action="store_true",
-        help="Also write a formatted Word (.docx) brief alongside the .txt file. "
-             "Requires python-docx (pip install python-docx). "
-             "File saved as briefs/YYYY-MM-DD_SESSION.docx.",
     )
     return p.parse_args()
 
@@ -3355,11 +3358,11 @@ def main():
                 fh.write(brief_text)
             print(f"\n  ✓ Prior day report saved to: {output_file}")
 
-        # ── Word (.docx) output ────────────────────────────────────────────
-        if getattr(args, "docx", False) and not args.dry_run and not args.no_file:
+        # ── Word (.docx) output (default) ───────────────────────────────────
+        if not args.dry_run and not args.no_file:
             if not DOCX_AVAILABLE:
-                print("\n  ⚠  --docx requested but python-docx is not installed.")
-                print("     Run: pip install python-docx")
+                print("\n  ⚠  Word output skipped: python-docx is not installed.")
+                print("     Install with: pip install python-docx")
             else:
                 try:
                     # Load completed games so build_docx_brief has data to render
@@ -3580,11 +3583,11 @@ def main():
             fh.write(brief_text)
         print(f"\n  ✓ Brief saved to: {output_file}")
 
-    # ── Word output ──────────────────────────────────────────────────────
-    if getattr(args, "docx", False) and not args.dry_run and not args.no_file:
+    # ── Word output (default) ─────────────────────────────────────────────
+    if not args.dry_run and not args.no_file:
         if not DOCX_AVAILABLE:
-            print("\n  ⚠  --docx requested but python-docx is not installed.")
-            print("     Run: pip install python-docx")
+            print("\n  ⚠  Word output skipped: python-docx is not installed.")
+            print("     Install with: pip install python-docx")
         else:
             try:
                 doc = build_docx_brief(
