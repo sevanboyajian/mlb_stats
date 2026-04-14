@@ -3237,6 +3237,16 @@ def build_docx_brief(session: str, game_date: str,
 # Main
 # ═══════════════════════════════════════════════════════════════════════════
 
+def _parse_as_of_arg(value: str) -> datetime.datetime:
+    try:
+        naive = datetime.datetime.strptime(value.strip(), "%Y-%m-%d %H:%M")
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "expected 'YYYY-MM-DD HH:MM' (America/New_York wall time)"
+        ) from exc
+    return naive.replace(tzinfo=_ET)
+
+
 def parse_args():
     p = argparse.ArgumentParser(
         description="MLB Betting Model — Daily Brief Generator",
@@ -3308,6 +3318,14 @@ def parse_args():
     p.add_argument(
         "--verbose", action="store_true",
         help="Print extra DB diagnostic info during execution.",
+    )
+    p.add_argument(
+        "--as-of",
+        dest="as_of_dt",
+        default=None,
+        metavar="TS",
+        type=_parse_as_of_arg,
+        help='Wall clock in America/New_York (format: "YYYY-MM-DD HH:MM"). Default: not set.',
     )
     return p.parse_args()
 
