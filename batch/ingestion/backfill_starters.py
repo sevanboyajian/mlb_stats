@@ -38,10 +38,12 @@ NOTES
 
 # CHANGE LOG (latest first)
 # -------------------------
+# 2026-04-13 22:15 ET  Default DB from get_db_path(); repo root on sys.path for core.* imports.
 # 2026-04-13 16:24 ET  Refactor: route sqlite3.connect() calls through core.db.connection.connect().
 
 import argparse
 import json
+import os
 import sqlite3
 import sys
 import time
@@ -49,7 +51,12 @@ import urllib.request
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from core.db.connection import connect as db_connect
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, "..", ".."))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
+from core.db.connection import connect as db_connect, get_db_path
 
 try:
     from zoneinfo import ZoneInfo as _ZI
@@ -60,7 +67,7 @@ except Exception:
 
 MLB_API   = "https://statsapi.mlb.com/api/v1"
 SPORT_ID  = 1
-DEFAULT_DB = Path(__file__).parent / "mlb_stats.db"
+DEFAULT_DB = Path(get_db_path())
 SEASON     = 2026
 RATE_LIMIT = 0.5   # seconds between API calls
 

@@ -7,17 +7,26 @@ Run from mlb_stats folder: python diagnose_odds.py
 
 # CHANGE LOG (latest first)
 # -------------------------
+# 2026-04-13 22:15 ET  DB from get_db_path(); repo root on sys.path for core.* imports.
 # 2026-04-13 16:24 ET  Refactor: route sqlite3.connect() calls through core.db.connection.connect().
 
-import sqlite3, os
+import os
+import sqlite3
+import sys
 from datetime import date, timedelta
+
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, ".."))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
 from dotenv import load_dotenv
 import requests
-from core.db.connection import connect as db_connect
+from core.db.connection import connect as db_connect, get_db_path
 
 load_dotenv()
 API_KEY = os.getenv("THE_ODDS_API_KEY")
-DB_PATH = "mlb_stats.db"
+DB_PATH = get_db_path()
 TARGET  = date.today().isoformat()
 NEXT    = (date.today() + timedelta(days=1)).isoformat()
 

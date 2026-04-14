@@ -27,6 +27,7 @@ REQUIREMENTS
 
 # CHANGE LOG (latest first)
 # -------------------------
+# 2026-04-13 22:15 ET  Default DB from get_db_path(); repo root on sys.path for core.* imports.
 # 2026-04-13 16:24 ET  Refactor: route sqlite3.connect() calls through core.db.connection.connect().
 
 import argparse
@@ -36,10 +37,15 @@ import sqlite3
 import sys
 from datetime import date, timedelta
 
-from core.db.connection import connect as db_connect
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, "..", ".."))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
+from core.db.connection import connect as db_connect, get_db_path
 
 # ── DB location ──────────────────────────────────────────────────────────────
-DEFAULT_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mlb_stats.db")
+DEFAULT_DB = get_db_path()
 
 # ── Signal thresholds (mirror generate_daily_brief.py exactly) ───────────────
 WIND_OUT_MIN_MPH    = 10

@@ -6,6 +6,7 @@ Reads from mlb_stats.db and outputs the formatted betting brief.
 
 CHANGE LOG (latest first)
 ──────────────────────────
+2026-04-13 22:15 ET  Default DB from get_db_path(); repo root on sys.path for core.* imports.
 2026-04-13 16:24 ET  Refactor: route sqlite3.connect() calls through core.db.connection.connect().
 
 2026-04-11 19:00 ET  Feature: ⚡ MOVEMENT ALERT added to every pick in action
@@ -121,7 +122,12 @@ import sys
 import textwrap
 from pathlib import Path
 
-from core.db.connection import connect as db_connect
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, "..", ".."))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
+from core.db.connection import connect as db_connect, get_db_path
 
 # ── ET timezone helper ────────────────────────────────────────────────────
 try:
@@ -174,8 +180,8 @@ try:
 except ImportError:
     DOCX_AVAILABLE = False
 
-# ── DB location (same directory as this script) ────────────────────────────
-DB_PATH = Path(__file__).parent / "mlb_stats.db"
+# ── DB location (env / config/.env / cwd fallback via get_db_path) ───────
+DB_PATH = Path(get_db_path())
 
 # ── Output directory for saved briefs ──────────────────────────────────────
 OUTPUT_DIR = Path(__file__).parent / "briefs"

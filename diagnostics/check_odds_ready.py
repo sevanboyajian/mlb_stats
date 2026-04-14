@@ -33,6 +33,7 @@ EXIT CODES
 
 # CHANGE LOG (latest first)
 # -------------------------
+# 2026-04-13 22:15 ET  Default DB from get_db_path(); repo root on sys.path for core.* imports.
 # 2026-04-13 16:24 ET  Refactor: route sqlite3.connect() calls through core.db.connection.connect().
 
 import argparse
@@ -41,9 +42,14 @@ import sqlite3
 import sys
 from datetime import date, datetime, timedelta, timezone
 
-from core.db.connection import connect as db_connect
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, ".."))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 
-DEFAULT_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mlb_stats.db")
+from core.db.connection import connect as db_connect, get_db_path
+
+DEFAULT_DB = get_db_path()
 
 
 def get_connection(db_path: str) -> sqlite3.Connection:

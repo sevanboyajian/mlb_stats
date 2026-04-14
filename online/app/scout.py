@@ -13,6 +13,7 @@
 
 # CHANGE LOG (latest first)
 # -------------------------
+# 2026-04-13 22:15 ET  Default DB from get_db_path(); repo root on sys.path for core.* imports.
 # 2026-04-13 16:24 ET  Refactor: route sqlite3.connect() calls through core.db.connection.connect().
 
 import os
@@ -25,7 +26,12 @@ from typing import Optional
 import pandas as pd
 import streamlit as st
 
-from core.db.connection import connect as db_connect
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, "..", ".."))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
+from core.db.connection import connect as db_connect, get_db_path
 
 # ─────────────────────────────────────────────────────────────
 #  PAGE CONFIG  (must be first Streamlit call)
@@ -103,7 +109,7 @@ if ENABLE_PASSWORD_GATE:
 # ─────────────────────────────────────────────────────────────
 #  DATABASE PATH
 # ─────────────────────────────────────────────────────────────
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mlb_stats.db")
+DB_PATH = get_db_path()
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ─────────────────────────────────────────────────────────────

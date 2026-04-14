@@ -36,6 +36,7 @@ API key:
 
 # CHANGE LOG (latest first)
 # -------------------------
+# 2026-04-13 22:15 ET  Default DB from get_db_path(); repo root on sys.path for core.* imports.
 # 2026-04-13 16:24 ET  Refactor: route sqlite3.connect() calls through core.db.connection.connect().
 
 import argparse
@@ -48,8 +49,13 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, "..", ".."))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
 import requests
-from core.db.connection import connect as db_connect
+from core.db.connection import connect as db_connect, get_db_path
 
 # ── Optional .env support ─────────────────────────────────────────────────────
 try:
@@ -59,7 +65,7 @@ except ImportError:
     pass
 
 # ── Configuration ──────────────────────────────────────────────────────────────
-DEFAULT_DB   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mlb_stats.db")
+DEFAULT_DB   = get_db_path()
 API_BASE     = "https://api.the-odds-api.com/v4"
 SPORT        = "baseball_mlb"
 # Use specific bookmakers instead of region to control exactly which books

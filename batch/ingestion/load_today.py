@@ -26,6 +26,7 @@ Takes ~5-15 seconds.
 
 # CHANGE LOG (latest first)
 # -------------------------
+# 2026-04-13 22:15 ET  Default DB from get_db_path(); repo root on sys.path for core.* imports.
 # 2026-04-13 16:24 ET  Refactor: route sqlite3.connect() calls through core.db.connection.connect().
 
 import argparse
@@ -36,9 +37,12 @@ import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from core.db.connection import connect as db_connect
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, "..", ".."))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 
-DEFAULT_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mlb_stats.db")
+from core.db.connection import connect as db_connect, get_db_path
 
 
 def main():
@@ -109,9 +113,9 @@ def main():
         sys.exit(result.returncode)
 
     # ── Query DB and display game summary ─────────────────────────────────
-    db_path = Path(__file__).parent / "mlb_stats.db"
+    db_path = Path(get_db_path())
     if not db_path.exists():
-        print("  ✗  mlb_stats.db not found — cannot show game summary.")
+        print(f"  ✗  Database not found — cannot show game summary: {db_path}")
         sys.exit(1)
 
     con = db_connect(str(db_path))

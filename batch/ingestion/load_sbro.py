@@ -48,20 +48,27 @@ Notes:
 
 # CHANGE LOG (latest first)
 # -------------------------
+# 2026-04-13 22:15 ET  Default DB from get_db_path(); repo root on sys.path for core.* imports.
 # 2026-04-13 16:24 ET  Refactor: route sqlite3.connect() calls through core.db.connection.connect().
 
 import argparse
 import logging
+import os
 import sqlite3
 import sys
 from datetime import datetime
 from pathlib import Path
 
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, "..", ".."))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
 import openpyxl
-from core.db.connection import connect as db_connect
+from core.db.connection import connect as db_connect, get_db_path
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-DEFAULT_DB   = r"C:\Users\sevan\OneDrive\Documents\Python\mlb_stats\mlb_stats.db"
+DEFAULT_DB   = get_db_path()
 ODDS_DIR     = r"C:\Users\sevan\OneDrive\Documents\Python\mlb_stats\OddsData"
 BOOKMAKER    = "sbro"          # stored in game_odds.bookmaker for all SBRO rows
 DATA_SOURCE  = "sbro-xlsx"     # stored in game_odds.data_source

@@ -18,38 +18,27 @@ What it shows:
 
 # CHANGE LOG (latest first)
 # -------------------------
+# 2026-04-13 22:15 ET  Use get_db_path() (env / config/.env); repo root on sys.path for core.*.
 # 2026-04-13 16:24 ET  Refactor: route sqlite3.connect() calls through core.db.connection.connect().
 
 import os
 import sqlite3
 import sys
 
-from core.db.connection import connect as db_connect
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, ".."))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 
-DB_NAME = "mlb_stats.db"
+from core.db.connection import connect as db_connect, get_db_path
 
 # ── Locate the database ───────────────────────────────────────
-# Look in the same folder as this script first, then current dir
-script_dir = os.path.dirname(os.path.abspath(__file__))
-candidates = [
-    os.path.join(script_dir, DB_NAME),
-    os.path.join(os.getcwd(), DB_NAME),
-]
+db_path = get_db_path()
 
-db_path = None
-for c in candidates:
-    if os.path.exists(c):
-        db_path = c
-        break
-
-if db_path is None:
-    print("ERROR: mlb_stats.db not found.")
-    print("Looked in:")
-    for c in candidates:
-        print(f"  {c}")
-    print()
-    print("Make sure you have run create_db.py first, and that")
-    print("check_db.py is in the same folder as mlb_stats.db.")
+if not os.path.exists(db_path):
+    print("ERROR: Database file not found.")
+    print(f"  Resolved path: {db_path}")
+    print("  Set MLB_DB_PATH or add MLB_DB_PATH=... to config/.env")
     sys.exit(1)
 
 size_mb = os.path.getsize(db_path) / (1024 * 1024)

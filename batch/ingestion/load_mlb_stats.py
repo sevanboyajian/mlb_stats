@@ -32,7 +32,7 @@ FLAGS:
   --season YEAR     Load entire season (overrides --start/--end).
   --no-pbp          Skip play-by-play (much faster, use for initial catch-up).
   --retry-errors    Re-attempt games with status='error' in ingest_log.
-  --db PATH         Path to database file. Default: mlb_stats.db in same folder.
+  --db PATH         Path to database file. Default: get_db_path() (env / config/.env / cwd).
   --dry-run         Print what would be loaded, don't write anything.
   --verbose         Extra logging (shows each API call).
 
@@ -47,12 +47,12 @@ DEPENDENCIES:
 
 # CHANGE LOG (latest first)
 # -------------------------
+# 2026-04-13 21:00 ET  Default --db uses core.db.connection.get_db_path() (matches config/.env).
 # 2026-04-13 16:24 ET  Refactor: route sqlite3.connect() calls through core.db.connection.connect().
 
 import argparse
 import json
 import logging
-from log_manager import rotate_logs
 import os
 import sqlite3
 import sys
@@ -62,7 +62,14 @@ import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
-from core.db.connection import connect as db_connect
+# Repo root on sys.path so `core.*` imports work when run from batch/ingestion/
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, "..", ".."))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
+from core.db.connection import connect as db_connect, get_db_path
+from core.utils.log_manager import rotate_logs
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 MLB_API      = "https://statsapi.mlb.com/api/v1"
@@ -73,8 +80,8 @@ REQUEST_PAUSE = 0.3       # seconds between game-level API calls
 MAX_RETRIES   = 3         # HTTP retries per request
 RETRY_BACKOFF = 2.0       # seconds, doubles each retry
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_DB = os.path.join(SCRIPT_DIR, "mlb_stats.db")
+SCRIPT_DIR = _SCRIPT_DIR
+DEFAULT_DB = get_db_path()
 
 # ── Logging setup ─────────────────────────────────────────────────────────────
 log = logging.getLogger("mlb_loader")
