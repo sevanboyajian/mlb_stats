@@ -46,6 +46,17 @@ from core.db.connection import connect as db_connect, get_db_path
 
 
 def main():
+    # ── Console encoding guard (Windows cp1252) ───────────────────────────
+    # Prevent crashes when printing unicode glyphs (✓, box drawing, arrows).
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
     parser = argparse.ArgumentParser(
         description="Load today's scheduled games into mlb_stats.db"
     )

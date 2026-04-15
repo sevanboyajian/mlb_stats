@@ -62,6 +62,14 @@ import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 
+# ── ET timezone helper (for game_date_et) ──────────────────────────────────
+try:
+    from zoneinfo import ZoneInfo as _ZI  # py3.9+
+    _ET = _ZI("America/New_York")
+except Exception:
+    # Fallback: fixed UTC-4 (EDT). Good enough for MLB season runs if tzdata missing.
+    _ET = timezone(timedelta(hours=-4))
+
 # Repo root on sys.path so `core.*` imports work when run from batch/ingestion/
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, "..", ".."))
@@ -155,6 +163,24 @@ def get_connection(db_path: str) -> sqlite3.Connection:
     con.execute("PRAGMA synchronous  = NORMAL")
     con.execute("PRAGMA cache_size    = -64000")  # ~64 MB cache
     return con
+
+
+def _game_date_et_from_utc(game_start_utc: Optional[str],
+                           fallback_date: Optional[str]) -> Optional[str]:
+    """
+    Return the ET calendar date (YYYY-MM-DD) for a UTC start timestamp string
+    like '2026-03-27T02:10:00' (or with trailing 'Z').
+    Falls back to fallback_date when missing/unparseable.
+    """
+    if game_start_utc:
+        try:
+            raw = str(game_start_utc).rstrip("Z")
+            dt_utc = datetime.fromisoformat(raw).replace(tzinfo=timezone.utc)
+            dt_et = dt_utc.astimezone(_ET)
+            return dt_et.date().isoformat()
+        except Exception:
+            pass
+    return fallback_date or None
 
 
 def safe_int(value) -> Optional[int]:
@@ -604,6 +630,7 @@ def load_schedule(con: sqlite3.Connection, start_date: str, end_date: str,
                 or date_obj.get("date", "")            # schedule query date bucket
                 or (game_date_str[:10] if game_date_str else "")  # UTC fallback
             )
+            game_date_et = _game_date_et_from_utc(game_start_utc, game_date_only)
 
             # Duration (only on Final games)
             duration_min = None
@@ -641,7 +668,7 @@ def load_schedule(con: sqlite3.Connection, start_date: str, end_date: str,
 
             con.execute("""
                 INSERT INTO games
-                    (game_pk, season, game_date, game_type,
+                    (game_pk, season, game_date, game_date_et, game_type,
                      series_description, series_game_number,
                      home_team_id, away_team_id, venue_id,
                      game_start_utc,
@@ -649,19 +676,20 @@ def load_schedule(con: sqlite3.Connection, start_date: str, end_date: str,
                      status, postpone_reason,
                      temp_f, wind_mph, wind_direction, sky_condition,
                      double_header, game_number)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(game_pk) DO UPDATE SET
                     status          = excluded.status,
                     home_score      = COALESCE(excluded.home_score, home_score),
                     away_score      = COALESCE(excluded.away_score, away_score),
                     innings_played  = COALESCE(excluded.innings_played, innings_played),
                     extra_innings   = excluded.extra_innings,
+                    game_date_et    = COALESCE(excluded.game_date_et, game_date_et),
                     temp_f          = COALESCE(excluded.temp_f, temp_f),
                     wind_mph        = COALESCE(excluded.wind_mph, wind_mph),
                     wind_direction  = COALESCE(excluded.wind_direction, wind_direction),
                     sky_condition   = COALESCE(excluded.sky_condition, sky_condition)
             """, (
-                game_pk, season, game_date_only, game_type,
+                game_pk, season, game_date_only, game_date_et, game_type,
                 series_desc, series_gamenum,
                 home_id, away_id, venue_id,
                 game_start_utc,
