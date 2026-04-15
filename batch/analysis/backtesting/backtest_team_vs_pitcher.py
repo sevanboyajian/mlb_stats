@@ -237,12 +237,11 @@ def _pick_col(cols: List[str], candidates: List[str]) -> Optional[str]:
 
 def load_team_rolling_stats_map(
     con: sqlite3.Connection, table: str, rows_ref: List[Dict[str, Any]]
-) -> Dict[Tuple[int, int], Dict[str, Optional[float]]]:
+) -> Dict[Tuple[int, int], Dict[str, Any]]:
     """
-    Join key (game_pk, batting_team_id) -> {ops, runs_pg, k_pct}.
-    Table may use batting_team_id or team_id; columns may be named team_rolling_ops etc.
+    (game_pk, team_id) -> full row dict from team_rolling_stats (all columns).
     """
-    out: Dict[Tuple[int, int], Dict[str, Optional[float]]] = {}
+    out: Dict[Tuple[int, int], Dict[str, Any]] = {}
     if not table or not all(ch.isalnum() or ch == "_" for ch in table):
         return out
     gpks = sorted({int(r["game_pk"]) for r in rows_ref})
@@ -262,18 +261,6 @@ def load_team_rolling_stats_map(
     if not tcol or not gcol:
         print(f"[warn] team_rolling_stats: missing game_pk/team column in {table!r}", flush=True)
         return out
-    ops_c = _pick_col(cols, ["team_rolling_ops", "rolling_ops", "ops"])
-    rpg_c = _pick_col(
-        cols,
-        [
-            "team_rolling_runs_pg",
-            "rolling_runs_scored_pg",
-            "rolling_runs_pg",
-            "runs_pg",
-            "runs_per_game",
-        ],
-    )
-    k_c = _pick_col(cols, ["team_rolling_k_pct", "rolling_k_pct", "k_pct", "strikeout_pct"])
 
     for row in raw:
         gpk = int(row[gcol])
@@ -281,32 +268,107 @@ def load_team_rolling_stats_map(
             tid = int(float(row[tcol]))
         except (TypeError, ValueError):
             continue
-        def _f(name: Optional[str]) -> Optional[float]:
-            if not name or name not in row.keys():
-                return None
-            v = row[name]
-            if v is None:
-                return None
-            try:
-                return float(v)
-            except (TypeError, ValueError):
-                return None
-
-        out[(gpk, tid)] = {
-            "ops": _f(ops_c),
-            "runs_pg": _f(rpg_c),
-            "k_pct": _f(k_c),
-        }
+        out[(gpk, tid)] = dict(row)
     return out
 
 
-def apply_team_rolling_columns(rows: List[Dict[str, Any]], tr_map: Dict[Tuple[int, int], Dict[str, Optional[float]]]) -> None:
+def _trs_val(row: Optional[Dict[str, Any]], key: str) -> Any:
+    if not row or key not in row:
+        return None
+    return row[key]
+
+
+def _trs_float(row: Optional[Dict[str, Any]], key: str) -> Optional[float]:
+    v = _trs_val(row, key)
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _trs_int(row: Optional[Dict[str, Any]], key: str) -> Optional[int]:
+    v = _trs_val(row, key)
+    if v is None:
+        return None
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def apply_team_rolling_columns(rows: List[Dict[str, Any]], tr_map: Dict[Tuple[int, int], Dict[str, Any]]) -> None:
+    """Batting team (team_id) + opposing/pitching team (opponent_team_id) rolling rows from team_rolling_stats."""
     for r in rows:
-        key = (int(r["game_pk"]), int(r["team_id"]))
-        tr = tr_map.get(key)
-        r["team_rolling_ops"] = tr.get("ops") if tr else None
-        r["team_rolling_runs_pg"] = tr.get("runs_pg") if tr else None
-        r["team_rolling_k_pct"] = tr.get("k_pct") if tr else None
+        gpk = int(r["game_pk"])
+        tid = int(r["team_id"])
+        oid = int(r["opponent_team_id"])
+        bat = tr_map.get((gpk, tid))
+        pit = tr_map.get((gpk, oid))
+
+        r["bat_games_in_window"] = _trs_int(bat, "games_in_window")
+        r["bat_rolling_runs_pg"] = _trs_float(bat, "rolling_runs_scored_pg")
+        r["bat_rolling_ra_pg"] = _trs_float(bat, "rolling_runs_allowed_pg")
+        r["bat_rolling_run_diff"] = _trs_float(bat, "rolling_run_diff_pg")
+        r["bat_rolling_ops"] = _trs_float(bat, "rolling_ops")
+        r["bat_rolling_obp"] = _trs_float(bat, "rolling_obp")
+        r["bat_rolling_slg"] = _trs_float(bat, "rolling_slg")
+        r["bat_rolling_iso"] = _trs_float(bat, "rolling_iso")
+        r["bat_rolling_k_pct"] = _trs_float(bat, "rolling_k_pct")
+        r["bat_rolling_bb_pct"] = _trs_float(bat, "rolling_bb_pct")
+        r["bat_rolling_hr_pg"] = _trs_float(bat, "rolling_hr_pg")
+        r["bat_rolling_ops_home"] = _trs_float(bat, "rolling_ops_home")
+        r["bat_rolling_ops_road"] = _trs_float(bat, "rolling_ops_road")
+        r["bat_home_games_in_window"] = _trs_int(bat, "home_games_in_window")
+        r["bat_road_games_in_window"] = _trs_int(bat, "road_games_in_window")
+
+        r["pit_sp_starts_in_window"] = _trs_int(pit, "sp_starts_in_window")
+        r["pit_rolling_sp_era"] = _trs_float(pit, "rolling_sp_era")
+        r["pit_rolling_sp_whip"] = _trs_float(pit, "rolling_sp_whip")
+        r["pit_rolling_sp_k9"] = _trs_float(pit, "rolling_sp_k9")
+        r["pit_rolling_ra_pg"] = _trs_float(pit, "rolling_runs_allowed_pg")
+
+        # Legacy export columns (batting team = same row as trs_bat)
+        r["team_rolling_ops"] = r["bat_rolling_ops"]
+        r["team_rolling_runs_pg"] = r["bat_rolling_runs_pg"]
+        r["team_rolling_k_pct"] = r["bat_rolling_k_pct"]
+
+
+def _wind_in(direction: Any) -> bool:
+    if not direction:
+        return False
+    d = str(direction).upper()
+    if "," in d:
+        d = d.split(",", 1)[1].strip()
+    return "IN" in d and "R TO" not in d and "L TO" not in d
+
+
+def _wind_out(direction: Any) -> bool:
+    if not direction:
+        return False
+    d = str(direction).upper()
+    if "," in d:
+        d = d.split(",", 1)[1].strip()
+    return "OUT" in d
+
+
+def apply_wind_in_out_flags(rows: List[Dict[str, Any]]) -> None:
+    """Set wind_in / wind_out from wind_direction (pandas optional)."""
+    try:
+        import pandas as pd
+
+        df = pd.DataFrame(rows)
+        df["wind_in"] = df["wind_direction"].apply(_wind_in)
+        df["wind_out"] = df["wind_direction"].apply(_wind_out)
+        fixed = df.to_dict("records")
+        rows.clear()
+        rows.extend(fixed)
+    except ImportError:
+        for r in rows:
+            wd = r.get("wind_direction")
+            r["wind_in"] = _wind_in(wd)
+            r["wind_out"] = _wind_out(wd)
 
 
 def season_boundary_check(rows: List[Dict[str, Any]], boundary_season: Optional[int]) -> None:
@@ -377,6 +439,7 @@ def load_games(con: sqlite3.Connection, start: str, end: str, season: Optional[i
             g.game_start_utc,
             g.wind_mph,
             g.wind_direction,
+            g.temp_f,
             g.home_team_id,
             g.away_team_id,
             g.home_score,
@@ -682,6 +745,7 @@ def ensure_output_table(con: sqlite3.Connection, table: str) -> None:
             game_date TEXT,
             wind_mph INTEGER,
             wind_direction TEXT,
+            temp_f INTEGER,
             period_label TEXT,
             team_window INTEGER,
             pitcher_window INTEGER,
@@ -702,9 +766,31 @@ def ensure_output_table(con: sqlite3.Connection, table: str) -> None:
             closing_ml INTEGER,
             implied_prob REAL,
             home_field_adj_win_pct REAL,
+            bat_games_in_window INTEGER,
+            bat_rolling_runs_pg REAL,
+            bat_rolling_ra_pg REAL,
+            bat_rolling_run_diff REAL,
+            bat_rolling_ops REAL,
+            bat_rolling_obp REAL,
+            bat_rolling_slg REAL,
+            bat_rolling_iso REAL,
+            bat_rolling_k_pct REAL,
+            bat_rolling_bb_pct REAL,
+            bat_rolling_hr_pg REAL,
+            bat_rolling_ops_home REAL,
+            bat_rolling_ops_road REAL,
+            bat_home_games_in_window INTEGER,
+            bat_road_games_in_window INTEGER,
+            pit_sp_starts_in_window INTEGER,
+            pit_rolling_sp_era REAL,
+            pit_rolling_sp_whip REAL,
+            pit_rolling_sp_k9 REAL,
+            pit_rolling_ra_pg REAL,
             team_rolling_ops REAL,
             team_rolling_runs_pg REAL,
             team_rolling_k_pct REAL,
+            wind_in INTEGER,
+            wind_out INTEGER,
             pitcher_strength TEXT,
             offensive_metrics TEXT,
             pitcher_metrics TEXT,
@@ -722,7 +808,7 @@ def write_table(con: sqlite3.Connection, table: str, rows: List[Dict[str, Any]])
     con.executemany(
         f"""
         INSERT OR REPLACE INTO {table}
-            (game_pk, game_date, wind_mph, wind_direction,
+            (game_pk, game_date, wind_mph, wind_direction, temp_f,
              period_label, team_window, pitcher_window,
              team_id, team_name, is_home,
              opponent_team_id, opponent_team_name,
@@ -731,9 +817,16 @@ def write_table(con: sqlite3.Connection, table: str, rows: List[Dict[str, Any]])
              team_runs, opponent_runs, team_result, actual_win,
              closing_ml, implied_prob,
              home_field_adj_win_pct,
+             bat_games_in_window, bat_rolling_runs_pg, bat_rolling_ra_pg, bat_rolling_run_diff,
+             bat_rolling_ops, bat_rolling_obp, bat_rolling_slg, bat_rolling_iso,
+             bat_rolling_k_pct, bat_rolling_bb_pct, bat_rolling_hr_pg,
+             bat_rolling_ops_home, bat_rolling_ops_road,
+             bat_home_games_in_window, bat_road_games_in_window,
+             pit_sp_starts_in_window, pit_rolling_sp_era, pit_rolling_sp_whip, pit_rolling_sp_k9, pit_rolling_ra_pg,
              team_rolling_ops, team_rolling_runs_pg, team_rolling_k_pct,
+             wind_in, wind_out,
              pitcher_strength, offensive_metrics, pitcher_metrics)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES ({",".join(["?"] * 53)})
         """,
         [
             (
@@ -741,6 +834,7 @@ def write_table(con: sqlite3.Connection, table: str, rows: List[Dict[str, Any]])
                 r["game_date"],
                 r.get("wind_mph"),
                 r.get("wind_direction"),
+                r.get("temp_f"),
                 r.get("period_label"),
                 r.get("team_window"),
                 r.get("pitcher_window"),
@@ -761,9 +855,31 @@ def write_table(con: sqlite3.Connection, table: str, rows: List[Dict[str, Any]])
                 r.get("closing_ml"),
                 r.get("implied_prob"),
                 r.get("home_field_adj_win_pct"),
+                r.get("bat_games_in_window"),
+                r.get("bat_rolling_runs_pg"),
+                r.get("bat_rolling_ra_pg"),
+                r.get("bat_rolling_run_diff"),
+                r.get("bat_rolling_ops"),
+                r.get("bat_rolling_obp"),
+                r.get("bat_rolling_slg"),
+                r.get("bat_rolling_iso"),
+                r.get("bat_rolling_k_pct"),
+                r.get("bat_rolling_bb_pct"),
+                r.get("bat_rolling_hr_pg"),
+                r.get("bat_rolling_ops_home"),
+                r.get("bat_rolling_ops_road"),
+                r.get("bat_home_games_in_window"),
+                r.get("bat_road_games_in_window"),
+                r.get("pit_sp_starts_in_window"),
+                r.get("pit_rolling_sp_era"),
+                r.get("pit_rolling_sp_whip"),
+                r.get("pit_rolling_sp_k9"),
+                r.get("pit_rolling_ra_pg"),
                 r.get("team_rolling_ops"),
                 r.get("team_rolling_runs_pg"),
                 r.get("team_rolling_k_pct"),
+                1 if r.get("wind_in") else 0,
+                1 if r.get("wind_out") else 0,
                 r.get("pitcher_strength"),
                 r["offensive_metrics"],
                 r["pitcher_metrics"],
@@ -999,6 +1115,7 @@ def main() -> None:
 
         wind_mph = g_.get("wind_mph")
         wind_direction = g_.get("wind_direction")
+        temp_f = g_.get("temp_f")
 
         home_pitch = (
             rolling_pitcher_metrics(
@@ -1019,6 +1136,7 @@ def main() -> None:
             "game_date": gdate,
             "wind_mph": wind_mph,
             "wind_direction": wind_direction,
+            "temp_f": temp_f,
             "period_label": period_label,
             "team_window": int(args.team_window),
             "pitcher_window": int(args.pitcher_window),
@@ -1066,6 +1184,7 @@ def main() -> None:
             "game_date": gdate,
             "wind_mph": wind_mph,
             "wind_direction": wind_direction,
+            "temp_f": temp_f,
             "period_label": period_label,
             "team_window": int(args.team_window),
             "pitcher_window": int(args.pitcher_window),
@@ -1114,6 +1233,8 @@ def main() -> None:
         apply_team_rolling_columns(out_rows, tr_map)
     else:
         apply_team_rolling_columns(out_rows, {})
+
+    apply_wind_in_out_flags(out_rows)
 
     bucket_rate = compute_implied_bucket_win_rates(out_rows)
     apply_home_field_adj_win_pct(out_rows, bucket_rate)
