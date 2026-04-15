@@ -2453,111 +2453,99 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
                 + (f"  |  O/U {tot}" if tot else ""))
 
     # ════════════════════════════════════════════════════════════════════
-    # LOAD CONFIRMED PICKS from brief_picks (what was actually shown)
+    # BET LEDGER (source of truth) — load + grade
     # ════════════════════════════════════════════════════════════════════
-    confirmed_picks = load_brief_picks(conn, game_date, session="primary")
-    # Also check early/afternoon sessions for that date
-    if not confirmed_picks:
-        for sess in ("early", "afternoon"):
-            confirmed_picks = load_brief_picks(conn, game_date, sess)
-            if confirmed_picks:
-                break
+    try:
+        grade_bet_ledger(conn, game_date=game_date)
+    except Exception:
+        pass
 
-    # Grade confirmed picks against actual outcomes
-    confirmed_graded = []
-    for cp in confirmed_picks:
-        # Find matching evaluated entry
-        match = next((e for e in evaluated
-                      if e["game"]["game_pk"] == cp["game_pk"]), None)
-        if match is None:
-            continue
-        g  = match["game"]
-        hs = g["home_score"]; as_ = g["away_score"]
-        hml = g["home_ml"];  aml = g["away_ml"]
-        tot = g["total_line"]
-        if cp["market"] == "ML":
-            side = "away" if not cp["bet"].startswith(g["home_abbr"]) else "home"
-            odds = aml if side == "away" else hml
-            res, pnl = grade_ml(side, hs, as_, odds or 0)
-        elif cp["market"] == "TOTAL":
-            bet_side = "over" if "OVER" in cp["bet"].upper() else "under"
-            odds = g.get("over_odds") if bet_side == "over" else g.get("under_odds")
-            res, pnl = grade_total(bet_side, hs, as_, tot, odds)
-        else:
-            res, pnl = "— UNKNOWN", 0.0
-        confirmed_graded.append({
-            **cp, "result": res, "pnl": pnl,
-            "game": g, "entry": match,
-        })
+    try:
+        bet_rows = conn.execute("""
+            SELECT
+                id, game_pk, market_type, bet, odds_taken, stake_units,
+                signal_at_time, session, placed_at, result, pnl_units
+            FROM bet_ledger
+            WHERE game_date = ?
+            ORDER BY placed_at
+        """, (game_date,)).fetchall()
+        bet_rows = [dict(r) for r in bet_rows]
+    except Exception:
+        bet_rows = []
 
-    has_confirmed = bool(confirmed_graded)
+    def _summarise_bets(rows: list) -> dict:
+        graded = [r for r in rows if r.get("result") in ("win", "loss", "push")]
+        wins   = sum(1 for r in graded if r["result"] == "win")
+        losses = sum(1 for r in graded if r["result"] == "loss")
+        pushes = sum(1 for r in graded if r["result"] == "push")
+        units  = sum(float(r.get("pnl_units") or 0.0) for r in graded)
+        n      = len(graded)
+        roi    = (100.0 * units / n) if n else 0.0
+        return {"bets": n, "wins": wins, "losses": losses, "pushes": pushes, "units": units, "roi": roi}
+
+    bet_summary = _summarise_bets(bet_rows)
+    by_market: dict[str, list] = {}
+    for r in bet_rows:
+        m = (r.get("market_type") or "unknown").strip() or "unknown"
+        by_market.setdefault(m, []).append(r)
+
+    # Map bets back to evaluated games for display blocks
+    bet_by_game = {e["game"]["game_pk"]: e for e in evaluated}
+    top_bets  = [r for r in bet_rows if r.get("signal_at_time") == "top"]
+    next_bets = [r for r in bet_rows if r.get("signal_at_time") == "next"]
+    bet_game_pks = {r.get("game_pk") for r in bet_rows if r.get("game_pk") is not None}
 
     # ════════════════════════════════════════════════════════════════════
     # TOP PICK
     # ════════════════════════════════════════════════════════════════════
     lines.append(section("🔺  TOP PICK  —  Highest Priority Signal"))
 
-    if has_confirmed:
-        # Grade from what was ACTUALLY shown in the primary brief
-        cp = confirmed_graded[0]
-        g  = cp["game"]; e = cp["entry"]
-        p  = e["graded"][0] if e["graded"] else None
-        lines.append(f"\n  {matchup_line(g)}")
-        lines.append(f"  {weather_line(g)}")
-        lines.append(game_score_line(e))
-        ol = game_odds_line(e)
-        if ol: lines.append(ol)
+    if top_bets:
+        b = top_bets[0]
+        e = bet_by_game.get(b["game_pk"])
+        if e:
+            g = e["game"]
+            lines.append(f"\n  {matchup_line(g)}")
+            lines.append(f"  {weather_line(g)}")
+            lines.append(game_score_line(e))
+            ol = game_odds_line(e)
+            if ol: lines.append(ol)
         lines.append(f"\n  ┌─────────────────────────────────────────────────────────┐")
-        lines.append(f"  │  BET:     {cp['bet']:<20}  ODDS: {fmt_odds(cp['odds']) if cp['odds'] else 'N/A':<8}        │")
-        lines.append(f"  │  SIGNAL:  {cp['signal']:<47}  │")
-        res_field = cp["result"]
-        lines.append(f"  │  RESULT:  {res_field:<20}  P&L: {pnl_str(cp['pnl']):<16}    │")
+        lines.append(f"  │  BET:     {str(b.get('bet') or ''):<20}  ODDS: {fmt_odds(b.get('odds_taken')) if b.get('odds_taken') is not None else 'N/A':<8}        │")
+        lines.append(f"  │  SIGNAL:  {str(b.get('signal_at_time') or ''):<47}  │")
+        res_field = (b.get("result") or "—").upper()
+        pnl_field = pnl_str(float(b.get("pnl_units") or 0.0)) if b.get("result") else "—"
+        lines.append(f"  │  RESULT:  {res_field:<20}  P&L: {pnl_field:<16}    │")
         lines.append(f"  └─────────────────────────────────────────────────────────┘")
-        if p:
-            lines.append(f"\n  REASON: {textwrap.fill(p['reason'], width=66, subsequent_indent='          ')}")
         lines.append("")
-    elif not top_pick:
-        lines.append("\n  No model signals fired yesterday.\n")
     else:
-        # No confirmed brief picks in brief_picks for this date.
-        # This means either no brief was run before the games were played,
-        # or the brief_picks table did not yet exist when the brief ran.
-        #
-        # CRITICAL: Do NOT grade or display any retroactive signal here as
-        # a TOP PICK. Retroactive signals use post-game actual wind data —
-        # they were never shown to the user before the game started and
-        # cannot be counted as confirmed picks. They belong ONLY in the
-        # RETROACTIVE SIGNALS section below, clearly labelled [RETROACTIVE].
-        lines.append("\n  No confirmed picks on record for this date.\n")
-        lines.append(
-            "  ℹ  No brief was run before yesterday's games, or the session\n"
-            "     did not fire any signals. The retroactive section below\n"
-            "     shows what the model WOULD have selected using actual\n"
-            "     post-game wind — these are for model tracking only and\n"
-            "     are NOT counted in the paper account or P&L.\n"
-        )
+        lines.append("\n  No TOP bet recorded in bet_ledger yesterday.\n")
 
     # ════════════════════════════════════════════════════════════════════
     # ADDITIONAL MODEL SELECTIONS (next 5)
     # ════════════════════════════════════════════════════════════════════
-    lines.append(section(f"📋  ADDITIONAL MODEL SELECTIONS  ({len(next_picks)})"))
-    if not next_picks:
-        lines.append("\n  No additional model selections yesterday.\n")
+    lines.append(section(f"📋  ADDITIONAL MODEL SELECTIONS  ({min(len(next_bets), 5)})"))
+    if not next_bets:
+        lines.append("\n  No NEXT bets recorded in bet_ledger yesterday.\n")
     else:
-        for i, e in enumerate(next_picks, start=2):
-            g = e["game"]; p = e["graded"][0]
-            lines.append(f"\n  #{i}  {matchup_line(g)}")
-            lines.append(f"       {weather_line(g)}")
-            if g["home_score"] is not None:
-                lines.append(f"       {game_score_line(e, indent='')}")
-            ol = game_odds_line(e, indent="       ")
-            if ol: lines.append(ol)
-            lines.append(f"       BET: {p['bet']}  ODDS: {p['odds']}"
-                         f"  SIGNAL: {', '.join(e['sigs']['signals'])}")
-            lines.append(f"       RESULT: {p['result']}  P&L: {pnl_str(p['pnl'])}")
-            lines.append(f"       {textwrap.fill(p['reason'], width=64, subsequent_indent='       ')}")
-            for f in e["sigs"]["data_flags"]:
-                lines.append(f"       ⚠ {f}")
+        for i, b in enumerate(next_bets[:5], start=2):
+            e = bet_by_game.get(b["game_pk"])
+            if e:
+                g = e["game"]
+                lines.append(f"\n  #{i}  {matchup_line(g)}")
+                lines.append(f"       {weather_line(g)}")
+                if g.get("home_score") is not None:
+                    lines.append(f"       {game_score_line(e, indent='')}")
+                ol = game_odds_line(e, indent="       ")
+                if ol: lines.append(ol)
+            res_field = (b.get("result") or "—").upper()
+            pnl_field = pnl_str(float(b.get("pnl_units") or 0.0)) if b.get("result") else "—"
+            lines.append(
+                f"       BET: {str(b.get('bet') or '')}  ODDS: "
+                f"{fmt_odds(b.get('odds_taken')) if b.get('odds_taken') is not None else 'N/A'}"
+                f"  SIGNAL: {str(b.get('signal_at_time') or '')}"
+            )
+            lines.append(f"       RESULT: {res_field}  P&L: {pnl_field}")
             lines.append("")
 
     # Further signals beyond top 6
@@ -2614,21 +2602,24 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
             lines.append("")
 
     # ════════════════════════════════════════════════════════════════════
-    # MODEL P&L SUMMARY
+    # BET LEDGER SUMMARY (P&L source of truth)
     # ════════════════════════════════════════════════════════════════════
-    lines.append(section("📈  MODEL P&L SUMMARY"))
-    all_picks = top_pick + next_picks + rest_picks
+    lines.append(section("📈  BET LEDGER SUMMARY"))
+    lines.append(
+        f"\n  Total bets: {bet_summary['bets']}   "
+        f"{bet_summary['wins']}W {bet_summary['losses']}L {bet_summary['pushes']}P   "
+        f"Units: {bet_summary['units']:+.2f}u   ROI: {bet_summary['roi']:.1f}%"
+    )
 
-    for label, entries in [("Top Pick:             ", top_pick),
-                            ("Additional (next 5):  ", next_picks),
-                            ("All signals:          ", all_picks)]:
-        s = summarise(entries)
-        if s:
-            w, l, p, total_pnl = s
-            lines.append(f"\n  {label} {w}W {l}L {p}P   P&L: {pnl_str(total_pnl)}")
-
-    if not summarise(all_picks):
-        lines.append("\n  No model signals fired yesterday.")
+    # Optional grouping by market_type
+    for m, rows_m in sorted(by_market.items(), key=lambda x: x[0]):
+        s = _summarise_bets(rows_m)
+        if s["bets"]:
+            lines.append(
+                f"\n  {m:<10} {s['bets']} bet(s)  "
+                f"{s['wins']}W {s['losses']}L {s['pushes']}P   "
+                f"Units: {s['units']:+.2f}u   ROI: {s['roi']:.1f}%"
+            )
 
     ou_games = [e for e in evaluated if e["game"]["total_line"] and e["runs"] is not None]
     if ou_games:
@@ -2646,14 +2637,10 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
     # RETROACTIVE SIGNALS (informational — with actual post-game wind)
     # ════════════════════════════════════════════════════════════════════
     retro_picks = top_pick + next_picks + rest_picks
-    # Only show retroactive section if it differs from confirmed picks
-    retro_signals = {(e["game"]["game_pk"], ",".join(e["sigs"]["signals"]))
-                     for e in retro_picks}
-    confirmed_signals = {(cp["game_pk"], cp["signal"])
-                         for cp in confirmed_graded}
-    has_new_retro = bool(retro_signals - confirmed_signals)
+    # Only show retroactive picks for games that were not actually bet
+    has_new_retro = bool([e for e in retro_picks if e["game"]["game_pk"] not in bet_game_pks])
 
-    if has_new_retro or (retro_picks and not has_confirmed):
+    if has_new_retro:
         lines.append(section(
             "🔍  RETROACTIVE SIGNALS  —  Model with actual post-game wind"
         ))
@@ -2667,9 +2654,8 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
             lines.append("  No retroactive signals found either.\n")
         for e in retro_picks:
             g = e["game"]; p = e["graded"][0]
-            # Skip if already shown as confirmed
-            key = (g["game_pk"], ",".join(e["sigs"]["signals"]))
-            if key in confirmed_signals:
+            # Skip if already bet in bet_ledger
+            if g["game_pk"] in bet_game_pks:
                 continue
             lines.append(f"  {matchup_line(g)}")
             lines.append(f"  {weather_line(g)}")
@@ -2678,46 +2664,7 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
                          f"  →  {p['result']}  ({pnl_str(p['pnl'])})  [RETROACTIVE]")
             lines.append("")
 
-    # ── Brief log ─────────────────────────────────────────────────────────
-    lines.append(section("📋  BRIEF LOG — Yesterday's Sessions"))
-    try:
-        log_rows = conn.execute("""
-            SELECT session, generated_at, games_covered, picks_count, output_file
-            FROM   brief_log WHERE game_date = ? ORDER BY generated_at
-        """, (game_date,)).fetchall()
-        if not log_rows:
-            lines.append(f"\n  No brief_log entries for {game_date}.\n")
-        else:
-            for r in log_rows:
-                lines.append(f"  {r['session'].upper():<12}  {r['generated_at']}  "
-                             f"· {r['picks_count']} pick(s)  "
-                             f"· {r['output_file'] or 'no file saved'}")
-            lines.append("\n  ℹ  Open any saved brief file above to review original picks.\n")
-    except sqlite3.OperationalError:
-        lines.append("\n  brief_log table not found.\n")
-
-    lines.append(
-        "  ─────────────────────────────────────────────────────────────────\n"
-        "  CLV Reminder: compare your bet prices vs yesterday's closing lines.\n"
-        "  Positive CLV (you beat the close) = process is working correctly.\n"
-        "  If --compute-movement was not run last night, run it now:\n"
-        "    python load_odds.py --compute-movement\n"
-        "  ─────────────────────────────────────────────────────────────────\n"
-    )
-    # ── Dollar P&L (paper account) ─────────────────────────────────────
-    # Use confirmed brief picks only — not retroactive evaluation.
-    # Convert confirmed_graded rows into the format compute_paper_picks expects.
-    if has_confirmed:
-        # Build synthetic evaluated list from confirmed picks only
-        confirmed_evaluated = [cp["entry"] for cp in confirmed_graded
-                               if cp["entry"] is not None]
-        paper_rows = compute_paper_picks(confirmed_evaluated, game_date)
-    else:
-        # No confirmed picks → no paper bets
-        paper_rows = []
-    record_daily_pnl(conn, paper_rows, now=now)
-    season_pnl   = load_season_pnl(conn, game_date)
-    lines.append(format_dollar_pnl_block(paper_rows, season_pnl, game_date))
+    # Note: prior report P&L now uses bet_ledger only.
 
     lines.append(CAVEAT)
     return "\n".join(lines)
