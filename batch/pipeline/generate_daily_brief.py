@@ -928,6 +928,188 @@ def generate_bets_from_signal_state(conn: sqlite3.Connection, game_date: str,
     return inserted
 
 
+def grade_bet_ledger(conn: sqlite3.Connection, game_date: str | None = None) -> int:
+    """
+    Grade bets in bet_ledger for games that are Final.
+
+    - Joins bet_ledger -> games on game_pk
+    - Only processes games where games.status = 'Final'
+    - Updates bet_ledger.result in ('win','loss','push') and bet_ledger.pnl_units
+
+    Market rules:
+      moneyline:
+        bet team wins -> win else loss
+      total:
+        compare total line vs actual runs
+      run line:
+        compare spread vs final score
+    """
+    if conn is None:
+        return 0
+
+    def _pnl_units_from_odds(odds: int | None, won: bool, push: bool) -> float:
+        if push:
+            return 0.0
+        if not won:
+            return -1.0
+        if odds is None:
+            # Missing odds -> assume even money
+            return 1.0
+        return (odds / 100.0) if odds > 0 else (100.0 / abs(odds))
+
+    def _parse_total_bet(bet_text: str) -> tuple[str | None, float | None]:
+        s = (bet_text or "").strip().upper()
+        if not s:
+            return None, None
+        side = "over" if s.startswith("OVER") else ("under" if s.startswith("UNDER") else None)
+        if side is None:
+            return None, None
+        # e.g. "OVER 8.5"
+        try:
+            num = float(s.split()[1])
+            return side, num
+        except Exception:
+            return side, None
+
+    def _parse_runline_bet(bet_text: str) -> tuple[str | None, float | None]:
+        # e.g. "NYY -1.5" or "STL +1.5"
+        s = (bet_text or "").strip().upper()
+        if not s:
+            return None, None
+        parts = s.split()
+        if len(parts) < 2:
+            return None, None
+        team = parts[0]
+        try:
+            line = float(parts[1])
+        except Exception:
+            return team, None
+        return team, line
+
+    def _parse_ml_team(bet_text: str) -> str | None:
+        # e.g. "CHC ML" or "BAL ML"
+        s = (bet_text or "").strip().upper()
+        if not s:
+            return None
+        parts = s.split()
+        if not parts:
+            return None
+        return parts[0]
+
+    where_date = ""
+    params: tuple = ()
+    if game_date:
+        where_date = "AND bl.game_date = ?"
+        params = (game_date,)
+
+    # Only grade ungraded bets (result is NULL or empty) for Final games.
+    rows = conn.execute(
+        f"""
+        SELECT
+            bl.id,
+            bl.game_pk,
+            bl.market_type,
+            bl.bet,
+            bl.odds_taken,
+            g.home_team_id,
+            g.away_team_id,
+            g.home_score,
+            g.away_score,
+            th.abbreviation AS home_abbr,
+            ta.abbreviation AS away_abbr
+        FROM bet_ledger bl
+        JOIN games g ON g.game_pk = bl.game_pk
+        JOIN teams th ON th.team_id = g.home_team_id
+        JOIN teams ta ON ta.team_id = g.away_team_id
+        WHERE g.status = 'Final'
+          AND (bl.result IS NULL OR TRIM(bl.result) = '')
+          {where_date}
+        """,
+        params,
+    ).fetchall()
+
+    if not rows:
+        return 0
+
+    updated = 0
+    for r in rows:
+        market = (r["market_type"] or "").strip().lower()
+        bet_text = r["bet"] or ""
+        hs = r["home_score"]
+        as_ = r["away_score"]
+        if hs is None or as_ is None:
+            continue
+
+        res = None
+        pnl = None
+
+        if market == "moneyline":
+            team = _parse_ml_team(bet_text)
+            if not team:
+                continue
+            home_abbr = (r["home_abbr"] or "").upper()
+            away_abbr = (r["away_abbr"] or "").upper()
+            if team == home_abbr:
+                won = hs > as_
+            elif team == away_abbr:
+                won = as_ > hs
+            else:
+                # Unknown team token
+                continue
+            res = "win" if won else "loss"
+            pnl = _pnl_units_from_odds(r["odds_taken"], won=won, push=False)
+
+        elif market == "total":
+            side, line = _parse_total_bet(bet_text)
+            if side is None or line is None:
+                continue
+            runs = hs + as_
+            if runs == line:
+                res = "push"
+                pnl = _pnl_units_from_odds(r["odds_taken"], won=False, push=True)
+            else:
+                won = (side == "over" and runs > line) or (side == "under" and runs < line)
+                res = "win" if won else "loss"
+                pnl = _pnl_units_from_odds(r["odds_taken"], won=won, push=False)
+
+        elif market in ("spread", "runline"):
+            team, line = _parse_runline_bet(bet_text)
+            if team is None or line is None:
+                continue
+            home_abbr = (r["home_abbr"] or "").upper()
+            away_abbr = (r["away_abbr"] or "").upper()
+            if team == home_abbr:
+                adj = hs + line
+                opp = as_
+            elif team == away_abbr:
+                adj = as_ + line
+                opp = hs
+            else:
+                continue
+            if adj == opp:
+                res = "push"
+                pnl = _pnl_units_from_odds(r["odds_taken"], won=False, push=True)
+            else:
+                won = adj > opp
+                res = "win" if won else "loss"
+                pnl = _pnl_units_from_odds(r["odds_taken"], won=won, push=False)
+        else:
+            continue
+
+        if res is None or pnl is None:
+            continue
+
+        conn.execute(
+            "UPDATE bet_ledger SET result = ?, pnl_units = ? WHERE id = ?",
+            (res, float(round(pnl, 4)), r["id"]),
+        )
+        updated += 1
+
+    if updated:
+        conn.commit()
+    return updated
+
+
 def save_brief_picks(conn: sqlite3.Connection, game_date: str,
                      session: str, pick_entries: list,
                      now: datetime.datetime | None = None) -> None:
