@@ -2301,6 +2301,7 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
     return "\n".join(lines)
 
 def build_morning_brief(games, streaks, starters, game_date,
+                        conn=None, session=None,
                         now: datetime.datetime | None = None):
     lines = []
     if now is None:
@@ -2318,6 +2319,10 @@ def build_morning_brief(games, streaks, starters, game_date,
     dome_games    = []
     no_signal     = []
 
+    # For persistence (does not affect output)
+    all_picks_entries = []
+    avoid_entries     = []
+
     for game in games:
         sigs = evaluate_signals(game, streaks, "morning")
         entry = {
@@ -2333,6 +2338,23 @@ def build_morning_brief(games, streaks, starters, game_date,
             watch_games.append(entry)
         else:
             no_signal.append(entry)
+
+        # Persistable classifications (no change to signal logic)
+        if sigs.get("picks"):
+            all_picks_entries.append(entry)
+        elif sigs.get("avoid"):
+            avoid_entries.append(entry)
+
+    # ── Persist signal state (TOP / NEXT / AVOID) ─────────────────────────
+    # Best-effort insert only; does not affect computation or report output.
+    if conn is not None and session is not None:
+        try:
+            all_picks_entries.sort(key=lambda e: min(p["priority"] for p in e["sigs"]["picks"]))
+        except Exception:
+            pass
+        top_entry    = all_picks_entries[0] if len(all_picks_entries) >= 1 else None
+        next_entries = all_picks_entries[1:6] if len(all_picks_entries) >= 2 else []
+        save_signal_state(conn, game_date, session, top_entry, next_entries, avoid_entries, now=now)
 
     # ── Watch list ───────────────────────────────────────────────────────
     lines.append(section(f"⚑  GAMES TO WATCH  ({len(watch_games)} of {len(games)})"))
@@ -2564,6 +2586,7 @@ def build_primary_brief(games, streaks, starters, game_date,
 
 
 def build_closing_brief(games, streaks, starters, movement, game_date,
+                        conn=None, session=None,
                         now: datetime.datetime | None = None):
     lines = []
     if now is None:
@@ -2576,6 +2599,10 @@ def build_closing_brief(games, streaks, starters, movement, game_date,
         "  No new bets unless closing price is BETTER than Primary Brief price.\n"
         "  Flag any line that moved 3+ cents since the Primary Brief.\n"
     )
+
+    # For persistence (does not affect output)
+    all_picks_entries = []
+    avoid_entries     = []
 
     for game in games:
         sigs = evaluate_signals(game, streaks, "closing")
@@ -2599,6 +2626,18 @@ def build_closing_brief(games, streaks, starters, movement, game_date,
         else:
             lines.append(f"  — No new signal fires at closing prices.")
 
+        # Persistable classifications (no change to signal logic)
+        entry = {
+            "game":    g,
+            "sigs":    sigs,
+            "starter": starter_line(g, starters),
+            "streak":  streak_line(g, streaks),
+        }
+        if sigs.get("picks"):
+            all_picks_entries.append(entry)
+        elif sigs.get("avoid"):
+            avoid_entries.append(entry)
+
         # Closing-specific flag: steam or reverse line move
         gpk = game.get("game_pk")
         if gpk and gpk in movement:
@@ -2610,6 +2649,17 @@ def build_closing_brief(games, streaks, starters, movement, game_date,
             for f in sigs["data_flags"]:
                 lines.append(f"  ⚠ DATA: {f}")
         lines.append("")
+
+    # ── Persist signal state (TOP / NEXT / AVOID) ─────────────────────────
+    # Best-effort insert only; does not affect computation or report output.
+    if conn is not None and session is not None:
+        try:
+            all_picks_entries.sort(key=lambda e: min(p["priority"] for p in e["sigs"]["picks"]))
+        except Exception:
+            pass
+        top_entry    = all_picks_entries[0] if len(all_picks_entries) >= 1 else None
+        next_entries = all_picks_entries[1:6] if len(all_picks_entries) >= 2 else []
+        save_signal_state(conn, game_date, session, top_entry, next_entries, avoid_entries, now=now)
 
     lines.append(
         "  ─────────────────────────────────────────────────────────────────\n"
@@ -3738,7 +3788,8 @@ def main():
 
     # ── Generate brief ───────────────────────────────────────────────────
     if session == "morning":
-        brief_text = build_morning_brief(games, streaks, starters, today, now=now)
+        brief_text = build_morning_brief(games, streaks, starters, today,
+                                         conn=conn, session=session, now=now)
     elif session in ("early", "afternoon", "primary", "late"):
         label = {"early": "EARLY GAMES", "afternoon": "AFTERNOON",
                  "primary": "PRIMARY", "late": "LATE GAMES"}.get(session, "PRIMARY")
@@ -3747,7 +3798,7 @@ def main():
                                          conn=conn, session=session, now=now)
     else:
         brief_text = build_closing_brief(games, streaks, starters, movement, today,
-                                         now=now)
+                                         conn=conn, session=session, now=now)
 
     # ── Output ───────────────────────────────────────────────────────────
     print(brief_text)
