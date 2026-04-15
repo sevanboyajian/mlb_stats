@@ -32,6 +32,17 @@ if _REPO_ROOT not in sys.path:
 
 from core.db.connection import connect as db_connect, get_db_path
 
+# ── Console encoding guard (Windows cp1252) ─────────────────────
+# Prevent crashes when printing unicode glyphs (⚠, arrows, etc.).
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+try:
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 # ── Locate the database ───────────────────────────────────────
 db_path = get_db_path()
 
@@ -59,6 +70,10 @@ TABLES = [
     "game_odds", "player_props", "line_movement",
     "model_predictions", "backtest_results",
     "ingest_log", "odds_ingest_log",
+    # Ops / reporting tables
+    "brief_log", "brief_picks", "daily_pnl",
+    # Intra-day signal tracking + real betting ledger
+    "signal_state", "bet_ledger",
 ]
 
 print(f"  {'TABLE':<28} {'ROWS':>10}  STATUS")
