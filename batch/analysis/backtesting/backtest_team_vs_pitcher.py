@@ -4,6 +4,13 @@ backtest_team_vs_pitcher.py
 ────────────────────────────────────────────────────────────────────────────
 Dataset builder: team rolling offense vs opposing starter rolling performance.
 
+Change log:
+  2026-04-15  Added wind columns (wind_mph, wind_direction, temp_f, wind_in, wind_out)
+              and team_rolling_stats join (trs_bat for batting team offensive metrics,
+              trs_pit for pitching team SP metrics). Two validity flags added:
+              bat_stats_valid (games_in_window >= 5) and pit_stats_valid
+              (sp_starts_in_window >= 3). Output filename updated with _enriched suffix.
+
 Outputs one row per team per game (2 rows per game):
   - home offense vs away starter
   - away offense vs home starter
@@ -369,6 +376,34 @@ def apply_wind_in_out_flags(rows: List[Dict[str, Any]]) -> None:
             wd = r.get("wind_direction")
             r["wind_in"] = _wind_in(wd)
             r["wind_out"] = _wind_out(wd)
+
+
+def apply_stats_validity_flags(rows: List[Dict[str, Any]]) -> None:
+    """
+    Mark rows where team_rolling_stats-derived windows are large enough for analysis.
+    Runs before implied-prob bucket / home-field adjustment (do not drop rows).
+    """
+    try:
+        import pandas as pd
+
+        df = pd.DataFrame(rows)
+        df["bat_stats_valid"] = df["bat_games_in_window"] >= 5
+        df["pit_stats_valid"] = df["pit_sp_starts_in_window"] >= 3
+        fixed = df.to_dict("records")
+        rows.clear()
+        rows.extend(fixed)
+    except ImportError:
+        for r in rows:
+            bg = r.get("bat_games_in_window")
+            ps = r.get("pit_sp_starts_in_window")
+            try:
+                r["bat_stats_valid"] = int(bg) >= 5 if bg is not None else False
+            except (TypeError, ValueError):
+                r["bat_stats_valid"] = False
+            try:
+                r["pit_stats_valid"] = int(ps) >= 3 if ps is not None else False
+            except (TypeError, ValueError):
+                r["pit_stats_valid"] = False
 
 
 def season_boundary_check(rows: List[Dict[str, Any]], boundary_season: Optional[int]) -> None:
@@ -791,6 +826,8 @@ def ensure_output_table(con: sqlite3.Connection, table: str) -> None:
             team_rolling_k_pct REAL,
             wind_in INTEGER,
             wind_out INTEGER,
+            bat_stats_valid INTEGER,
+            pit_stats_valid INTEGER,
             pitcher_strength TEXT,
             offensive_metrics TEXT,
             pitcher_metrics TEXT,
@@ -824,9 +861,9 @@ def write_table(con: sqlite3.Connection, table: str, rows: List[Dict[str, Any]])
              bat_home_games_in_window, bat_road_games_in_window,
              pit_sp_starts_in_window, pit_rolling_sp_era, pit_rolling_sp_whip, pit_rolling_sp_k9, pit_rolling_ra_pg,
              team_rolling_ops, team_rolling_runs_pg, team_rolling_k_pct,
-             wind_in, wind_out,
+             wind_in, wind_out, bat_stats_valid, pit_stats_valid,
              pitcher_strength, offensive_metrics, pitcher_metrics)
-        VALUES ({",".join(["?"] * 53)})
+        VALUES ({",".join(["?"] * 55)})
         """,
         [
             (
@@ -880,6 +917,8 @@ def write_table(con: sqlite3.Connection, table: str, rows: List[Dict[str, Any]])
                 r.get("team_rolling_k_pct"),
                 1 if r.get("wind_in") else 0,
                 1 if r.get("wind_out") else 0,
+                1 if r.get("bat_stats_valid") else 0,
+                1 if r.get("pit_stats_valid") else 0,
                 r.get("pitcher_strength"),
                 r["offensive_metrics"],
                 r["pitcher_metrics"],
@@ -1005,7 +1044,11 @@ def _resolve_bundle_paths(args: argparse.Namespace, period_label: str) -> Tuple[
     out = Path(args.out) if getattr(args, "out", None) else None
 
     period_slug = _slugify(period_label)
-    prefix = f"team_vs_pitcher_{period_slug}_tw{int(args.team_window)}_pw{int(args.pitcher_window)}"
+    enriched = f"_enriched_{datetime.date.today().isoformat()}"
+    prefix = (
+        f"team_vs_pitcher_{period_slug}_tw{int(args.team_window)}_pw{int(args.pitcher_window)}"
+        f"{enriched}"
+    )
 
     if out_dir is not None:
         d = out_dir
@@ -1019,8 +1062,11 @@ def _resolve_bundle_paths(args: argparse.Namespace, period_label: str) -> Tuple[
         d = out.parent
         stem = out.stem
         suffix = f"_tw{int(args.team_window)}_pw{int(args.pitcher_window)}"
+        enriched = f"_enriched_{datetime.date.today().isoformat()}"
         # Avoid duplicating the window suffix if user already encoded it.
         stem2 = stem if stem.endswith(suffix) else f"{stem}{suffix}"
+        if not stem2.endswith(enriched):
+            stem2 = f"{stem2}{enriched}"
         return out, d / f"{stem2}_team_summary.csv", d / f"{stem2}_pitcher_summary.csv"
 
     d2 = _default_bundle_dir(period_label)
@@ -1235,6 +1281,7 @@ def main() -> None:
         apply_team_rolling_columns(out_rows, {})
 
     apply_wind_in_out_flags(out_rows)
+    apply_stats_validity_flags(out_rows)
 
     bucket_rate = compute_implied_bucket_win_rates(out_rows)
     apply_home_field_adj_win_pct(out_rows, bucket_rate)
