@@ -155,6 +155,17 @@ def _now_et(override: datetime.datetime | None = None) -> datetime.datetime:
     return datetime.datetime.now(tz=_ET)
 
 
+def _game_start_utc_dt(g: dict) -> datetime.datetime | None:
+    """Parse game_start_utc to naive UTC datetime. None if missing or unparseable."""
+    raw = g.get("game_start_utc") or ""
+    if "T" not in raw:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(raw.rstrip("Z"))
+    except ValueError:
+        return None
+
+
 def _game_start_et(game: dict) -> str:
     """Return game start time as an ET string e.g. '7:10 PM ET'.
     Returns empty string if game_start_utc is missing or unparseable.
@@ -1060,11 +1071,21 @@ def log_brief(conn, game_date, session, games_covered, picks_count,
 # Data loaders
 # ═══════════════════════════════════════════════════════════════════════════
 
-def load_games(conn: sqlite3.Connection, game_date: str, verbose: bool) -> list:
+def load_games(conn: sqlite3.Connection, game_date: str, verbose: bool,
+               as_of_dt: datetime.datetime | None = None) -> list:
     """
     Load today's games with odds, weather, and team info.
     Returns list of dicts with all fields needed for signal evaluation.
+
+    When as_of_dt is set (historical simulation), loads all regular-season games
+    for the date, including Final rows, so main() can filter by simulated clock.
+    Live runs use as_of_dt=None and exclude Final games in SQL.
     """
+    status_line = (
+        ""
+        if as_of_dt is not None
+        else "          AND  g.status    != 'Final'          -- skip already-completed games\n"
+    )
     cur = conn.execute(
         """
         SELECT
@@ -1122,8 +1143,9 @@ def load_games(conn: sqlite3.Connection, game_date: str, verbose: bool) -> list:
                                          AND rl.market_type = 'runline'
         WHERE  g.game_date_et = ?
           AND  g.game_type = 'R'          -- regular season only; Spring Training / Exhibition excluded
-          AND  g.status    != 'Final'          -- skip already-completed games
-        ORDER  BY g.game_start_utc
+"""
+        + status_line
+        + """        ORDER  BY g.game_start_utc
         """,
         (game_date,),
     )
@@ -3466,7 +3488,17 @@ def main():
         return
 
     # ── Load data — for all forward-looking sessions ──────────────────────
-    games = load_games(conn, today, args.verbose)
+    games = load_games(conn, today, args.verbose, as_of_dt=args.as_of_dt)
+
+    # Historical --as-of: DB may already mark games Final; keep slate as-of simulated time
+    if args.as_of_dt is not None and games:
+        now_utc = now.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+        grace = datetime.timedelta(minutes=10)
+        games = [
+            g for g in games
+            if _game_start_utc_dt(g) is None
+            or _game_start_utc_dt(g) > (now_utc - grace)
+        ]
 
     if not games:
         print(f"\n  ⚠  No upcoming games found in DB for {today}.")
@@ -3478,7 +3510,14 @@ def main():
         print(f"       Check: SELECT game_date, game_type, COUNT(*) FROM games")
         print(f"               WHERE game_date='{today}' GROUP BY game_type;")
         print(f"       If type is 'S', re-run load_mlb_stats.py after the MLB API reclassifies (1-2 hrs).")
-        print(f"     • Wrong date — check: python check_db.py\n")
+        print(f"     • Wrong date — check: python check_db.py")
+        if args.as_of_dt is not None:
+            print(
+                "     • With --as-of: no games were still unstarted at that simulated time, "
+                "or the slate is empty for this date.\n"
+            )
+        else:
+            print()
         sys.exit(0)
 
     # ── Session game filtering ────────────────────────────────────────────
@@ -3497,19 +3536,8 @@ def main():
     #
     # morning / closing = all games regardless (watch list / confirmation)
 
-    if session in ("early", "afternoon", "primary"):
+    if session in ("early", "afternoon", "primary") and args.as_of_dt is None:
         now_utc = now.astimezone(datetime.timezone.utc).replace(tzinfo=None)
-
-        def game_start_utc_dt(g):
-            """Parse game_start_utc to a datetime. Returns None if missing."""
-            raw = g.get("game_start_utc") or ""
-            if "T" in raw:
-                try:
-                    # Handle both '2026-03-26T20:10:00' and '2026-03-26T20:10:00Z'
-                    return datetime.datetime.fromisoformat(raw.rstrip("Z"))
-                except ValueError:
-                    pass
-            return None
 
         # Keep games that:
         #   a) have no start time (include — don't exclude on missing data), OR
@@ -3522,8 +3550,8 @@ def main():
 
         filtered = [
             g for g in games
-            if game_start_utc_dt(g) is None
-            or game_start_utc_dt(g) > (now_utc - grace)
+            if _game_start_utc_dt(g) is None
+            or _game_start_utc_dt(g) > (now_utc - grace)
         ]
 
         if not filtered:
@@ -3539,8 +3567,8 @@ def main():
             started_teams = [
                 f"{g['away_abbr']}@{g['home_abbr']}"
                 for g in games
-                if game_start_utc_dt(g) is not None
-                and game_start_utc_dt(g) <= (now_utc - grace)
+                if _game_start_utc_dt(g) is not None
+                and _game_start_utc_dt(g) <= (now_utc - grace)
             ]
             print(f"  ℹ  {started} game(s) already started — excluded from {session} picks:")
             for t in started_teams:
