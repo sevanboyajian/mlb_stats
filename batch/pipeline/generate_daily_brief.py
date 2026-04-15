@@ -606,6 +606,88 @@ def ensure_brief_picks(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def ensure_signal_state(conn: sqlite3.Connection) -> None:
+    """Create signal_state table if it does not exist (append-only signal ledger)."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS signal_state (
+            id          INTEGER PRIMARY KEY,
+            game_date   TEXT,
+            game_pk     INTEGER,
+            market_type TEXT,     -- 'moneyline','spread','total'
+            signal_type TEXT,     -- 'top','next','avoid'
+            bet         TEXT,
+            odds        INTEGER,
+            session     TEXT,     -- morning, early, primary, etc.
+            recorded_at TEXT
+        )
+    """)
+    conn.commit()
+
+
+def save_signal_state(conn: sqlite3.Connection, game_date: str, session: str,
+                      top_entry: dict | None, next_entries: list,
+                      avoid_entries: list, now: datetime.datetime | None = None) -> None:
+    """Persist TOP / NEXT (up to 5) / AVOID signals into signal_state (append-only)."""
+    if conn is None or not session:
+        return
+    if now is None:
+        now = _now_et()
+    recorded_at = now.strftime("%Y-%m-%d %H:%M ET")
+
+    try:
+        ensure_signal_state(conn)
+    except Exception:
+        return
+
+    def _market_type_from_market(m: str | None) -> str | None:
+        m = (m or "").upper().strip()
+        if m in ("ML", "MONEYLINE"):
+            return "moneyline"
+        if m in ("TOTAL", "OU", "O/U"):
+            return "total"
+        if m in ("RL", "RUNLINE", "SPREAD"):
+            return "spread"
+        return None
+
+    def _best_pick_fields(entry: dict) -> tuple[str | None, str | None, int | None]:
+        try:
+            p = sorted(entry["sigs"]["picks"], key=lambda x: x["priority"])[0]
+            bet = p.get("bet")
+            market_type = _market_type_from_market(p.get("market"))
+            odds = _parse_odds(p.get("odds", ""))
+            return market_type, bet, odds
+        except Exception:
+            return None, None, None
+
+    rows = []
+    if top_entry is not None:
+        g = (top_entry.get("game") or {})
+        market_type, bet, odds = _best_pick_fields(top_entry)
+        rows.append((game_date, g.get("game_pk"), market_type, "top", bet, odds, session, recorded_at))
+
+    for ne in (next_entries or []):
+        g = (ne.get("game") or {})
+        market_type, bet, odds = _best_pick_fields(ne)
+        rows.append((game_date, g.get("game_pk"), market_type, "next", bet, odds, session, recorded_at))
+
+    for e in (avoid_entries or []):
+        g = (e.get("game") or {})
+        rows.append((game_date, g.get("game_pk"), None, "avoid", None, None, session, recorded_at))
+
+    if not rows:
+        return
+
+    try:
+        conn.executemany("""
+            INSERT INTO signal_state
+                (game_date, game_pk, market_type, signal_type, bet, odds, session, recorded_at)
+            VALUES (?,?,?,?,?,?,?,?)
+        """, rows)
+        conn.commit()
+    except Exception:
+        pass
+
+
 def save_brief_picks(conn: sqlite3.Connection, game_date: str,
                      session: str, pick_entries: list,
                      now: datetime.datetime | None = None) -> None:
@@ -2329,6 +2411,13 @@ def build_primary_brief(games, streaks, starters, game_date,
 
     # Sort picks by priority (lower = higher priority)
     all_picks.sort(key=lambda e: min(p["priority"] for p in e["sigs"]["picks"]))
+
+    # ── Persist signal state (TOP / NEXT / AVOID) ─────────────────────────
+    # Do not affect computation or report output; best-effort insert only.
+    if conn is not None and session is not None:
+        top_entry = all_picks[0] if len(all_picks) >= 1 else None
+        next_entries = all_picks[1:6] if len(all_picks) >= 2 else []
+        save_signal_state(conn, game_date, session, top_entry, next_entries, avoid_games, now=now)
 
     # ── Signal Tracker — intra-day pick status vs earlier sessions ────────
     # Only runs when conn is available and there were prior sessions today.
