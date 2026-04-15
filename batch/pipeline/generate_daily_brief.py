@@ -624,6 +624,32 @@ def ensure_signal_state(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def ensure_bet_ledger(conn: sqlite3.Connection) -> None:
+    """Create bet_ledger table if it does not exist and enforce idempotency."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS bet_ledger (
+            id            INTEGER PRIMARY KEY,
+            game_date     TEXT,
+            game_pk       INTEGER,
+            market_type   TEXT,
+            bet           TEXT,
+            odds_taken    INTEGER,
+            stake_units   REAL,
+            signal_at_time TEXT,  -- 'top','next','avoid'
+            session       TEXT,
+            placed_at     TEXT,
+            result        TEXT,   -- 'win','loss','push'
+            pnl_units     REAL
+        )
+    """)
+    # Bulletproof duplicate protection (even across concurrent runs)
+    conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_bet_ledger_game_market
+        ON bet_ledger (game_pk, market_type)
+    """)
+    conn.commit()
+
+
 def save_signal_state(conn: sqlite3.Connection, game_date: str, session: str,
                       top_entry: dict | None, next_entries: list,
                       avoid_entries: list, now: datetime.datetime | None = None) -> None:
@@ -736,6 +762,161 @@ def save_signal_state(conn: sqlite3.Connection, game_date: str, session: str,
         conn.commit()
     except Exception:
         pass
+
+
+def generate_bets_from_signal_state(conn: sqlite3.Connection, game_date: str,
+                                    now: datetime.datetime | None = None) -> int:
+    """
+    Create bet_ledger rows from signal_state in a rolling pregame window.
+
+    A bet is created when:
+        game_start_utc - 30 minutes <= current_time < game_start_utc
+
+    Selection:
+      - For each (game_pk, market_type), choose the most recent signal_state row
+        strictly BEFORE current_time (ordered by recorded_at).
+      - Only signal_type in ('top','next') creates a bet.
+      - signal_type == 'avoid' never creates a bet.
+
+    Idempotency:
+      - Enforced with UNIQUE index on (game_pk, market_type) and INSERT OR IGNORE.
+
+    Returns number of rows inserted.
+    """
+    if conn is None:
+        return 0
+    if now is None:
+        now = _now_et()
+    try:
+        now_et = now if getattr(now, "tzinfo", None) else now.replace(tzinfo=_ET)
+        now_et = now_et.astimezone(_ET)
+    except Exception:
+        now_et = _now_et()
+
+    def _parse_recorded_at_et(s: str | None) -> datetime.datetime | None:
+        if not s:
+            return None
+        try:
+            dt = datetime.datetime.strptime(str(s).strip(), "%Y-%m-%d %H:%M ET")
+            return dt.replace(tzinfo=_ET)
+        except Exception:
+            return None
+
+    try:
+        ensure_bet_ledger(conn)
+    except Exception:
+        return 0
+
+    # Pull all signals for the date. We select latest per (game_pk, market_type).
+    try:
+        sig_rows = conn.execute(
+            """
+            SELECT
+                game_pk, market_type, signal_type, bet, odds, session, recorded_at
+            FROM signal_state
+            WHERE game_date = ?
+              AND game_pk IS NOT NULL
+              AND market_type IS NOT NULL
+              AND recorded_at IS NOT NULL
+            """,
+            (game_date,),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return 0
+
+    if not sig_rows:
+        return 0
+
+    game_pks = sorted({r["game_pk"] for r in sig_rows if r["game_pk"] is not None})
+    if not game_pks:
+        return 0
+    placeholders = ",".join("?" * len(game_pks))
+    try:
+        g_rows = conn.execute(
+            f"SELECT game_pk, game_start_utc FROM games WHERE game_pk IN ({placeholders})",
+            tuple(game_pks),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return 0
+
+    start_by_pk: dict[int, datetime.datetime] = {}
+    for r in g_rows:
+        raw = r["game_start_utc"] or ""
+        if "T" not in raw:
+            continue
+        try:
+            utc_dt = datetime.datetime.fromisoformat(raw.rstrip("Z")).replace(
+                tzinfo=datetime.timezone.utc
+            )
+            start_by_pk[int(r["game_pk"])] = utc_dt.astimezone(_ET)
+        except Exception:
+            continue
+
+    latest: dict[tuple[int, str], tuple[datetime.datetime, sqlite3.Row]] = {}
+    for r in sig_rows:
+        gpk = r["game_pk"]
+        mt = r["market_type"]
+        if gpk is None or not mt:
+            continue
+        start_et = start_by_pk.get(int(gpk))
+        if start_et is None:
+            continue
+        window_start = start_et - datetime.timedelta(minutes=30)
+        if not (window_start <= now_et < start_et):
+            continue
+
+        rec_dt = _parse_recorded_at_et(r["recorded_at"])
+        if rec_dt is None or rec_dt >= now_et:
+            continue
+
+        key = (int(gpk), str(mt))
+        prev = latest.get(key)
+        if prev is None or rec_dt > prev[0]:
+            latest[key] = (rec_dt, r)
+
+    if not latest:
+        return 0
+
+    inserted = 0
+    for (gpk, mt), (_dt, r) in latest.items():
+        sig_type = (r["signal_type"] or "").strip()
+        if sig_type not in ("top", "next"):
+            continue
+
+        try:
+            cur = conn.execute(
+                """
+                INSERT OR IGNORE INTO bet_ledger
+                    (game_date, game_pk, market_type, bet, odds_taken, stake_units,
+                     signal_at_time, session, placed_at, result, pnl_units)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    game_date,
+                    gpk,
+                    mt,
+                    r["bet"],
+                    r["odds"],
+                    1.0,
+                    sig_type,
+                    r["session"],
+                    r["recorded_at"],
+                    None,
+                    None,
+                ),
+            )
+            # rowcount is 1 if inserted, 0 if ignored
+            if getattr(cur, "rowcount", 0) == 1:
+                inserted += 1
+        except sqlite3.OperationalError:
+            continue
+
+    if inserted:
+        try:
+            conn.commit()
+        except Exception:
+            pass
+    return inserted
 
 
 def save_brief_picks(conn: sqlite3.Connection, game_date: str,
