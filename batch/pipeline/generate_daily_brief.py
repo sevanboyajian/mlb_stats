@@ -1136,17 +1136,25 @@ def log_brief(conn, game_date, session, games_covered, picks_count,
     if now is None:
         now = _now_et()
     generated_at_et = now.strftime("%Y-%m-%d %H:%M ET")
-    conn.execute(
-        """
-        INSERT INTO brief_log (game_date, session, generated_at, games_covered, picks_count, output_file)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """,
-        (game_date, session, generated_at_et, games_covered, picks_count, output_file),
-    )
-    conn.commit()
-    # Save confirmed picks for prior-report grading (action sessions only)
-    if pick_entries is not None and session in ("primary", "early", "afternoon", "late"):
-        save_brief_picks(conn, game_date, session, pick_entries, now=now)
+    try:
+        conn.execute(
+            """
+            INSERT INTO brief_log (game_date, session, generated_at, games_covered, picks_count, output_file)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (game_date, session, generated_at_et, games_covered, picks_count, output_file),
+        )
+        conn.commit()
+        # Save confirmed picks for prior-report grading (action sessions only)
+        if pick_entries is not None and session in ("primary", "early", "afternoon", "late"):
+            save_brief_picks(conn, game_date, session, pick_entries, now=now)
+    except sqlite3.OperationalError:
+        # Best-effort logging: don't fail the brief if another process holds a DB lock.
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1168,10 +1176,11 @@ def load_games(conn: sqlite3.Connection, game_date: str, verbose: bool,
         if as_of_dt is not None
         else "          AND  g.status    != 'Final'          -- skip already-completed games\n"
     )
-    sql = """
+    cur = conn.execute(
+        """
         SELECT
             g.game_pk,
-            {game_date_expr} AS game_date,
+            g.game_date_et AS game_date,
             g.game_start_utc,
             v.name          AS venue_name,
             g.temp_f,
@@ -1185,6 +1194,7 @@ def load_games(conn: sqlite3.Connection, game_date: str, verbose: bool,
             v.roof_type,
             v.elevation_ft,
             v.park_factor_runs,
+            v.park_factor_hr,
             v.park_factor_hr,
             v.orientation_hp,
 
@@ -1222,31 +1232,14 @@ def load_games(conn: sqlite3.Connection, game_date: str, verbose: bool,
                                          AND tot.market_type = 'total'
         LEFT JOIN v_closing_game_odds rl  ON rl.game_pk  = g.game_pk
                                          AND rl.market_type = 'runline'
-        WHERE  {game_date_filter} = ?
+        WHERE  g.game_date_et = ?
           AND  g.game_type = 'R'          -- regular season only; Spring Training / Exhibition excluded
 """
-    sql = sql + status_line + """        ORDER  BY g.game_start_utc
-        """
-
-    try:
-        cur = conn.execute(
-            sql.format(
-                game_date_expr="g.game_date_et",
-                game_date_filter="g.game_date_et",
-            ),
-            (game_date,),
-        )
-    except sqlite3.OperationalError as e:
-        # Backward compatibility: older DBs may not yet have games.game_date_et.
-        if "no such column" not in str(e) or "game_date_et" not in str(e):
-            raise
-        cur = conn.execute(
-            sql.format(
-                game_date_expr="g.game_date",
-                game_date_filter="g.game_date",
-            ),
-            (game_date,),
-        )
+        + status_line
+        + """        ORDER  BY g.game_start_utc
+        """,
+        (game_date,),
+    )
     rows = [dict(r) for r in cur.fetchall()]
 
     if verbose:
