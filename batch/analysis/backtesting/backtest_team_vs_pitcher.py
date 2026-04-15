@@ -211,6 +211,44 @@ def load_probable_starters(con: sqlite3.Connection, start: str, end: str) -> Dic
     return m
 
 
+def infer_starters_from_pgs(con: sqlite3.Connection, start: str, end: str) -> Dict[Tuple[int, int], int]:
+    """
+    Fallback starter inference for historical seasons.
+
+    For each (game_pk, pitching_team_id), pick the pitcher appearance with the most innings pitched.
+    This is a heuristic, but it is widely available historically unlike probable starters.
+    """
+    rows = con.execute(
+        """
+        SELECT
+            g.game_pk,
+            pgs.team_id,
+            pgs.player_id,
+            pgs.innings_pitched
+        FROM player_game_stats pgs
+        JOIN games g ON g.game_pk = pgs.game_pk
+        WHERE pgs.player_role = 'pitcher'
+          AND g.game_type = 'R'
+          AND g.status = 'Final'
+          AND g.game_date_et BETWEEN ? AND ?
+          AND pgs.team_id IS NOT NULL
+          AND pgs.player_id IS NOT NULL
+          AND pgs.innings_pitched IS NOT NULL
+        """,
+        (start, end),
+    ).fetchall()
+
+    best: Dict[Tuple[int, int], Tuple[int, float]] = {}
+    for r in rows:
+        key = (int(r["game_pk"]), int(r["team_id"]))
+        pid = int(r["player_id"])
+        ip = float(r["innings_pitched"])
+        cur = best.get(key)
+        if cur is None or ip > cur[1]:
+            best[key] = (pid, ip)
+    return {k: v[0] for k, v in best.items()}
+
+
 def build_pitcher_history(con: sqlite3.Connection, season: Optional[int]) -> Dict[int, List[Dict[str, Any]]]:
     """
     {pitcher_id: [ {game_date, game_pk, ip, er, h, bb, so}, ... ]} ordered by date.
@@ -288,16 +326,74 @@ def rolling_pitcher_metrics(p_hist: Dict[int, List[Dict[str, Any]]],
     }
 
 
+def _quantile(sorted_vals: List[float], q: float) -> Optional[float]:
+    if not sorted_vals:
+        return None
+    if q <= 0:
+        return sorted_vals[0]
+    if q >= 1:
+        return sorted_vals[-1]
+    idx = q * (len(sorted_vals) - 1)
+    lo = int(idx)
+    hi = min(lo + 1, len(sorted_vals) - 1)
+    frac = idx - lo
+    return sorted_vals[lo] * (1 - frac) + sorted_vals[hi] * frac
+
+
+def derive_pitcher_strength_labels(rows: List[Dict[str, Any]],
+                                   min_starts: int = 3) -> Tuple[Optional[float], Optional[float]]:
+    """
+    Compute (strong_cutoff, weak_cutoff) on rolling ERA across rows.
+    Strong = ERA <= 33rd percentile, Weak = ERA >= 67th percentile.
+    Returns cutoffs (q33, q67). If insufficient data, returns (None, None).
+    """
+    eras: List[float] = []
+    for r in rows:
+        try:
+            pm = json.loads(r.get("pitcher_metrics") or "{}")
+        except Exception:
+            continue
+        era = pm.get("era")
+        n = pm.get("n_starts") or 0
+        if era is None or n < min_starts:
+            continue
+        eras.append(float(era))
+    eras.sort()
+    return _quantile(eras, 1 / 3), _quantile(eras, 2 / 3)
+
+
+def _team_result(team_runs: Optional[int], opp_runs: Optional[int]) -> Optional[str]:
+    if team_runs is None or opp_runs is None:
+        return None
+    if team_runs > opp_runs:
+        return "W"
+    if team_runs < opp_runs:
+        return "L"
+    return "T"
+
+
 def write_csv(path: Path, rows: List[Dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if not rows:
         path.write_text("", encoding="utf-8")
         return
     cols = list(rows[0].keys())
-    with path.open("w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=cols)
-        w.writeheader()
-        w.writerows(rows)
+    try:
+        with path.open("w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=cols)
+            w.writeheader()
+            w.writerows(rows)
+        return
+    except PermissionError:
+        # Common on Windows/OneDrive when the CSV is open in Excel.
+        alt = path.parent / f"{path.name}.new"
+        with alt.open("w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=cols)
+            w.writeheader()
+            w.writerows(rows)
+        print(f"[warn] Could not overwrite (file locked): {path}")
+        print(f"[warn] Wrote instead: {alt}")
+        return
 
 
 def ensure_output_table(con: sqlite3.Connection, table: str) -> None:
@@ -314,6 +410,9 @@ def ensure_output_table(con: sqlite3.Connection, table: str) -> None:
             opponent_pitcher_id INTEGER,
             opponent_pitcher_name TEXT,
             team_runs INTEGER,
+            opponent_runs INTEGER,
+            team_result TEXT,
+            pitcher_strength TEXT,
             offensive_metrics TEXT,
             pitcher_metrics TEXT
         )
@@ -331,8 +430,9 @@ def write_table(con: sqlite3.Connection, table: str, rows: List[Dict[str, Any]])
         INSERT INTO {table}
             (game_pk, game_date, team_id, team_name, opponent_team_id, opponent_team_name,
              opponent_pitcher_id, opponent_pitcher_name, team_runs,
+             opponent_runs, team_result, pitcher_strength,
              offensive_metrics, pitcher_metrics)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         [
             (
@@ -345,6 +445,9 @@ def write_table(con: sqlite3.Connection, table: str, rows: List[Dict[str, Any]])
                 r["opponent_pitcher_id"],
                 r["opponent_pitcher_name"],
                 r["team_runs"],
+                r.get("opponent_runs"),
+                r.get("team_result"),
+                r.get("pitcher_strength"),
                 r["offensive_metrics"],
                 r["pitcher_metrics"],
             )
@@ -370,11 +473,28 @@ def summarize_team_performance(rows: List[Dict[str, Any]]) -> List[Dict[str, Any
                 "games": 0,
                 "total_runs": 0,
                 "avg_runs": None,
+                "wins_vs_strong_pitchers": 0,
+                "losses_vs_strong_pitchers": 0,
+                "wins_vs_weak_pitchers": 0,
+                "losses_vs_weak_pitchers": 0,
             },
         )
         s["games"] += 1
         if r.get("team_runs") is not None:
             s["total_runs"] += int(r["team_runs"])
+
+        strength = r.get("pitcher_strength")
+        res = r.get("team_result")
+        if strength == "strong":
+            if res == "W":
+                s["wins_vs_strong_pitchers"] += 1
+            elif res == "L":
+                s["losses_vs_strong_pitchers"] += 1
+        elif strength == "weak":
+            if res == "W":
+                s["wins_vs_weak_pitchers"] += 1
+            elif res == "L":
+                s["losses_vs_weak_pitchers"] += 1
     out = []
     for tid, s in by_team.items():
         games = s["games"] or 0
@@ -516,6 +636,7 @@ def main() -> None:
     team_hist = build_team_runs_history(con, season=season)
     pitcher_hist = build_pitcher_history(con, season=season)
     starters = load_probable_starters(con, start, end)
+    inferred = infer_starters_from_pgs(con, start, end)
     teams = load_team_lookup(con)
     players = load_player_lookup(con)
 
@@ -532,8 +653,9 @@ def main() -> None:
         away_team_name = teams.get(away_tid, {}).get("name")
 
         # Opposing starters (best effort)
-        home_opp_pitcher = starters.get((gpk, away_tid))  # away pitcher faces home offense
-        away_opp_pitcher = starters.get((gpk, home_tid))  # home pitcher faces away offense
+        # pitching team is opponent team
+        home_opp_pitcher = starters.get((gpk, away_tid)) or inferred.get((gpk, away_tid))  # away pitcher faces home offense
+        away_opp_pitcher = starters.get((gpk, home_tid)) or inferred.get((gpk, home_tid))  # home pitcher faces away offense
 
         out_rows.append({
             "game_pk": gpk,
@@ -545,6 +667,9 @@ def main() -> None:
             "opponent_pitcher_id": home_opp_pitcher,
             "opponent_pitcher_name": players.get(home_opp_pitcher) if home_opp_pitcher else None,
             "team_runs": int(hs) if hs is not None else None,
+            "opponent_runs": int(as_) if as_ is not None else None,
+            "team_result": _team_result(int(hs) if hs is not None else None, int(as_) if as_ is not None else None),
+            "pitcher_strength": None,
             "offensive_metrics": _json(rolling_team_offense(team_hist, home_tid, gdate, args.team_window)),
             "pitcher_metrics": _json(rolling_pitcher_metrics(pitcher_hist, home_opp_pitcher, gdate, args.pitcher_window))
             if home_opp_pitcher else _json({"n_starts": 0}),
@@ -560,10 +685,31 @@ def main() -> None:
             "opponent_pitcher_id": away_opp_pitcher,
             "opponent_pitcher_name": players.get(away_opp_pitcher) if away_opp_pitcher else None,
             "team_runs": int(as_) if as_ is not None else None,
+            "opponent_runs": int(hs) if hs is not None else None,
+            "team_result": _team_result(int(as_) if as_ is not None else None, int(hs) if hs is not None else None),
+            "pitcher_strength": None,
             "offensive_metrics": _json(rolling_team_offense(team_hist, away_tid, gdate, args.team_window)),
             "pitcher_metrics": _json(rolling_pitcher_metrics(pitcher_hist, away_opp_pitcher, gdate, args.pitcher_window))
             if away_opp_pitcher else _json({"n_starts": 0}),
         })
+
+    # Derive pitcher strength thresholds and label each row
+    q33, q67 = derive_pitcher_strength_labels(out_rows, min_starts=3)
+    if q33 is not None and q67 is not None:
+        for r in out_rows:
+            try:
+                pm = json.loads(r.get("pitcher_metrics") or "{}")
+            except Exception:
+                continue
+            era = pm.get("era")
+            n = pm.get("n_starts") or 0
+            if era is None or n < 3:
+                continue
+            era_f = float(era)
+            if era_f <= q33:
+                r["pitcher_strength"] = "strong"
+            elif era_f >= q67:
+                r["pitcher_strength"] = "weak"
 
     dataset_csv, team_summary_csv, pitcher_summary_csv = _resolve_bundle_paths(args, period_label)
     write_csv(dataset_csv, out_rows)
