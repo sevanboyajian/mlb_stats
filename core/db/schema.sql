@@ -764,6 +764,10 @@ CREATE TABLE IF NOT EXISTS bet_ledger (
     pnl_units        REAL
 );
 
+-- Enforce idempotent bet creation (one bet per game + market)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_bet_ledger_game_market
+    ON bet_ledger (game_pk, market_type);
+
 
 -- ============================================================
 -- USEFUL VIEWS
