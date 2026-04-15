@@ -659,6 +659,55 @@ def save_signal_state(conn: sqlite3.Connection, game_date: str, session: str,
         except Exception:
             return None, None, None
 
+    def _avoid_fields(entry: dict) -> tuple[str | None, str | None]:
+        """
+        Return (market_type, bet_text) for avoid rows.
+        Keep it descriptive and non-structured (no forced bet schema).
+        """
+        g = (entry.get("game") or {})
+        sigs = (entry.get("sigs") or {})
+        reason = (sigs.get("avoid_reason") or "").strip()
+        reason_u = reason.upper()
+
+        home = (g.get("home_abbr") or "").strip()
+        away = (g.get("away_abbr") or "").strip()
+        total_line = g.get("total_line")
+
+        market_type = None
+        bet_text = None
+
+        # Heuristics based on existing avoid_reason text patterns.
+        if "AVOID HOME ML" in reason_u and home:
+            market_type = "moneyline"
+            bet_text = f"Avoid {home} ML"
+        elif "AVOID AWAY ML" in reason_u and away:
+            market_type = "moneyline"
+            bet_text = f"Avoid {away} ML"
+        elif "DO NOT BET OVER" in reason_u and total_line is not None:
+            market_type = "total"
+            bet_text = f"Avoid OVER {total_line}"
+        elif "DO NOT BET UNDER" in reason_u and total_line is not None:
+            market_type = "total"
+            bet_text = f"Avoid UNDER {total_line}"
+        elif "OVER" in reason_u and "DO NOT BET" in reason_u and total_line is not None:
+            market_type = "total"
+            bet_text = f"Avoid OVER {total_line}"
+        elif "UNDER" in reason_u and "DO NOT BET" in reason_u and total_line is not None:
+            market_type = "total"
+            bet_text = f"Avoid UNDER {total_line}"
+        elif "ML" in reason_u:
+            market_type = "moneyline"
+            bet_text = f"Avoid {home} ML" if home else "Avoid ML"
+        elif "TOTAL" in reason_u or "O/U" in reason_u or "OVER" in reason_u or "UNDER" in reason_u:
+            market_type = "total"
+            bet_text = f"Avoid total" if total_line is None else f"Avoid total ({total_line})"
+
+        # Fallback: descriptive text to make it traceable.
+        if not bet_text:
+            bet_text = ("Avoid: " + reason) if reason else "Avoid"
+
+        return market_type, bet_text
+
     rows = []
     if top_entry is not None:
         g = (top_entry.get("game") or {})
@@ -672,7 +721,8 @@ def save_signal_state(conn: sqlite3.Connection, game_date: str, session: str,
 
     for e in (avoid_entries or []):
         g = (e.get("game") or {})
-        rows.append((game_date, g.get("game_pk"), None, "avoid", None, None, session, recorded_at))
+        mt, bt = _avoid_fields(e)
+        rows.append((game_date, g.get("game_pk"), mt, "avoid", bt, None, session, recorded_at))
 
     if not rows:
         return
