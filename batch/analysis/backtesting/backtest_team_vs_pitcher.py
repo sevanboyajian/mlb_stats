@@ -375,6 +375,8 @@ def load_games(con: sqlite3.Connection, start: str, end: str, season: Optional[i
             g.game_date_et AS game_date,
             g.season AS season,
             g.game_start_utc,
+            g.wind_mph,
+            g.wind_direction,
             g.home_team_id,
             g.away_team_id,
             g.home_score,
@@ -382,6 +384,8 @@ def load_games(con: sqlite3.Connection, start: str, end: str, season: Optional[i
         FROM games g
         WHERE g.game_type = 'R'
           AND g.status = 'Final'
+          -- Drop games with no weather row (sparse historical DBs; 2026+ ingest typically has wind)
+          AND g.wind_mph IS NOT NULL
           AND g.game_date_et BETWEEN ? AND ?
           {season_clause}
         ORDER BY g.game_date_et, g.game_start_utc, g.game_pk
@@ -676,6 +680,8 @@ def ensure_output_table(con: sqlite3.Connection, table: str) -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             game_pk INTEGER,
             game_date TEXT,
+            wind_mph INTEGER,
+            wind_direction TEXT,
             period_label TEXT,
             team_window INTEGER,
             pitcher_window INTEGER,
@@ -687,6 +693,8 @@ def ensure_output_table(con: sqlite3.Connection, table: str) -> None:
             opponent_pitcher_id INTEGER,
             opponent_pitcher_name TEXT,
             opponent_pitcher_throws TEXT,
+            opponent_pitcher_era_rolling REAL,
+            batting_team_avg_runs_last10 REAL,
             team_runs INTEGER,
             opponent_runs INTEGER,
             team_result TEXT,
@@ -714,21 +722,25 @@ def write_table(con: sqlite3.Connection, table: str, rows: List[Dict[str, Any]])
     con.executemany(
         f"""
         INSERT OR REPLACE INTO {table}
-            (game_pk, game_date, period_label, team_window, pitcher_window,
+            (game_pk, game_date, wind_mph, wind_direction,
+             period_label, team_window, pitcher_window,
              team_id, team_name, is_home,
              opponent_team_id, opponent_team_name,
              opponent_pitcher_id, opponent_pitcher_name, opponent_pitcher_throws,
+             opponent_pitcher_era_rolling, batting_team_avg_runs_last10,
              team_runs, opponent_runs, team_result, actual_win,
              closing_ml, implied_prob,
              home_field_adj_win_pct,
              team_rolling_ops, team_rolling_runs_pg, team_rolling_k_pct,
              pitcher_strength, offensive_metrics, pitcher_metrics)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         [
             (
                 r["game_pk"],
                 r["game_date"],
+                r.get("wind_mph"),
+                r.get("wind_direction"),
                 r.get("period_label"),
                 r.get("team_window"),
                 r.get("pitcher_window"),
@@ -740,6 +752,8 @@ def write_table(con: sqlite3.Connection, table: str, rows: List[Dict[str, Any]])
                 r["opponent_pitcher_id"],
                 r["opponent_pitcher_name"],
                 r.get("opponent_pitcher_throws"),
+                r.get("opponent_pitcher_era_rolling"),
+                r.get("batting_team_avg_runs_last10"),
                 r["team_runs"],
                 r.get("opponent_runs"),
                 r.get("team_result"),
@@ -983,9 +997,28 @@ def main() -> None:
         home_ml = home_cl.get("home_ml")
         home_imp = implied_prob_from_ml(home_ml) if home_ml is not None else None
 
+        wind_mph = g_.get("wind_mph")
+        wind_direction = g_.get("wind_direction")
+
+        home_pitch = (
+            rolling_pitcher_metrics(
+                pitcher_hist,
+                home_opp_pitcher,
+                gdate,
+                args.pitcher_window,
+                season=int(gseason) if gseason is not None else None,
+            )
+            if home_opp_pitcher
+            else {}
+        )
+        home_off = rolling_team_offense(team_hist, home_tid, gdate, args.team_window)
+        home_off_10 = rolling_team_offense(team_hist, home_tid, gdate, 10)
+
         out_rows.append({
             "game_pk": gpk,
             "game_date": gdate,
+            "wind_mph": wind_mph,
+            "wind_direction": wind_direction,
             "period_label": period_label,
             "team_window": int(args.team_window),
             "pitcher_window": int(args.pitcher_window),
@@ -997,6 +1030,8 @@ def main() -> None:
             "opponent_pitcher_id": home_opp_pitcher,
             "opponent_pitcher_name": players.get(home_opp_pitcher, {}).get("name") if home_opp_pitcher else None,
             "opponent_pitcher_throws": players.get(home_opp_pitcher, {}).get("throws") if home_opp_pitcher else None,
+            "opponent_pitcher_era_rolling": home_pitch.get("era") if home_opp_pitcher else None,
+            "batting_team_avg_runs_last10": home_off_10.get("avg_runs"),
             "team_runs": int(hs) if hs is not None else None,
             "opponent_runs": int(as_) if as_ is not None else None,
             "team_result": _team_result(int(hs) if hs is not None else None, int(as_) if as_ is not None else None),
@@ -1004,26 +1039,33 @@ def main() -> None:
             "closing_ml": int(home_ml) if home_ml is not None else None,
             "implied_prob": home_imp,
             "pitcher_strength": None,
-            "offensive_metrics": _json(rolling_team_offense(team_hist, home_tid, gdate, args.team_window)),
-            "pitcher_metrics": _json(
-                rolling_pitcher_metrics(
-                    pitcher_hist,
-                    home_opp_pitcher,
-                    gdate,
-                    args.pitcher_window,
-                    season=int(gseason) if gseason is not None else None,
-                )
-            )
-            if home_opp_pitcher else _json({"n_starts": 0}),
+            "offensive_metrics": _json(home_off),
+            "pitcher_metrics": _json(home_pitch if home_opp_pitcher else {"n_starts": 0}),
         })
 
         away_cl = closing_ml.get(gpk) or {}
         away_ml = away_cl.get("away_ml")
         away_imp = implied_prob_from_ml(away_ml) if away_ml is not None else None
 
+        away_pitch = (
+            rolling_pitcher_metrics(
+                pitcher_hist,
+                away_opp_pitcher,
+                gdate,
+                args.pitcher_window,
+                season=int(gseason) if gseason is not None else None,
+            )
+            if away_opp_pitcher
+            else {}
+        )
+        away_off = rolling_team_offense(team_hist, away_tid, gdate, args.team_window)
+        away_off_10 = rolling_team_offense(team_hist, away_tid, gdate, 10)
+
         out_rows.append({
             "game_pk": gpk,
             "game_date": gdate,
+            "wind_mph": wind_mph,
+            "wind_direction": wind_direction,
             "period_label": period_label,
             "team_window": int(args.team_window),
             "pitcher_window": int(args.pitcher_window),
@@ -1035,6 +1077,8 @@ def main() -> None:
             "opponent_pitcher_id": away_opp_pitcher,
             "opponent_pitcher_name": players.get(away_opp_pitcher, {}).get("name") if away_opp_pitcher else None,
             "opponent_pitcher_throws": players.get(away_opp_pitcher, {}).get("throws") if away_opp_pitcher else None,
+            "opponent_pitcher_era_rolling": away_pitch.get("era") if away_opp_pitcher else None,
+            "batting_team_avg_runs_last10": away_off_10.get("avg_runs"),
             "team_runs": int(as_) if as_ is not None else None,
             "opponent_runs": int(hs) if hs is not None else None,
             "team_result": _team_result(int(as_) if as_ is not None else None, int(hs) if hs is not None else None),
@@ -1042,17 +1086,8 @@ def main() -> None:
             "closing_ml": int(away_ml) if away_ml is not None else None,
             "implied_prob": away_imp,
             "pitcher_strength": None,
-            "offensive_metrics": _json(rolling_team_offense(team_hist, away_tid, gdate, args.team_window)),
-            "pitcher_metrics": _json(
-                rolling_pitcher_metrics(
-                    pitcher_hist,
-                    away_opp_pitcher,
-                    gdate,
-                    args.pitcher_window,
-                    season=int(gseason) if gseason is not None else None,
-                )
-            )
-            if away_opp_pitcher else _json({"n_starts": 0}),
+            "offensive_metrics": _json(away_off),
+            "pitcher_metrics": _json(away_pitch if away_opp_pitcher else {"n_starts": 0}),
         })
 
     # Derive pitcher strength thresholds and label each row
