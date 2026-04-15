@@ -105,8 +105,71 @@ def load_team_lookup(con: sqlite3.Connection) -> Dict[int, Dict[str, str]]:
 
 
 def load_player_lookup(con: sqlite3.Connection) -> Dict[int, str]:
-    rows = con.execute("SELECT player_id, full_name FROM players").fetchall()
-    return {int(r[0]): str(r[1]) for r in rows}
+    rows = con.execute("SELECT player_id, full_name, throws FROM players").fetchall()
+    out: Dict[int, Dict[str, Any]] = {}
+    for r in rows:
+        out[int(r[0])] = {"name": str(r[1]), "throws": r[2]}
+    return out
+
+
+def load_closing_moneylines(con: sqlite3.Connection, start: str, end: str) -> Dict[int, Dict[str, Any]]:
+    """
+    {game_pk: {home_ml, away_ml, bookmaker, captured_at_utc}}
+    Best effort: prefers bookmaker='consensus' when present; otherwise newest captured_at_utc.
+    Does NOT rely on an exact time window.
+    """
+    rows = con.execute(
+        """
+        SELECT
+            go.game_pk,
+            go.bookmaker,
+            go.captured_at_utc,
+            go.home_ml,
+            go.away_ml
+        FROM game_odds go
+        JOIN games g ON g.game_pk = go.game_pk
+        WHERE g.game_date_et BETWEEN ? AND ?
+          AND go.market_type = 'moneyline'
+          AND go.is_closing_line = 1
+          AND (go.home_ml IS NOT NULL OR go.away_ml IS NOT NULL)
+        """,
+        (start, end),
+    ).fetchall()
+
+    best: Dict[int, Dict[str, Any]] = {}
+    for r in rows:
+        gpk = int(r[0])
+        cand = {
+            "bookmaker": r[1],
+            "captured_at_utc": r[2],
+            "home_ml": r[3],
+            "away_ml": r[4],
+        }
+        cur = best.get(gpk)
+        if cur is None:
+            best[gpk] = cand
+            continue
+        # Prefer consensus
+        if (cur.get("bookmaker") != "consensus") and (cand.get("bookmaker") == "consensus"):
+            best[gpk] = cand
+            continue
+        if (cur.get("bookmaker") == "consensus") and (cand.get("bookmaker") != "consensus"):
+            continue
+        # Else newest captured_at_utc
+        if (cand.get("captured_at_utc") or "") > (cur.get("captured_at_utc") or ""):
+            best[gpk] = cand
+    return best
+
+
+def implied_prob_from_ml(ml: Optional[int]) -> Optional[float]:
+    if ml is None:
+        return None
+    ml_i = int(ml)
+    if ml_i == 0:
+        return None
+    if ml_i > 0:
+        return 100.0 / (ml_i + 100.0)
+    return (-ml_i) / ((-ml_i) + 100.0)
 
 
 def load_games(con: sqlite3.Connection, start: str, end: str, season: Optional[int]) -> List[Dict[str, Any]]:
@@ -403,18 +466,27 @@ def ensure_output_table(con: sqlite3.Connection, table: str) -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             game_pk INTEGER,
             game_date TEXT,
+            period_label TEXT,
+            team_window INTEGER,
+            pitcher_window INTEGER,
             team_id INTEGER,
             team_name TEXT,
+            is_home INTEGER,
             opponent_team_id INTEGER,
             opponent_team_name TEXT,
             opponent_pitcher_id INTEGER,
             opponent_pitcher_name TEXT,
+            opponent_pitcher_throws TEXT,
             team_runs INTEGER,
             opponent_runs INTEGER,
             team_result TEXT,
+            actual_win INTEGER,
+            closing_ml INTEGER,
+            implied_prob REAL,
             pitcher_strength TEXT,
             offensive_metrics TEXT,
-            pitcher_metrics TEXT
+            pitcher_metrics TEXT,
+            UNIQUE (game_pk, team_id, period_label, team_window, pitcher_window)
         )
         """
     )
@@ -427,26 +499,37 @@ def write_table(con: sqlite3.Connection, table: str, rows: List[Dict[str, Any]])
     ensure_output_table(con, table)
     con.executemany(
         f"""
-        INSERT INTO {table}
-            (game_pk, game_date, team_id, team_name, opponent_team_id, opponent_team_name,
-             opponent_pitcher_id, opponent_pitcher_name, team_runs,
-             opponent_runs, team_result, pitcher_strength,
-             offensive_metrics, pitcher_metrics)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        INSERT OR REPLACE INTO {table}
+            (game_pk, game_date, period_label, team_window, pitcher_window,
+             team_id, team_name, is_home,
+             opponent_team_id, opponent_team_name,
+             opponent_pitcher_id, opponent_pitcher_name, opponent_pitcher_throws,
+             team_runs, opponent_runs, team_result, actual_win,
+             closing_ml, implied_prob,
+             pitcher_strength, offensive_metrics, pitcher_metrics)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         [
             (
                 r["game_pk"],
                 r["game_date"],
+                r.get("period_label"),
+                r.get("team_window"),
+                r.get("pitcher_window"),
                 r["team_id"],
                 r["team_name"],
+                r.get("is_home"),
                 r["opponent_team_id"],
                 r["opponent_team_name"],
                 r["opponent_pitcher_id"],
                 r["opponent_pitcher_name"],
+                r.get("opponent_pitcher_throws"),
                 r["team_runs"],
                 r.get("opponent_runs"),
                 r.get("team_result"),
+                r.get("actual_win"),
+                r.get("closing_ml"),
+                r.get("implied_prob"),
                 r.get("pitcher_strength"),
                 r["offensive_metrics"],
                 r["pitcher_metrics"],
@@ -639,6 +722,7 @@ def main() -> None:
     inferred = infer_starters_from_pgs(con, start, end)
     teams = load_team_lookup(con)
     players = load_player_lookup(con)
+    closing_ml = load_closing_moneylines(con, start, end)
 
     out_rows: List[Dict[str, Any]] = []
     for g_ in games:
@@ -657,36 +741,60 @@ def main() -> None:
         home_opp_pitcher = starters.get((gpk, away_tid)) or inferred.get((gpk, away_tid))  # away pitcher faces home offense
         away_opp_pitcher = starters.get((gpk, home_tid)) or inferred.get((gpk, home_tid))  # home pitcher faces away offense
 
+        home_cl = closing_ml.get(gpk) or {}
+        home_ml = home_cl.get("home_ml")
+        home_imp = implied_prob_from_ml(home_ml) if home_ml is not None else None
+
         out_rows.append({
             "game_pk": gpk,
             "game_date": gdate,
+            "period_label": period_label,
+            "team_window": int(args.team_window),
+            "pitcher_window": int(args.pitcher_window),
             "team_id": home_tid,
             "team_name": home_team_name,
+            "is_home": 1,
             "opponent_team_id": away_tid,
             "opponent_team_name": away_team_name,
             "opponent_pitcher_id": home_opp_pitcher,
-            "opponent_pitcher_name": players.get(home_opp_pitcher) if home_opp_pitcher else None,
+            "opponent_pitcher_name": players.get(home_opp_pitcher, {}).get("name") if home_opp_pitcher else None,
+            "opponent_pitcher_throws": players.get(home_opp_pitcher, {}).get("throws") if home_opp_pitcher else None,
             "team_runs": int(hs) if hs is not None else None,
             "opponent_runs": int(as_) if as_ is not None else None,
             "team_result": _team_result(int(hs) if hs is not None else None, int(as_) if as_ is not None else None),
+            "actual_win": 1 if (hs is not None and as_ is not None and int(hs) > int(as_)) else (0 if (hs is not None and as_ is not None) else None),
+            "closing_ml": int(home_ml) if home_ml is not None else None,
+            "implied_prob": home_imp,
             "pitcher_strength": None,
             "offensive_metrics": _json(rolling_team_offense(team_hist, home_tid, gdate, args.team_window)),
             "pitcher_metrics": _json(rolling_pitcher_metrics(pitcher_hist, home_opp_pitcher, gdate, args.pitcher_window))
             if home_opp_pitcher else _json({"n_starts": 0}),
         })
 
+        away_cl = closing_ml.get(gpk) or {}
+        away_ml = away_cl.get("away_ml")
+        away_imp = implied_prob_from_ml(away_ml) if away_ml is not None else None
+
         out_rows.append({
             "game_pk": gpk,
             "game_date": gdate,
+            "period_label": period_label,
+            "team_window": int(args.team_window),
+            "pitcher_window": int(args.pitcher_window),
             "team_id": away_tid,
             "team_name": away_team_name,
+            "is_home": 0,
             "opponent_team_id": home_tid,
             "opponent_team_name": home_team_name,
             "opponent_pitcher_id": away_opp_pitcher,
-            "opponent_pitcher_name": players.get(away_opp_pitcher) if away_opp_pitcher else None,
+            "opponent_pitcher_name": players.get(away_opp_pitcher, {}).get("name") if away_opp_pitcher else None,
+            "opponent_pitcher_throws": players.get(away_opp_pitcher, {}).get("throws") if away_opp_pitcher else None,
             "team_runs": int(as_) if as_ is not None else None,
             "opponent_runs": int(hs) if hs is not None else None,
             "team_result": _team_result(int(as_) if as_ is not None else None, int(hs) if hs is not None else None),
+            "actual_win": 1 if (hs is not None and as_ is not None and int(as_) > int(hs)) else (0 if (hs is not None and as_ is not None) else None),
+            "closing_ml": int(away_ml) if away_ml is not None else None,
+            "implied_prob": away_imp,
             "pitcher_strength": None,
             "offensive_metrics": _json(rolling_team_offense(team_hist, away_tid, gdate, args.team_window)),
             "pitcher_metrics": _json(rolling_pitcher_metrics(pitcher_hist, away_opp_pitcher, gdate, args.pitcher_window))
