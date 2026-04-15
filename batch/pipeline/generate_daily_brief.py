@@ -115,7 +115,6 @@ Every matchup is shown as:  AWAY TEAM  vs  HOME TEAM (h)
 """
 
 import argparse
-import contextlib
 import datetime
 import os
 import sqlite3
@@ -149,27 +148,11 @@ except Exception:
     _ET = datetime.timezone(datetime.timedelta(hours=-4))
 
 
-_NOW_ET_OVERRIDE: datetime.datetime | None = None
-
-
 def _now_et(override: datetime.datetime | None = None) -> datetime.datetime:
     """Current datetime in US/Eastern. Use for all user-facing timestamps."""
     if override is not None:
         return override
-    if _NOW_ET_OVERRIDE is not None:
-        return _NOW_ET_OVERRIDE
     return datetime.datetime.now(tz=_ET)
-
-
-@contextlib.contextmanager
-def _as_of_context(as_of_dt: datetime.datetime | None):
-    """Temporarily set the ET clock used by _now_et() for this brief run."""
-    global _NOW_ET_OVERRIDE
-    _NOW_ET_OVERRIDE = as_of_dt
-    try:
-        yield
-    finally:
-        _NOW_ET_OVERRIDE = None
 
 
 def _game_start_et(game: dict) -> str:
@@ -3494,7 +3477,8 @@ def main():
     # morning / closing = all games regardless (watch list / confirmation)
 
     if session in ("early", "afternoon", "primary"):
-        now_utc = datetime.datetime.utcnow()
+        now = _now_et(args.as_of_dt)
+        now_utc = now.astimezone(datetime.timezone.utc).replace(tzinfo=None)
 
         def game_start_utc_dt(g):
             """Parse game_start_utc to a datetime. Returns None if missing."""
