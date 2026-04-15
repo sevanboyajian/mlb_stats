@@ -727,6 +727,43 @@ CREATE TABLE IF NOT EXISTS odds_ingest_log (
 CREATE INDEX IF NOT EXISTS idx_oingest_date ON odds_ingest_log (pulled_at_utc);
 CREATE INDEX IF NOT EXISTS idx_oingest_type ON odds_ingest_log (pull_type);
 
+-- ------------------------------------------------------------
+-- signal_state
+-- Append-only ledger of every signal generated throughout the day
+-- (top / next / avoid) so reports can be reconstructed exactly.
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS signal_state (
+    id              INTEGER PRIMARY KEY,
+    game_date        TEXT,
+    game_pk          INTEGER,
+    market_type      TEXT,    -- 'moneyline','spread','total'
+    signal_type      TEXT,    -- 'top','next','avoid'
+    bet             TEXT,
+    odds            INTEGER,
+    session         TEXT,     -- morning, early, primary, etc.
+    recorded_at     TEXT
+);
+
+-- ------------------------------------------------------------
+-- bet_ledger
+-- Source of truth for P&L: append-only record of actual bets taken
+-- (separate from signal generation).
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS bet_ledger (
+    id              INTEGER PRIMARY KEY,
+    game_date        TEXT,
+    game_pk          INTEGER,
+    market_type      TEXT,
+    bet             TEXT,
+    odds_taken       INTEGER,
+    stake_units      REAL,
+    signal_at_time   TEXT,    -- 'top','next','avoid'
+    session         TEXT,
+    placed_at        TEXT,
+    result          TEXT,     -- 'win','loss','push'
+    pnl_units        REAL
+);
+
 
 -- ============================================================
 -- USEFUL VIEWS
