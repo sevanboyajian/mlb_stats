@@ -21,8 +21,14 @@ SCHEDULE = [
 
 
 def main() -> None:
-    if len(sys.argv) >= 2:
-        day = sys.argv[1].strip()
+    args = sys.argv[1:]
+    verbose = False
+    if "--verbose" in args or "-v" in args:
+        verbose = True
+        args = [a for a in args if a not in ("--verbose", "-v")]
+
+    if len(args) >= 1:
+        day = args[0].strip()
     else:
         day = date.today().isoformat()
     try:
@@ -49,8 +55,16 @@ def main() -> None:
             "--as-of",
             as_of,
             "--force",
+            "--dry-run",
         ]
+        if verbose:
+            cmd.append("--verbose")
         print(f"\n=== Running session={session!r}  --as-of {as_of!r} ===\n", flush=True)
+        if verbose:
+            print("  [simulate] Running in --dry-run: no DB writes will occur.", flush=True)
+            print("  [simulate] Persistence path (real run):", flush=True)
+            print("    - signals -> signal_state (top/next/avoid) for this session", flush=True)
+            print("    - bets -> bet_ledger within 30-min pregame window using latest signal_state before now", flush=True)
         proc = subprocess.run(cmd, cwd=str(BATCH_DIR / "pipeline"))
         ok = proc.returncode == 0
         results.append((session, as_of, ok))

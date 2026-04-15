@@ -206,6 +206,9 @@ except ImportError:
 # ── DB location (env / config/.env / cwd fallback via get_db_path) ───────
 DB_PATH = Path(get_db_path())
 
+# When False, any persistence helpers (signal_state / bet_ledger) must no-op.
+PERSIST_WRITES = True
+
 # ── Output directory for saved briefs ──────────────────────────────────────
 # Standard location across the repo: <repo root>/outputs/briefs
 OUTPUT_DIR = Path(_REPO_ROOT) / "outputs" / "briefs"
@@ -626,6 +629,8 @@ def ensure_signal_state(conn: sqlite3.Connection) -> None:
 
 def ensure_bet_ledger(conn: sqlite3.Connection) -> None:
     """Create bet_ledger table if it does not exist and enforce idempotency."""
+    if not PERSIST_WRITES:
+        return
     conn.execute("""
         CREATE TABLE IF NOT EXISTS bet_ledger (
             id            INTEGER PRIMARY KEY,
@@ -654,6 +659,8 @@ def save_signal_state(conn: sqlite3.Connection, game_date: str, session: str,
                       top_entry: dict | None, next_entries: list,
                       avoid_entries: list, now: datetime.datetime | None = None) -> None:
     """Persist TOP / NEXT (up to 5) / AVOID signals into signal_state (append-only)."""
+    if not PERSIST_WRITES:
+        return
     if conn is None or not session:
         return
     if now is None:
@@ -784,6 +791,8 @@ def generate_bets_from_signal_state(conn: sqlite3.Connection, game_date: str,
     Returns number of rows inserted.
     """
     if conn is None:
+        return 0
+    if not PERSIST_WRITES:
         return 0
     if now is None:
         now = _now_et()
@@ -3769,6 +3778,10 @@ def main():
     session = args.session
     now = _now_et(args.as_of_dt)
     today   = args.date or now.date().isoformat()
+
+    # In dry-run, the brief should not write to any DB-backed ledgers.
+    global PERSIST_WRITES
+    PERSIST_WRITES = not args.dry_run
 
     print(f"[TIME] Running as-of: {now.strftime('%Y-%m-%d %H:%M ET')}")
 
