@@ -495,10 +495,13 @@ def ensure_daily_pnl(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def record_daily_pnl(conn: sqlite3.Connection, rows: list) -> None:
+def record_daily_pnl(conn: sqlite3.Connection, rows: list,
+                     now: datetime.datetime | None = None) -> None:
     """Insert paper-trading results for a game date. Idempotent on game_date+game_pk+signal."""
     if not rows:
         return
+    if now is None:
+        now = _now_et()
     for row in rows:
         conn.execute("""
             INSERT OR IGNORE INTO daily_pnl
@@ -510,7 +513,7 @@ def record_daily_pnl(conn: sqlite3.Connection, rows: list) -> None:
             row["bet"], row["market"], row["odds"],
             row["stake_dollars"], row["late_season"],
             row["result"], row["pnl_units"], row["pnl_dollars"],
-            _now_et().strftime("%Y-%m-%d %H:%M ET"),
+            now.strftime("%Y-%m-%d %H:%M ET"),
         ))
     conn.commit()
 
@@ -593,7 +596,8 @@ def ensure_brief_picks(conn: sqlite3.Connection) -> None:
 
 
 def save_brief_picks(conn: sqlite3.Connection, game_date: str,
-                     session: str, pick_entries: list) -> None:
+                     session: str, pick_entries: list,
+                     now: datetime.datetime | None = None) -> None:
     """Record picks shown in this brief for prior-report grading.
     pick_entries: sorted list of entry dicts from the brief builder.
     Only records top pick (rank 1) and additional picks (ranks 2-6).
@@ -601,7 +605,9 @@ def save_brief_picks(conn: sqlite3.Connection, game_date: str,
     """
     if not pick_entries:
         return
-    now_et = _now_et().strftime("%Y-%m-%d %H:%M ET")
+    if now is None:
+        now = _now_et()
+    now_et = now.strftime("%Y-%m-%d %H:%M ET")
     for rank, entry in enumerate(pick_entries[:6], start=1):
         g = entry["game"]
         # Use highest-priority pick for this game
@@ -1033,8 +1039,10 @@ def format_dollar_pnl_block(today_rows: list, season_pnl: dict,
 
 
 def log_brief(conn, game_date, session, games_covered, picks_count,
-              output_file, pick_entries=None):
-    generated_at_et = _now_et().strftime("%Y-%m-%d %H:%M ET")
+              output_file, pick_entries=None, now: datetime.datetime | None = None):
+    if now is None:
+        now = _now_et()
+    generated_at_et = now.strftime("%Y-%m-%d %H:%M ET")
     conn.execute(
         """
         INSERT INTO brief_log (game_date, session, generated_at, games_covered, picks_count, output_file)
@@ -1045,7 +1053,7 @@ def log_brief(conn, game_date, session, games_covered, picks_count,
     conn.commit()
     # Save confirmed picks for prior-report grading (action sessions only)
     if pick_entries is not None and session in ("primary", "early", "afternoon", "late"):
-        save_brief_picks(conn, game_date, session, pick_entries)
+        save_brief_picks(conn, game_date, session, pick_entries, now=now)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1746,7 +1754,7 @@ def movement_line(game: dict, movement: dict) -> str:
 
 
 def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
-                            verbose: bool) -> str:
+                            verbose: bool, now: datetime.datetime | None = None) -> str:
     """
     Prior day performance report — full slate with signal grading.
 
@@ -1759,7 +1767,9 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
       · Day-level P&L summary
     """
     lines = []
-    generated_ts = _now_et().strftime("%Y-%m-%d %I:%M %p ET").lstrip("0")
+    if now is None:
+        now = _now_et()
+    generated_ts = now.strftime("%Y-%m-%d %I:%M %p ET").lstrip("0")
     lines.append(banner(f"MLB Scout · PRIOR DAY REPORT  ·  Results for {game_date}"))
     lines.append(f"  Generated: {generated_ts}\n")
     lines.append(
@@ -2170,16 +2180,19 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
     else:
         # No confirmed picks → no paper bets
         paper_rows = []
-    record_daily_pnl(conn, paper_rows)
+    record_daily_pnl(conn, paper_rows, now=now)
     season_pnl   = load_season_pnl(conn, game_date)
     lines.append(format_dollar_pnl_block(paper_rows, season_pnl, game_date))
 
     lines.append(CAVEAT)
     return "\n".join(lines)
 
-def build_morning_brief(games, streaks, starters, game_date):
+def build_morning_brief(games, streaks, starters, game_date,
+                        now: datetime.datetime | None = None):
     lines = []
-    generated_ts = _now_et().strftime("%Y-%m-%d %I:%M %p ET").lstrip("0")
+    if now is None:
+        now = _now_et()
+    generated_ts = now.strftime("%Y-%m-%d %I:%M %p ET").lstrip("0")
     lines.append(banner(f"MLB BETTING BRIEF  ·  MORNING SESSION  ·  {game_date}"))
     lines.append(f"  Generated: {generated_ts}\n")
     lines.append(
@@ -2252,7 +2265,7 @@ def build_morning_brief(games, streaks, starters, game_date):
 
 def build_primary_brief(games, streaks, starters, game_date,
                         session_label="PRIMARY", s6_fires=None,
-                        conn=None, session=None):
+                        conn=None, session=None, now: datetime.datetime | None = None):
     if s6_fires is None:
         s6_fires = {}
     _action = {
@@ -2262,7 +2275,9 @@ def build_primary_brief(games, streaks, starters, game_date,
         "LATE GAMES":  "✅  LATE GAMES ACTION WINDOW — West Coast games still unstarted. Check odds and act now.",
     }.get(session_label, "✅  ACTION WINDOW — Make your betting decisions NOW.")
     lines = []
-    generated_ts = _now_et().strftime("%Y-%m-%d %I:%M %p ET").lstrip("0")
+    if now is None:
+        now = _now_et()
+    generated_ts = now.strftime("%Y-%m-%d %I:%M %p ET").lstrip("0")
     lines.append(banner(f"MLB BETTING BRIEF  ·  {session_label} SESSION  ·  {game_date}"))
     lines.append(f"  Generated: {generated_ts}\n")
     lines.append(
@@ -2428,9 +2443,12 @@ def build_primary_brief(games, streaks, starters, game_date,
     return "\n".join(lines)
 
 
-def build_closing_brief(games, streaks, starters, movement, game_date):
+def build_closing_brief(games, streaks, starters, movement, game_date,
+                        now: datetime.datetime | None = None):
     lines = []
-    generated_ts = _now_et().strftime("%Y-%m-%d %I:%M %p ET").lstrip("0")
+    if now is None:
+        now = _now_et()
+    generated_ts = now.strftime("%Y-%m-%d %I:%M %p ET").lstrip("0")
     lines.append(banner(f"MLB BETTING BRIEF  ·  CLOSING SESSION  ·  {game_date}"))
     lines.append(f"  Generated: {generated_ts}\n")
     lines.append(
@@ -3335,7 +3353,10 @@ def parse_args():
 def main():
     args   = parse_args()
     session = args.session
-    today   = args.date or datetime.date.today().isoformat()
+    now = _now_et(args.as_of_dt)
+    today   = args.date or now.date().isoformat()
+
+    print(f"[TIME] Running as-of: {now.strftime('%Y-%m-%d %H:%M ET')}")
 
     # Validate date
     try:
@@ -3366,7 +3387,7 @@ def main():
     if session == "prior":
         yesterday = (datetime.date.fromisoformat(today)
                      - datetime.timedelta(days=1)).isoformat()
-        brief_text = build_prior_day_report(conn, yesterday, args.verbose)
+        brief_text = build_prior_day_report(conn, yesterday, args.verbose, now=now)
         print(brief_text)
 
         # ── Save txt file ──────────────────────────────────────────────────
@@ -3439,7 +3460,7 @@ def main():
 
         # ── Log ───────────────────────────────────────────────────────────
         if not args.dry_run:
-            log_brief(conn, yesterday, "prior", 0, 0, output_file)
+            log_brief(conn, yesterday, "prior", 0, 0, output_file, now=now)
         conn.close()
         print(f"\n  Done.\n")
         return
@@ -3477,7 +3498,6 @@ def main():
     # morning / closing = all games regardless (watch list / confirmation)
 
     if session in ("early", "afternoon", "primary"):
-        now = _now_et(args.as_of_dt)
         now_utc = now.astimezone(datetime.timezone.utc).replace(tzinfo=None)
 
         def game_start_utc_dt(g):
@@ -3579,15 +3599,16 @@ def main():
 
     # ── Generate brief ───────────────────────────────────────────────────
     if session == "morning":
-        brief_text = build_morning_brief(games, streaks, starters, today)
+        brief_text = build_morning_brief(games, streaks, starters, today, now=now)
     elif session in ("early", "afternoon", "primary", "late"):
         label = {"early": "EARLY GAMES", "afternoon": "AFTERNOON",
                  "primary": "PRIMARY", "late": "LATE GAMES"}.get(session, "PRIMARY")
         brief_text = build_primary_brief(games, streaks, starters, today,
                                          session_label=label, s6_fires=s6_fires,
-                                         conn=conn, session=session)
+                                         conn=conn, session=session, now=now)
     else:
-        brief_text = build_closing_brief(games, streaks, starters, movement, today)
+        brief_text = build_closing_brief(games, streaks, starters, movement, today,
+                                         now=now)
 
     # ── Output ───────────────────────────────────────────────────────────
     print(brief_text)
@@ -3641,7 +3662,7 @@ def main():
             len(evaluate_signals(g, streaks, session)["picks"]) for g in games
         )
         log_brief(conn, today, session, len(games), picks_count,
-                  output_file, pick_entries=pick_entries_for_log)
+                  output_file, pick_entries=pick_entries_for_log, now=now)
         if args.verbose:
             print(f"  [verbose] brief_log entry written: {today} / {session} / {picks_count} picks")
 
