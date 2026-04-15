@@ -32,6 +32,7 @@ import json
 import os
 import sqlite3
 import sys
+from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -104,7 +105,7 @@ def load_team_lookup(con: sqlite3.Connection) -> Dict[int, Dict[str, str]]:
     return out
 
 
-def load_player_lookup(con: sqlite3.Connection) -> Dict[int, str]:
+def load_player_lookup(con: sqlite3.Connection) -> Dict[int, Dict[str, Any]]:
     rows = con.execute("SELECT player_id, full_name, throws FROM players").fetchall()
     out: Dict[int, Dict[str, Any]] = {}
     for r in rows:
@@ -172,6 +173,187 @@ def implied_prob_from_ml(ml: Optional[int]) -> Optional[float]:
     return (-ml_i) / ((-ml_i) + 100.0)
 
 
+def implied_prob_bucket_key(implied_prob: float) -> int:
+    """5 percentage-point buckets on [0,100): 0-5, 5-10, ..."""
+    p = max(0.0, min(1.0 - 1e-9, float(implied_prob)))
+    return min(19, int(p * 100) // 5)
+
+
+def compute_implied_bucket_win_rates(rows: List[Dict[str, Any]]) -> Dict[int, float]:
+    """Season (sample) mean actual_win per 5pp implied-prob bucket."""
+    sums: Dict[int, float] = defaultdict(float)
+    cnts: Dict[int, int] = defaultdict(int)
+    for r in rows:
+        ip = r.get("implied_prob")
+        aw = r.get("actual_win")
+        if ip is None or aw is None:
+            continue
+        k = implied_prob_bucket_key(float(ip))
+        sums[k] += float(int(aw))
+        cnts[k] += 1
+    out: Dict[int, float] = {}
+    for k, c in cnts.items():
+        if c:
+            out[k] = sums[k] / c
+    return out
+
+
+def apply_home_field_adj_win_pct(rows: List[Dict[str, Any]], bucket_rate: Dict[int, float]) -> None:
+    """
+    For is_home=1 rows only: team's win% prior to this game minus sample-wide
+    win rate in the same ±5pp implied-prob bucket (bucket = 5pp wide).
+    """
+    team_wins: Dict[int, int] = defaultdict(int)
+    team_games: Dict[int, int] = defaultdict(int)
+    ordered = sorted(
+        rows,
+        key=lambda r: (str(r.get("game_date") or ""), int(r.get("game_pk") or 0), int(r.get("team_id") or 0)),
+    )
+    for r in ordered:
+        tid = int(r["team_id"])
+        if r.get("is_home") == 1 and r.get("implied_prob") is not None:
+            bk = implied_prob_bucket_key(float(r["implied_prob"]))
+            br = bucket_rate.get(bk)
+            prior_g = team_games.get(tid, 0)
+            if prior_g > 0 and br is not None:
+                pw = team_wins.get(tid, 0) / prior_g
+                r["home_field_adj_win_pct"] = pw - br
+            else:
+                r["home_field_adj_win_pct"] = None
+        else:
+            r["home_field_adj_win_pct"] = None
+        if r.get("actual_win") is not None:
+            team_games[tid] += 1
+            team_wins[tid] += int(r["actual_win"])
+
+
+def _pick_col(cols: List[str], candidates: List[str]) -> Optional[str]:
+    lower = {c.lower(): c for c in cols}
+    for cand in candidates:
+        if cand.lower() in lower:
+            return lower[cand.lower()]
+    return None
+
+
+def load_team_rolling_stats_map(
+    con: sqlite3.Connection, table: str, rows_ref: List[Dict[str, Any]]
+) -> Dict[Tuple[int, int], Dict[str, Optional[float]]]:
+    """
+    Join key (game_pk, batting_team_id) -> {ops, runs_pg, k_pct}.
+    Table may use batting_team_id or team_id; columns may be named team_rolling_ops etc.
+    """
+    out: Dict[Tuple[int, int], Dict[str, Optional[float]]] = {}
+    if not table or not all(ch.isalnum() or ch == "_" for ch in table):
+        return out
+    gpks = sorted({int(r["game_pk"]) for r in rows_ref})
+    if not gpks:
+        return out
+    try:
+        ph = ",".join("?" for _ in gpks)
+        raw = con.execute(f"SELECT * FROM {table} WHERE game_pk IN ({ph})", gpks).fetchall()
+    except sqlite3.Error:
+        print(f"[warn] team_rolling_stats: could not read table {table!r} — rolling columns left NULL", flush=True)
+        return out
+    if not raw:
+        return out
+    cols = list(raw[0].keys())
+    tcol = _pick_col(cols, ["batting_team_id", "team_id", "batting_team"])
+    gcol = _pick_col(cols, ["game_pk"])
+    if not tcol or not gcol:
+        print(f"[warn] team_rolling_stats: missing game_pk/team column in {table!r}", flush=True)
+        return out
+    ops_c = _pick_col(cols, ["team_rolling_ops", "rolling_ops", "ops"])
+    rpg_c = _pick_col(cols, ["team_rolling_runs_pg", "rolling_runs_pg", "runs_pg", "runs_per_game"])
+    k_c = _pick_col(cols, ["team_rolling_k_pct", "rolling_k_pct", "k_pct", "strikeout_pct"])
+
+    for row in raw:
+        gpk = int(row[gcol])
+        try:
+            tid = int(float(row[tcol]))
+        except (TypeError, ValueError):
+            continue
+        def _f(name: Optional[str]) -> Optional[float]:
+            if not name or name not in row.keys():
+                return None
+            v = row[name]
+            if v is None:
+                return None
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return None
+
+        out[(gpk, tid)] = {
+            "ops": _f(ops_c),
+            "runs_pg": _f(rpg_c),
+            "k_pct": _f(k_c),
+        }
+    return out
+
+
+def apply_team_rolling_columns(rows: List[Dict[str, Any]], tr_map: Dict[Tuple[int, int], Dict[str, Optional[float]]]) -> None:
+    for r in rows:
+        key = (int(r["game_pk"]), int(r["team_id"]))
+        tr = tr_map.get(key)
+        r["team_rolling_ops"] = tr.get("ops") if tr else None
+        r["team_rolling_runs_pg"] = tr.get("runs_pg") if tr else None
+        r["team_rolling_k_pct"] = tr.get("k_pct") if tr else None
+
+
+def season_boundary_check(rows: List[Dict[str, Any]], boundary_season: Optional[int]) -> None:
+    """
+    For each pitcher (opponent_pitcher_id), first appearance in the sample should have
+    rolling pitcher_metrics n_starts == 0 (no prior appearances in rolling window).
+    """
+    if boundary_season is None:
+        return
+    by_pid: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+    prefix = str(boundary_season)
+    for r in rows:
+        if not str(r.get("game_date") or "").startswith(prefix):
+            continue
+        pid = r.get("opponent_pitcher_id")
+        if pid is None:
+            continue
+        by_pid[int(pid)].append(r)
+    fails: List[str] = []
+    ok = 0
+    for pid, lst in by_pid.items():
+        lst.sort(key=lambda x: (str(x.get("game_date") or ""), int(x.get("game_pk") or 0)))
+        first = lst[0]
+        try:
+            pm = json.loads(first.get("pitcher_metrics") or "{}")
+        except Exception:
+            pm = {}
+        n0 = pm.get("n_starts")
+        if n0 == 0:
+            ok += 1
+        else:
+            fails.append(f"pitcher_id={pid} game_pk={first.get('game_pk')} date={first.get('game_date')} n_starts={n0!r}")
+    print(
+        f"[season_boundary_check] season={boundary_season}: first-game pitchers OK={ok} "
+        f"FAIL={len(fails)} (expect n_starts=0)",
+        flush=True,
+    )
+    for line in fails[:25]:
+        print(f"  [season_boundary_check] FAIL {line}", flush=True)
+    if len(fails) > 25:
+        print(f"  [season_boundary_check] ... and {len(fails) - 25} more", flush=True)
+
+
+def print_null_closing_ml_by_pitcher_strength(rows: List[Dict[str, Any]]) -> None:
+    """Count rows with NULL closing_ml by pitcher_strength tier."""
+    counts: Dict[str, int] = defaultdict(int)
+    for r in rows:
+        tier = r.get("pitcher_strength")
+        key = str(tier) if tier else "unlabeled"
+        if r.get("closing_ml") is None:
+            counts[key] += 1
+    print("[missing_odds] NULL closing_ml count by pitcher_strength:", flush=True)
+    for k in sorted(counts.keys(), key=lambda x: (x != "strong", x != "weak", x != "unlabeled", x)):
+        print(f"  {k}: {counts[k]}", flush=True)
+
+
 def load_games(con: sqlite3.Connection, start: str, end: str, season: Optional[int]) -> List[Dict[str, Any]]:
     season_clause = "AND g.season = ?" if season is not None else ""
     params: List[Any] = [start, end]
@@ -182,6 +364,7 @@ def load_games(con: sqlite3.Connection, start: str, end: str, season: Optional[i
         SELECT
             g.game_pk,
             g.game_date_et AS game_date,
+            g.season AS season,
             g.game_start_utc,
             g.home_team_id,
             g.away_team_id,
@@ -315,7 +498,7 @@ def infer_starters_from_pgs(con: sqlite3.Connection, start: str, end: str) -> Di
 def build_pitcher_history(con: sqlite3.Connection, season: Optional[int]) -> Dict[int, List[Dict[str, Any]]]:
     """
     {pitcher_id: [ {game_date, game_pk, ip, er, h, bb, so}, ... ]} ordered by date.
-    Best-effort: appearances from player_game_stats (not guaranteed to be starts).
+    Best-effort: infers *starter* as the pitcher with most IP for that pitching team in that game.
     """
     season_clause = "AND g.season = ?" if season is not None else ""
     params: Tuple[Any, ...] = (season,) if season is not None else ()
@@ -324,7 +507,9 @@ def build_pitcher_history(con: sqlite3.Connection, season: Optional[int]) -> Dic
         SELECT
             pgs.player_id,
             pgs.game_pk,
+            g.season AS season,
             g.game_date_et AS game_date,
+            pgs.team_id,
             pgs.innings_pitched,
             pgs.earned_runs,
             pgs.hits_allowed,
@@ -337,24 +522,40 @@ def build_pitcher_history(con: sqlite3.Connection, season: Optional[int]) -> Dic
           AND g.status = 'Final'
           {season_clause}
           AND pgs.innings_pitched IS NOT NULL
+          AND pgs.team_id IS NOT NULL
         ORDER BY g.game_date_et, pgs.game_pk
         """,
         params,
     ).fetchall()
-    hist: Dict[int, List[Dict[str, Any]]] = {}
+    # Keep only "starter" appearances per (game_pk, team_id) by max IP.
+    best_by_game_team: Dict[Tuple[int, int], Dict[str, Any]] = {}
+    best_ip: Dict[Tuple[int, int], float] = {}
     for r in rows:
-        pid = int(r["player_id"])
-        hist.setdefault(pid, []).append(dict(r))
+        key = (int(r["game_pk"]), int(r["team_id"]))
+        ip = float(r["innings_pitched"])
+        cur = best_ip.get(key)
+        if cur is None or ip > cur:
+            best_ip[key] = ip
+            best_by_game_team[key] = dict(r)
+
+    hist: Dict[int, List[Dict[str, Any]]] = {}
+    for rec in best_by_game_team.values():
+        pid = int(rec["player_id"])
+        hist.setdefault(pid, []).append(rec)
     return hist
 
 
 def rolling_pitcher_metrics(p_hist: Dict[int, List[Dict[str, Any]]],
                             pitcher_id: int,
                             game_date: str,
-                            n: int) -> Dict[str, Any]:
-    """Rolling pitcher metrics from last n appearances strictly before game_date."""
+                            n: int,
+                            *,
+                            season: Optional[int] = None) -> Dict[str, Any]:
+    """Rolling pitcher metrics from last n appearances strictly before game_date (season-scoped when season is set)."""
     rows = p_hist.get(pitcher_id, [])
     prior = [r for r in rows if (str(r.get("game_date") or "")) < game_date]
+    if season is not None:
+        prior = [r for r in prior if r.get("season") == season]
     window = prior[-n:] if n > 0 else prior
 
     ip = [float(r.get("innings_pitched")) for r in window if r.get("innings_pitched") is not None]
@@ -483,6 +684,10 @@ def ensure_output_table(con: sqlite3.Connection, table: str) -> None:
             actual_win INTEGER,
             closing_ml INTEGER,
             implied_prob REAL,
+            home_field_adj_win_pct REAL,
+            team_rolling_ops REAL,
+            team_rolling_runs_pg REAL,
+            team_rolling_k_pct REAL,
             pitcher_strength TEXT,
             offensive_metrics TEXT,
             pitcher_metrics TEXT,
@@ -506,8 +711,10 @@ def write_table(con: sqlite3.Connection, table: str, rows: List[Dict[str, Any]])
              opponent_pitcher_id, opponent_pitcher_name, opponent_pitcher_throws,
              team_runs, opponent_runs, team_result, actual_win,
              closing_ml, implied_prob,
+             home_field_adj_win_pct,
+             team_rolling_ops, team_rolling_runs_pg, team_rolling_k_pct,
              pitcher_strength, offensive_metrics, pitcher_metrics)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         [
             (
@@ -530,6 +737,10 @@ def write_table(con: sqlite3.Connection, table: str, rows: List[Dict[str, Any]])
                 r.get("actual_win"),
                 r.get("closing_ml"),
                 r.get("implied_prob"),
+                r.get("home_field_adj_win_pct"),
+                r.get("team_rolling_ops"),
+                r.get("team_rolling_runs_pg"),
+                r.get("team_rolling_k_pct"),
                 r.get("pitcher_strength"),
                 r["offensive_metrics"],
                 r["pitcher_metrics"],
@@ -694,26 +905,43 @@ def main() -> None:
     p.add_argument("--out-dir", default=None, help="Directory to write analytic bundle (dataset + summaries)")
     p.add_argument("--write-table", default=None, help="Optional table name to write results into")
     p.add_argument("--summary-out", default=None, help="Optional CSV path for team summary")
+    p.add_argument(
+        "--team-rolling-stats-table",
+        default="team_rolling_stats",
+        help="Table with (game_pk, batting_team_id) and rolling OPS / runs / K%%; use --skip-team-rolling-join if not built",
+    )
+    p.add_argument(
+        "--skip-team-rolling-join",
+        action="store_true",
+        help="Do not join team_rolling_stats; team_rolling_* columns will be NULL",
+    )
     args = p.parse_args()
 
     db_path = get_db_path()
     con = db_connect(db_path, timeout=30)
     con.row_factory = sqlite3.Row
 
+    boundary_season: Optional[int] = None
     if args.month:
         start, end = _parse_month(args.month)
         season = int(args.month.split("-")[0])
         period_label = f"month_{args.month}"
+        boundary_season = None  # month runs do not necessarily include season opener
     elif args.season is not None:
         season = int(args.season)
         start, end = _season_bounds(con, season)
         period_label = f"season_{season}"
+        boundary_season = season
     else:
         start = args.range[0]; end = args.range[1]
         datetime.date.fromisoformat(start)
         datetime.date.fromisoformat(end)
         season = None
         period_label = f"range_{start}_to_{end}"
+        try:
+            boundary_season = int(str(start)[:4])
+        except ValueError:
+            boundary_season = None
 
     games = load_games(con, start, end, season)
     team_hist = build_team_runs_history(con, season=season)
@@ -728,6 +956,7 @@ def main() -> None:
     for g_ in games:
         gpk = int(g_["game_pk"])
         gdate = str(g_["game_date"])
+        gseason = g_.get("season")
         home_tid = int(g_["home_team_id"])
         away_tid = int(g_["away_team_id"])
         hs = g_.get("home_score")
@@ -767,7 +996,15 @@ def main() -> None:
             "implied_prob": home_imp,
             "pitcher_strength": None,
             "offensive_metrics": _json(rolling_team_offense(team_hist, home_tid, gdate, args.team_window)),
-            "pitcher_metrics": _json(rolling_pitcher_metrics(pitcher_hist, home_opp_pitcher, gdate, args.pitcher_window))
+            "pitcher_metrics": _json(
+                rolling_pitcher_metrics(
+                    pitcher_hist,
+                    home_opp_pitcher,
+                    gdate,
+                    args.pitcher_window,
+                    season=int(gseason) if gseason is not None else None,
+                )
+            )
             if home_opp_pitcher else _json({"n_starts": 0}),
         })
 
@@ -797,7 +1034,15 @@ def main() -> None:
             "implied_prob": away_imp,
             "pitcher_strength": None,
             "offensive_metrics": _json(rolling_team_offense(team_hist, away_tid, gdate, args.team_window)),
-            "pitcher_metrics": _json(rolling_pitcher_metrics(pitcher_hist, away_opp_pitcher, gdate, args.pitcher_window))
+            "pitcher_metrics": _json(
+                rolling_pitcher_metrics(
+                    pitcher_hist,
+                    away_opp_pitcher,
+                    gdate,
+                    args.pitcher_window,
+                    season=int(gseason) if gseason is not None else None,
+                )
+            )
             if away_opp_pitcher else _json({"n_starts": 0}),
         })
 
@@ -818,6 +1063,18 @@ def main() -> None:
                 r["pitcher_strength"] = "strong"
             elif era_f >= q67:
                 r["pitcher_strength"] = "weak"
+
+    tr_table = "" if args.skip_team_rolling_join else (args.team_rolling_stats_table or "").strip()
+    if tr_table:
+        tr_map = load_team_rolling_stats_map(con, tr_table, out_rows)
+        apply_team_rolling_columns(out_rows, tr_map)
+    else:
+        apply_team_rolling_columns(out_rows, {})
+
+    bucket_rate = compute_implied_bucket_win_rates(out_rows)
+    apply_home_field_adj_win_pct(out_rows, bucket_rate)
+    season_boundary_check(out_rows, boundary_season)
+    print_null_closing_ml_by_pitcher_strength(out_rows)
 
     dataset_csv, team_summary_csv, pitcher_summary_csv = _resolve_bundle_paths(args, period_label)
     write_csv(dataset_csv, out_rows)
