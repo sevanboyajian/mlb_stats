@@ -166,7 +166,7 @@ def load_games_for_date(con, game_date: str) -> list:
         """
         SELECT
             g.game_pk,
-            g.game_date,
+            g.game_date_et AS game_date,
             g.game_start_utc,
             v.name          AS venue_name,
             g.temp_f,
@@ -207,7 +207,7 @@ def load_games_for_date(con, game_date: str) -> list:
                                          AND tot.market_type = 'total'
         LEFT JOIN v_closing_game_odds rl  ON rl.game_pk   = g.game_pk
                                          AND rl.market_type = 'runline'
-        WHERE  g.game_date = ?
+        WHERE  g.game_date_et = ?
           AND  g.status    = 'Final'
           AND  g.game_type = 'R'
         ORDER  BY g.game_start_utc

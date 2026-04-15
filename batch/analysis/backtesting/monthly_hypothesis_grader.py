@@ -136,7 +136,7 @@ def load_month_games(conn, year, month):
 
     rows = conn.execute("""
         SELECT
-            g.game_pk, g.game_date, g.season,
+            g.game_pk, g.game_date_et AS game_date, g.season,
             g.home_score, g.away_score,
             g.temp_f, g.wind_mph, g.wind_direction, g.sky_condition,
             g.innings_played, g.extra_innings,
@@ -162,9 +162,9 @@ def load_month_games(conn, year, month):
                                 AND tot.is_closing_line = 1
         WHERE  g.game_type  = 'R'
           AND  g.status     = 'Final'
-          AND  g.game_date BETWEEN ? AND ?
+          AND  g.game_date_et BETWEEN ? AND ?
           AND  g.home_score IS NOT NULL
-        ORDER  BY g.game_date, g.game_start_utc
+        ORDER  BY g.game_date_et, g.game_start_utc
     """, (start, end)).fetchall()
     return [dict(r) for r in rows]
 

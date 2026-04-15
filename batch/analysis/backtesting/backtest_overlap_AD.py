@@ -297,7 +297,7 @@ def load_games_with_odds(
     log.info("    Loading games + odds (season %d) ...", season)
     rows = con.execute("""
         SELECT
-            g.game_pk, g.game_date,
+            g.game_pk, g.game_date_et AS game_date,
             g.home_team_id, g.away_team_id, g.venue_id,
             g.home_score, g.away_score,
             go.bookmaker, go.home_ml, go.away_ml
@@ -313,7 +313,7 @@ def load_games_with_odds(
           AND g.away_score IS NOT NULL
           AND go.home_ml   IS NOT NULL
           AND go.away_ml   IS NOT NULL
-        ORDER BY g.game_date, g.game_pk
+        ORDER BY g.game_date_et, g.game_pk
     """, (season,)).fetchall()
 
     seen = {}

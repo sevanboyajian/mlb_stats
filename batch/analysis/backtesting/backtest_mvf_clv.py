@@ -182,7 +182,7 @@ def load_games_for_season(conn: sqlite3.Connection,
         f"""
         SELECT
             g.game_pk,
-            g.game_date,
+            g.game_date_et AS game_date,
             g.season,
             g.home_team_id,
             g.away_team_id,
@@ -207,7 +207,7 @@ def load_games_for_season(conn: sqlite3.Connection,
         WHERE  g.season    = ?
           AND  g.game_type = 'R'
           AND  g.status    = 'Final'
-        ORDER  BY g.game_date, g.game_start_utc
+        ORDER  BY g.game_date_et, g.game_start_utc
         """,
         (*bookmaker_set, season),
     ).fetchall()
