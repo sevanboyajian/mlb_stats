@@ -30,6 +30,7 @@
 -- ============================================================
 -- # CHANGE LOG (latest first)
 -- # -------------------------
+-- # 2026-04-15  team_rolling_stats: pre-game rolling team metrics (builder-populated)
 -- # 2026-04-14 09:15 ET  
 -- Eastern Time normalized date for all daily logic and reporting
 -- MUST be used instead of game_date for filtering
@@ -924,6 +925,62 @@ FROM model_predictions mp
 LEFT JOIN backtest_results br ON br.prediction_id = mp.id
 GROUP BY mp.model_version, mp.prediction_type, mp.prop_type
 ORDER BY roi_pct DESC;
+
+
+-- ------------------------------------------------------------
+-- team_rolling_stats
+-- Pre-game rolling team metrics per (game_pk, team_id). Populated by a
+-- separate builder job (not core ingestion). One row per team per game.
+-- join key for briefs/signals: (game_pk, team_id) == batting team.
+-- See batch/analysis/backtesting/backtest_team_vs_pitcher.py optional join.
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS team_rolling_stats (
+    game_pk         INTEGER NOT NULL REFERENCES games (game_pk),
+    team_id         INTEGER NOT NULL REFERENCES teams (team_id),
+    game_date       TEXT    NOT NULL,
+    season          INTEGER NOT NULL,
+
+    games_in_window INTEGER NOT NULL,
+
+    rolling_runs_scored_pg   REAL,
+    rolling_runs_allowed_pg  REAL,
+    rolling_run_diff_pg      REAL,
+
+    rolling_obp             REAL,
+    rolling_slg             REAL,
+    rolling_ops             REAL,
+    rolling_iso             REAL,
+
+    rolling_k_pct          REAL,
+    rolling_bb_pct         REAL,
+
+    rolling_hr_pg          REAL,
+
+    rolling_sp_era         REAL,
+    rolling_sp_k9          REAL,
+    rolling_sp_whip        REAL,
+    sp_starts_in_window    INTEGER,
+
+    rolling_runs_scored_home_pg REAL,
+    rolling_runs_scored_road_pg REAL,
+    rolling_ops_home            REAL,
+    rolling_ops_road             REAL,
+    home_games_in_window         INTEGER,
+    road_games_in_window         INTEGER,
+
+    computed_at     TEXT    NOT NULL,
+
+    PRIMARY KEY (game_pk, team_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_trs_team_date
+    ON team_rolling_stats (team_id, game_date);
+
+CREATE INDEX IF NOT EXISTS idx_trs_game
+    ON team_rolling_stats (game_pk);
+
+CREATE INDEX IF NOT EXISTS idx_trs_season
+    ON team_rolling_stats (season, team_id);
 
 
 -- ============================================================

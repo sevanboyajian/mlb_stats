@@ -263,7 +263,16 @@ def load_team_rolling_stats_map(
         print(f"[warn] team_rolling_stats: missing game_pk/team column in {table!r}", flush=True)
         return out
     ops_c = _pick_col(cols, ["team_rolling_ops", "rolling_ops", "ops"])
-    rpg_c = _pick_col(cols, ["team_rolling_runs_pg", "rolling_runs_pg", "runs_pg", "runs_per_game"])
+    rpg_c = _pick_col(
+        cols,
+        [
+            "team_rolling_runs_pg",
+            "rolling_runs_scored_pg",
+            "rolling_runs_pg",
+            "runs_pg",
+            "runs_per_game",
+        ],
+    )
     k_c = _pick_col(cols, ["team_rolling_k_pct", "rolling_k_pct", "k_pct", "strikeout_pct"])
 
     for row in raw:

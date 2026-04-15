@@ -73,7 +73,7 @@ TABLES = [
     # Ops / reporting tables
     "brief_log", "brief_picks", "daily_pnl",
     # Intra-day signal tracking + real betting ledger
-    "signal_state", "bet_ledger",
+    "signal_state", "bet_ledger", "team_rolling_stats",
 ]
 
 print(f"  {'TABLE':<28} {'ROWS':>10}  STATUS")
