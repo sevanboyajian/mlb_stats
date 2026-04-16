@@ -91,29 +91,60 @@ def ensure_pipeline_jobs_table(con: Any) -> None:
     Create pipeline_jobs table + indexes if they do not exist.
     Uses duck-typed DB connection (sqlite3.Connection-like).
     """
+    # New schema (ET-first, with optional windows). If the table already exists,
+    # we also attempt a lightweight migration by adding missing columns.
     con.execute(
         """
         CREATE TABLE IF NOT EXISTS pipeline_jobs (
-            job_id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            job_type        TEXT    NOT NULL,
-            scheduled_time  DATETIME NOT NULL,
-            status          TEXT    NOT NULL DEFAULT 'pending'
-                                CHECK (status IN ('pending','running','complete','failed')),
-            game_group_id   INTEGER,
-            created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            job_id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_type          TEXT    NOT NULL,
+            job_date_et       TEXT    NOT NULL,
+            scheduled_time_et TEXT    NOT NULL,
+            scheduled_time_utc DATETIME,
+            window_start_et   TEXT,
+            window_end_et     TEXT,
+            status            TEXT    NOT NULL DEFAULT 'pending'
+                                  CHECK (status IN ('pending','running','complete','failed')),
+            game_group_id     INTEGER,
+            created_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
         """
     )
+
+    # Best-effort migration for older table versions.
+    try:
+        cols = {r[1] for r in con.execute("PRAGMA table_info(pipeline_jobs)").fetchall()}
+    except Exception:
+        cols = set()
+
+    def _add(col_sql: str) -> None:
+        try:
+            con.execute(f"ALTER TABLE pipeline_jobs ADD COLUMN {col_sql}")
+        except Exception:
+            pass
+
+    if "job_date_et" not in cols:
+        _add("job_date_et TEXT")
+    if "scheduled_time_et" not in cols:
+        _add("scheduled_time_et TEXT")
+    if "scheduled_time_utc" not in cols:
+        _add("scheduled_time_utc DATETIME")
+    if "window_start_et" not in cols:
+        _add("window_start_et TEXT")
+    if "window_end_et" not in cols:
+        _add("window_end_et TEXT")
+
+    # Indexes (ET-based)
     con.execute(
         """
         CREATE UNIQUE INDEX IF NOT EXISTS idx_pipeline_jobs_unique
-            ON pipeline_jobs (job_type, scheduled_time, game_group_id)
+            ON pipeline_jobs (job_type, scheduled_time_et, game_group_id)
         """
     )
     con.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_pipeline_jobs_status_time
-            ON pipeline_jobs (status, scheduled_time)
+            ON pipeline_jobs (status, scheduled_time_et)
         """
     )
     try:
@@ -127,13 +158,16 @@ def schedule_pipeline_jobs_for_game_groups(
     groups: list[dict[str, Any]],
     *,
     job_type: str,
-    scheduled_time_key: str = "start_time",
+    scheduled_time_key: str = "scheduled_time_et",
+    scheduled_time_utc_key: str = "scheduled_time_utc",
     status: str = "pending",
 ) -> int:
     """
-    Insert one pipeline_jobs row per game group (idempotent).
+    Insert one pipeline_jobs row per game group (idempotent), ET-first.
 
-    - `scheduled_time` defaults to the group's `start_time` (UTC ISO string).
+    - `scheduled_time_et` is taken from group[scheduled_time_key] (expected 'YYYY-MM-DD HH:MM ET')
+    - UTC is taken from group[scheduled_time_utc_key] when available (ISO string).
+    - `job_date_et` is derived from scheduled_time_et (YYYY-MM-DD)
     - `game_group_id` is taken from group['group_id'].
     - Returns number of rows inserted when rowcount is available; otherwise 0.
     """
@@ -143,20 +177,58 @@ def schedule_pipeline_jobs_for_game_groups(
     ensure_pipeline_jobs_table(con)
 
     inserted = 0
+    try:
+        cols = {r[1] for r in con.execute("PRAGMA table_info(pipeline_jobs)").fetchall()}
+    except Exception:
+        cols = set()
+
     for g in groups:
         gid = g.get("group_id")
-        sched = g.get(scheduled_time_key)
-        if gid is None or not sched:
+        sched_et = g.get(scheduled_time_key)
+        sched_utc = g.get(scheduled_time_utc_key)
+        if gid is None or not sched_et:
             continue
         try:
-            cur = con.execute(
-                """
-                INSERT OR IGNORE INTO pipeline_jobs
-                    (job_type, scheduled_time, status, game_group_id)
-                VALUES (?,?,?,?)
-                """,
-                (str(job_type), str(sched), str(status), int(gid)),
-            )
+            # Back-compat: older table versions may still have scheduled_time (UTC) as NOT NULL.
+            if "scheduled_time" in cols:
+                cur = con.execute(
+                    """
+                    INSERT OR IGNORE INTO pipeline_jobs
+                        (job_type, scheduled_time, job_date_et, scheduled_time_et, scheduled_time_utc,
+                         window_start_et, window_end_et, status, game_group_id)
+                    VALUES (?,?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        str(job_type),
+                        str(sched_utc or ""),
+                        str(sched_et)[:10],
+                        str(sched_et),
+                        (str(sched_utc) if sched_utc else None),
+                        g.get("window_start_et"),
+                        g.get("window_end_et"),
+                        str(status),
+                        int(gid),
+                    ),
+                )
+            else:
+                cur = con.execute(
+                    """
+                    INSERT OR IGNORE INTO pipeline_jobs
+                        (job_type, job_date_et, scheduled_time_et, scheduled_time_utc,
+                         window_start_et, window_end_et, status, game_group_id)
+                    VALUES (?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        str(job_type),
+                        str(sched_et)[:10],
+                        str(sched_et),
+                        (str(sched_utc) if sched_utc else None),
+                        g.get("window_start_et"),
+                        g.get("window_end_et"),
+                        str(status),
+                        int(gid),
+                    ),
+                )
             if getattr(cur, "rowcount", 0) == 1:
                 inserted += 1
         except Exception:

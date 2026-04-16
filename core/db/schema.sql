@@ -777,7 +777,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_bet_ledger_game_market
 CREATE TABLE IF NOT EXISTS pipeline_jobs (
     job_id          INTEGER PRIMARY KEY AUTOINCREMENT,
     job_type        TEXT    NOT NULL,   -- e.g. 'odds_pull','brief','weather'
-    scheduled_time  DATETIME NOT NULL,  -- UTC timestamp (or ISO string)
+    job_date_et     TEXT    NOT NULL,   -- Eastern date YYYY-MM-DD (for filtering)
+    scheduled_time_et TEXT   NOT NULL,  -- 'YYYY-MM-DD HH:MM ET' (human-readable primary)
+    scheduled_time_utc DATETIME,        -- optional: UTC timestamp/ISO for machine scheduling
+    window_start_et TEXT,               -- optional: start of intended execution window (ET)
+    window_end_et   TEXT,               -- optional: end of intended execution window (ET)
     status          TEXT    NOT NULL DEFAULT 'pending'
                         CHECK (status IN ('pending','running','complete','failed')),
     game_group_id   INTEGER,            -- cluster id from game start grouping
@@ -786,10 +790,10 @@ CREATE TABLE IF NOT EXISTS pipeline_jobs (
 
 -- Idempotent scheduling (same job_type + time + group should not duplicate)
 CREATE UNIQUE INDEX IF NOT EXISTS idx_pipeline_jobs_unique
-    ON pipeline_jobs (job_type, scheduled_time, game_group_id);
+    ON pipeline_jobs (job_type, scheduled_time_et, game_group_id);
 
 CREATE INDEX IF NOT EXISTS idx_pipeline_jobs_status_time
-    ON pipeline_jobs (status, scheduled_time);
+    ON pipeline_jobs (status, scheduled_time_et);
 
 
 -- ============================================================
