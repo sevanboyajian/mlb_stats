@@ -8,6 +8,10 @@ Polls pipeline_jobs and runs due jobs (single-threaded) in scheduled_time order.
 
 CHANGE LOG (latest first)
 ────────────────────────
+2026-04-16  Duplicate execution guard: claim via UPDATE … WHERE status='pending'
+            (rowcount check); skip if another worker already claimed the job.
+2026-04-16  Running timeout: jobs left in running > N minutes → status timeout + run row
+            (status=timeout); no OS kill. DB without timeout in CHECK falls back to failed.
 2026-04-16  pipeline_job_runs is source of truth: after each execution insert full run row,
             then sync pipeline_jobs (status, started_at, completed_at, error_message).
 2026-04-16  pipeline_job_runs: one row per execution; duration_seconds (REAL) set on finish
@@ -29,7 +33,7 @@ CHANGE LOG (latest first)
 
 Rules:
 - Only runs jobs with status='pending' and scheduled_time <= now
-- Marks jobs: pending -> running -> complete/failed
+- Marks jobs: pending -> running -> complete/failed/timeout
 - Does not modify job definitions
 - Does not run jobs in parallel
 """
@@ -425,6 +429,43 @@ def _update_job_status(
     con.commit()
 
 
+def _claim_pending_job(
+    con: sqlite3.Connection,
+    cols: set[str],
+    *,
+    job_id: int,
+    started_at: str,
+) -> bool:
+    """
+    Atomically transition pending -> running. Returns True only if exactly one row
+    was updated (still pending). Other workers racing on the same job get rowcount 0.
+    """
+    parts: list[str] = ["status = ?"]
+    params: list[object] = ["running"]
+
+    if "started_at" in cols:
+        parts.append("started_at = ?")
+        params.append(started_at)
+    elif "start_time" in cols:
+        parts.append("start_time = ?")
+        params.append(started_at)
+
+    if "completed_at" in cols:
+        parts.append("completed_at = NULL")
+    elif "ended_at" in cols:
+        parts.append("ended_at = NULL")
+    elif "end_time" in cols:
+        parts.append("end_time = NULL")
+
+    params.append(int(job_id))
+    cur = con.execute(
+        f"UPDATE pipeline_jobs SET {', '.join(parts)} WHERE job_id = ? AND status = 'pending'",
+        params,
+    )
+    con.commit()
+    return int(getattr(cur, "rowcount", 0) or 0) == 1
+
+
 def _ensure_pipeline_jobs_extras(con: sqlite3.Connection, cols: set[str]) -> set[str]:
     """Best-effort columns for retries / completion tracking."""
     if "retries" not in cols:
@@ -603,6 +644,106 @@ def _reset_stale_running_jobs(
     return reset_n
 
 
+def _mark_running_timed_out(
+    con: sqlite3.Connection,
+    cols: set[str],
+    run_cols: set[str],
+    *,
+    timeout_minutes: int,
+) -> int:
+    """
+    Jobs stuck in running longer than timeout_minutes: insert pipeline_job_runs (timeout)
+    and set pipeline_jobs status to timeout. Does not kill subprocesses.
+    If the DB CHECK disallows status=timeout, sync as failed with an explanatory message.
+    """
+    if timeout_minutes <= 0:
+        return 0
+    now_utc = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+    cutoff = now_utc - dt.timedelta(minutes=int(timeout_minutes))
+
+    start_col = "started_at" if "started_at" in cols else None
+    if not start_col and "start_time" in cols:
+        start_col = "start_time"
+    if not start_col:
+        return 0
+
+    try:
+        cur = con.execute(
+            f"""
+            SELECT job_id, job_type, job_date_et, {start_col}
+            FROM pipeline_jobs
+            WHERE status = 'running'
+            """
+        )
+        rows = cur.fetchall()
+    except Exception:
+        return 0
+
+    marked = 0
+    msg_base = (
+        f"timeout: running longer than {timeout_minutes} minutes "
+        f"(runner-side; process not killed)"
+    )
+
+    for row in rows:
+        jid = int(row[0])
+        jt = str(row[1] or "")
+        jde = str(row[2] or "")
+        st_raw = row[3]
+        t = _parse_started_at(str(st_raw) if st_raw is not None else "")
+        if t is None or t >= cutoff:
+            continue
+
+        finished_iso = _utc_now_iso_z()
+        started_str = str(st_raw) if st_raw is not None else ""
+
+        _insert_pipeline_job_run_full(
+            con,
+            run_cols,
+            job_id=jid,
+            job_type=jt,
+            job_date_et=jde,
+            started_at_utc=started_str,
+            finished_at_utc=finished_iso,
+            run_status="timeout",
+            error_message=msg_base,
+        )
+
+        try:
+            _sync_pipeline_jobs_from_run(
+                con,
+                cols,
+                job_id=jid,
+                job_status="timeout",
+                started_at_utc=started_str,
+                finished_at_utc=finished_iso,
+                job_error_message=msg_base,
+                retry_count_value=None,
+            )
+        except (sqlite3.OperationalError, sqlite3.IntegrityError):
+            try:
+                con.rollback()
+            except Exception:
+                pass
+            _sync_pipeline_jobs_from_run(
+                con,
+                cols,
+                job_id=jid,
+                job_status="failed",
+                started_at_utc=started_str,
+                finished_at_utc=finished_iso,
+                job_error_message=(
+                    f"{msg_base} (stored as failed: pipeline_jobs CHECK has no 'timeout')"
+                ),
+                retry_count_value=None,
+            )
+
+        marked += 1
+        print(f"[run_pipeline] TIMEOUT job_id={jid} after >{timeout_minutes}m in running")
+
+    return marked
+
+
 def _fetch_due_jobs(con: sqlite3.Connection, now_iso_z: str, cols: set[str]) -> list[dict]:
     if not cols:
         return []
@@ -660,6 +801,7 @@ def run_loop(
     poll_seconds: int,
     ghost: bool,
     stale_minutes: int,
+    timeout_minutes: int,
 ) -> None:
     con = db_connect(db_path, timeout=30)
     con.row_factory = sqlite3.Row
@@ -674,10 +816,11 @@ def run_loop(
     print(f"[run_pipeline] db={db_path}")
     print(
         f"[run_pipeline] mode={'once' if once else 'loop'} poll_seconds={poll_seconds} "
-        f"ghost={ghost} stale_minutes={stale_minutes}"
+        f"ghost={ghost} stale_minutes={stale_minutes} timeout_minutes={timeout_minutes}"
     )
 
     while True:
+        _mark_running_timed_out(con, cols, run_cols, timeout_minutes=timeout_minutes)
         _reset_stale_running_jobs(con, cols, stale_minutes=stale_minutes)
 
         now_iso = _utc_now_iso_z()
@@ -711,19 +854,10 @@ def run_loop(
                 print("[job] GHOST MODE — would set status=running, execute command, then set complete/failed")
                 continue
 
-            # Claim job: running + started_at, commit before any subprocess (survives crash mid-run).
-            _update_job_status(
-                con,
-                job_id=job_id,
-                status="running",
-                error_message=None,
-                started_at=start_iso,
-                ended_at=None,
-                completed_at=None,
-                retries=None,
-                retry_count=None,
-                cols=cols,
-            )
+            # Claim job: single UPDATE … AND status='pending' (SQLite-atomic; avoids duplicate execution).
+            if not _claim_pending_job(con, cols, job_id=job_id, started_at=start_iso):
+                print(f"[job] SKIP — job_id={job_id} not pending (already claimed or state changed)")
+                continue
 
             job_date_et = str(job.get("job_date_et") or "")
 
@@ -837,6 +971,12 @@ def main() -> None:
         default=30,
         help="Reset status=running jobs older than this to pending (retry). 0 disables (default 30)",
     )
+    p.add_argument(
+        "--timeout-minutes",
+        type=int,
+        default=30,
+        help="Mark status=running jobs older than this as timeout + pipeline_job_runs row. 0 disables (default 30)",
+    )
     args = p.parse_args()
 
     db_path = str(Path(args.db).resolve()) if args.db else str(Path(get_db_path()).resolve())
@@ -846,6 +986,7 @@ def main() -> None:
         poll_seconds=int(args.poll_seconds),
         ghost=bool(args.ghost),
         stale_minutes=max(0, int(args.stale_minutes)),
+        timeout_minutes=max(0, int(args.timeout_minutes)),
     )
 
 

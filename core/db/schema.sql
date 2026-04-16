@@ -30,6 +30,7 @@
 -- ============================================================
 -- # CHANGE LOG (latest first)
 -- # -------------------------
+-- # 2026-04-16  pipeline_jobs.status: add 'timeout' for runner-detected hung jobs
 -- # 2026-04-16  pipeline_job_runs: per-execution audit log; duration_seconds on finish
 -- # 2026-04-15  team_rolling_stats: pre-game rolling team metrics (builder-populated)
 -- # 2026-04-14 09:15 ET  
@@ -784,7 +785,7 @@ CREATE TABLE IF NOT EXISTS pipeline_jobs (
     window_start_et TEXT,               -- optional: start of intended execution window (ET)
     window_end_et   TEXT,               -- optional: end of intended execution window (ET)
     status          TEXT    NOT NULL DEFAULT 'pending'
-                        CHECK (status IN ('pending','running','complete','failed')),
+                        CHECK (status IN ('pending','running','complete','failed','timeout')),
     game_group_id   INTEGER,            -- cluster id from game start grouping
     created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

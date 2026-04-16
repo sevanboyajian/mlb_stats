@@ -104,7 +104,7 @@ def ensure_pipeline_jobs_table(con: Any) -> None:
             window_start_et   TEXT,
             window_end_et     TEXT,
             status            TEXT    NOT NULL DEFAULT 'pending'
-                                  CHECK (status IN ('pending','running','complete','failed')),
+                                  CHECK (status IN ('pending','running','complete','failed','timeout')),
             game_group_id     INTEGER,
             created_at        DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
