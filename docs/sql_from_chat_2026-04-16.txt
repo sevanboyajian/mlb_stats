@@ -1,0 +1,287 @@
+This file consolidates the ad-hoc SQLite SQL snippets produced in this chat session (start times, weekday counts, start-time bucketing, bet_ledger insertion, pipeline_jobs DDL, and line_movement intraday rate queries).
+
+
+===============================================================================
+1) Game start times (2025 & 2026)
+===============================================================================
+
+-- Scheduled first pitch (UTC). Prefer game_date_et for “calendar day” in Eastern.
+SELECT
+    g.season,
+    g.game_pk,
+    g.game_date_et,
+    g.game_date,
+    g.game_start_utc,
+    g.status,
+    g.game_type
+FROM games AS g
+WHERE g.season IN (2025, 2026)
+  AND g.game_type = 'R'          -- optional: regular season only; comment out for all types
+ORDER BY g.game_date_et, g.game_start_utc, g.game_pk;
+
+
+===============================================================================
+2) Games per day of week, by year (season)
+===============================================================================
+
+-- Uses game_date_et so weekday matches Eastern calendar “game day”.
+SELECT
+    g.season AS year,
+    CASE CAST(strftime('%w', g.game_date_et) AS INTEGER)
+        WHEN 0 THEN 'Sun'
+        WHEN 1 THEN 'Mon'
+        WHEN 2 THEN 'Tue'
+        WHEN 3 THEN 'Wed'
+        WHEN 4 THEN 'Thu'
+        WHEN 5 THEN 'Fri'
+        WHEN 6 THEN 'Sat'
+    END AS weekday,
+    COUNT(*) AS games
+FROM games AS g
+WHERE g.season IN (2025, 2026)
+  AND g.game_type = 'R'          -- optional
+GROUP BY g.season, CAST(strftime('%w', g.game_date_et) AS INTEGER)
+ORDER BY g.season, CAST(strftime('%w', g.game_date_et) AS INTEGER);
+
+
+===============================================================================
+3) Average number of games per calendar day (by weekday, by year)
+===============================================================================
+
+-- Average games per Eastern date that actually has >=1 game in the data.
+SELECT
+    g.season AS year,
+    CASE CAST(strftime('%w', g.game_date_et) AS INTEGER)
+        WHEN 0 THEN 'Sun'
+        WHEN 1 THEN 'Mon'
+        WHEN 2 THEN 'Tue'
+        WHEN 3 THEN 'Wed'
+        WHEN 4 THEN 'Thu'
+        WHEN 5 THEN 'Fri'
+        WHEN 6 THEN 'Sat'
+    END AS weekday,
+    COUNT(*) AS total_games,
+    COUNT(DISTINCT g.game_date_et) AS calendar_days,
+    ROUND(CAST(COUNT(*) AS REAL) / NULLIF(COUNT(DISTINCT g.game_date_et), 0), 3)
+        AS avg_games_per_calendar_day
+FROM games AS g
+WHERE g.season IN (2025, 2026)
+  AND g.game_type = 'R'          -- optional
+GROUP BY g.season, CAST(strftime('%w', g.game_date_et) AS INTEGER)
+ORDER BY g.season, CAST(strftime('%w', g.game_date_et) AS INTEGER);
+
+
+===============================================================================
+4) Rough start-time grouping (UTC hour)
+===============================================================================
+
+SELECT
+    g.season,
+    CAST(strftime('%H', g.game_start_utc) AS INTEGER) AS start_hour_utc,
+    COUNT(*) AS games
+FROM games AS g
+WHERE g.season IN (2025, 2026)
+  AND g.game_type = 'R'
+  AND g.game_start_utc IS NOT NULL
+GROUP BY g.season, start_hour_utc
+ORDER BY g.season, start_hour_utc;
+
+
+===============================================================================
+5) Start-hour distribution with avg games per season day (Eastern)
+===============================================================================
+
+WITH base AS (
+    SELECT
+        g.season,
+        g.game_date_et,
+        CAST(strftime('%H', g.game_start_utc) AS INTEGER) AS start_hour_utc
+    FROM games AS g
+    WHERE g.season IN (2025, 2026)
+      AND g.game_type = 'R'
+      AND g.game_start_utc IS NOT NULL
+),
+season_days AS (
+    SELECT season, COUNT(DISTINCT game_date_et) AS days_in_sample
+    FROM base
+    GROUP BY season
+)
+SELECT
+    b.season,
+    b.start_hour_utc,
+    COUNT(*) AS games_in_bucket,
+    sd.days_in_sample,
+    ROUND(CAST(COUNT(*) AS REAL) / sd.days_in_sample, 3) AS games_in_bucket_per_season_day
+FROM base AS b
+JOIN season_days AS sd ON sd.season = b.season
+GROUP BY b.season, b.start_hour_utc, sd.days_in_sample
+ORDER BY b.season, b.start_hour_utc;
+
+
+===============================================================================
+6) Start-hour avg games per day within each hour bucket
+===============================================================================
+
+WITH base AS (
+    SELECT
+        g.season,
+        g.game_date_et,
+        CAST(strftime('%H', g.game_start_utc) AS INTEGER) AS start_hour_utc
+    FROM games AS g
+    WHERE g.season IN (2025, 2026)
+      AND g.game_type = 'R'
+      AND g.game_start_utc IS NOT NULL
+)
+SELECT
+    season,
+    start_hour_utc,
+    COUNT(*) AS games_in_bucket,
+    COUNT(DISTINCT game_date_et) AS days_with_at_least_one_game_in_bucket,
+    ROUND(CAST(COUNT(*) AS REAL) / NULLIF(COUNT(DISTINCT game_date_et), 0), 3)
+        AS avg_games_per_day_in_bucket
+FROM base
+GROUP BY season, start_hour_utc
+ORDER BY season, start_hour_utc;
+
+
+===============================================================================
+7) Insert a TOP pick into bet_ledger from signal_state (idempotent)
+===============================================================================
+
+-- Example used in chat: 2026-04-15 CHC@PHI game_pk=823477, market_type='moneyline'
+INSERT OR IGNORE INTO bet_ledger
+    (game_date, game_pk, market_type, bet, odds_taken, stake_units,
+     signal_at_time, session, placed_at, result, pnl_units)
+SELECT
+    game_date,
+    game_pk,
+    market_type,
+    bet,
+    odds            AS odds_taken,
+    1.0             AS stake_units,
+    signal_type     AS signal_at_time,   -- 'top'
+    session,
+    recorded_at     AS placed_at,
+    NULL            AS result,
+    NULL            AS pnl_units
+FROM signal_state
+WHERE game_date    = '2026-04-15'
+  AND game_pk      = 823477
+  AND market_type  = 'moneyline'
+  AND signal_type  = 'top'
+ORDER BY recorded_at DESC
+LIMIT 1;
+
+
+===============================================================================
+8) pipeline_jobs DDL (matches schema.sql)
+===============================================================================
+
+CREATE TABLE IF NOT EXISTS pipeline_jobs (
+    job_id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_type        TEXT    NOT NULL,   -- e.g. 'odds_pull','brief','weather'
+    scheduled_time  DATETIME NOT NULL,  -- UTC timestamp (or ISO string)
+    status          TEXT    NOT NULL DEFAULT 'pending'
+                        CHECK (status IN ('pending','running','complete','failed')),
+    game_group_id   INTEGER,            -- cluster id from game start grouping
+    created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pipeline_jobs_unique
+    ON pipeline_jobs (job_type, scheduled_time, game_group_id);
+
+CREATE INDEX IF NOT EXISTS idx_pipeline_jobs_status_time
+    ON pipeline_jobs (status, scheduled_time);
+
+
+===============================================================================
+9) line_movement intraday (open->close) with team abbreviations + original/final odds
+===============================================================================
+
+SELECT
+  g.season,
+  g.game_date_et,
+  lm.game_pk,
+  ta.abbreviation AS away_team,
+  th.abbreviation AS home_team,
+  g.game_start_utc,
+
+  lm.bookmaker,
+  lm.market_type,
+
+  -- Opening snapshot (first capture)
+  lm.open_home_ml,
+  lm.open_away_ml,
+  lm.open_total,
+  lm.open_captured_utc,
+
+  -- Closing snapshot (last capture before first pitch)
+  lm.close_home_ml,
+  lm.close_away_ml,
+  lm.close_total,
+  lm.close_captured_utc,
+
+  -- Time between snapshots
+  ROUND(
+    (julianday(lm.close_captured_utc) - julianday(lm.open_captured_utc)) * 24.0,
+    3
+  ) AS hours_open_to_close,
+
+  -- Movement + looser “intraday rate” proxy (magnitude per hour)
+  lm.ml_move_cents,
+  ROUND(
+    ABS(lm.ml_move_cents) / NULLIF((julianday(lm.close_captured_utc) - julianday(lm.open_captured_utc)) * 24.0, 0),
+    3
+  ) AS abs_ml_cents_per_hour,
+
+  lm.total_move,
+  ROUND(
+    ABS(lm.total_move) / NULLIF((julianday(lm.close_captured_utc) - julianday(lm.open_captured_utc)) * 24.0, 0),
+    4
+  ) AS abs_total_runs_per_hour,
+
+  lm.move_direction,
+  lm.steam_move,
+  lm.reverse_line_move
+FROM line_movement lm
+JOIN games g  ON g.game_pk = lm.game_pk
+JOIN teams th ON th.team_id = g.home_team_id
+JOIN teams ta ON ta.team_id = g.away_team_id
+WHERE g.season = 2026
+  AND g.game_type = 'R'
+  AND lm.open_captured_utc IS NOT NULL
+  AND lm.close_captured_utc IS NOT NULL
+ORDER BY g.game_date_et, g.game_start_utc, away_team, home_team, lm.bookmaker, lm.market_type;
+
+
+===============================================================================
+10) line_movement intraday rate summary by bookmaker / market_type
+===============================================================================
+
+WITH base AS (
+  SELECT
+    lm.bookmaker,
+    lm.market_type,
+    (julianday(lm.close_captured_utc) - julianday(lm.open_captured_utc)) * 24.0 AS hours,
+    lm.ml_move_cents,
+    lm.total_move,
+    lm.steam_move
+  FROM line_movement lm
+  JOIN games g ON g.game_pk = lm.game_pk
+  WHERE g.season = 2026
+    AND g.game_type = 'R'
+    AND lm.open_captured_utc IS NOT NULL
+    AND lm.close_captured_utc IS NOT NULL
+    AND (julianday(lm.close_captured_utc) - julianday(lm.open_captured_utc)) > 0
+)
+SELECT
+  bookmaker,
+  market_type,
+  COUNT(*) AS n,
+  ROUND(AVG(ABS(ml_move_cents) / hours), 3) AS avg_abs_ml_cents_per_hour,
+  ROUND(AVG(ABS(total_move) / hours), 4)    AS avg_abs_total_runs_per_hour,
+  ROUND(AVG(CASE WHEN steam_move=1 THEN 1.0 ELSE 0.0 END), 3) AS steam_rate
+FROM base
+GROUP BY bookmaker, market_type
+ORDER BY bookmaker, market_type;
+
