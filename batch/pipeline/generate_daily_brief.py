@@ -6,6 +6,12 @@ Reads from mlb_stats.db and outputs the formatted betting brief.
 
 CHANGE LOG (latest first)
 ──────────────────────────
+2026-04-16  NF4 signal added — Home Fav vs Strong LHP. Monitoring status,
+            half-stake. Constants: NF4_HOME_IMP_LOW/HIGH, NF4_SP_ERA_MAX,
+            NF4_OPS_MIN, NF4_MONTHS_OK. load_starters() extended to pull
+            throw_hand and team_rolling_ops. enrich_game_with_starters()
+            helper injects these into game dict before signal evaluation.
+            Priority order: S1+H2=1, MV-F=2, NF4=3, MV-B=4, S1=5, H3b=6.
 2026-04-13 22:15 ET  Default DB from get_db_path(); repo root on sys.path for core.* imports.
 2026-04-13 16:24 ET  Refactor: route sqlite3.connect() calls through core.db.connection.connect().
 
@@ -1907,6 +1913,27 @@ def load_line_movement(conn: sqlite3.Connection, game_date: str, verbose: bool) 
 # Signal evaluation
 # ═══════════════════════════════════════════════════════════════════════════
 
+def enrich_game_with_starters(game: dict, starters: dict) -> None:
+    """
+    Inject away starter handedness, ERA, name, and home team rolling OPS
+    into the game dict so evaluate_signals() can access them without
+    needing a separate starters parameter.
+    Modifies game in place. Safe to call even if starters is empty.
+    """
+    gpk     = game.get("game_pk")
+    home_id = game.get("home_team_id")
+    away_id = game.get("away_team_id")
+    game_starters = starters.get(gpk, {})
+
+    away_s = game_starters.get(away_id, {})
+    home_s = game_starters.get(home_id, {})
+
+    game["away_starter_throw"] = away_s.get("throw_hand")
+    game["away_starter_era"]   = away_s.get("era")
+    game["away_starter_name"]  = away_s.get("name")
+    game["home_rolling_ops"]   = home_s.get("rolling_ops")
+    game["home_ops_window"]    = home_s.get("ops_window") or 0
+
 def evaluate_signals(game: dict, streaks: dict, session: str) -> dict:
     """
     Evaluate all model signals for a single game.
@@ -2558,6 +2585,7 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
     # ── Retroactive signal evaluation + grading ───────────────────────────
     evaluated = []
     for g in games:
+        enrich_game_with_starters(g, starters)
         sigs = evaluate_signals(g, streaks, "primary")
         hs   = g["home_score"]; as_  = g["away_score"]
         tot  = g["total_line"]; hml  = g["home_ml"]; aml = g["away_ml"]
@@ -2907,6 +2935,7 @@ def build_morning_brief(games, streaks, starters, game_date,
     avoid_entries     = []
 
     for game in games:
+        enrich_game_with_starters(game, starters)
         sigs = evaluate_signals(game, streaks, "morning")
         entry = {
             "game":   game,
@@ -3009,6 +3038,7 @@ def build_primary_brief(games, streaks, starters, game_date,
     no_signal   = []
 
     for game in games:
+        enrich_game_with_starters(game, starters)
         sigs = evaluate_signals(game, streaks, "primary")
         entry = {
             "game":    game,
@@ -3188,6 +3218,7 @@ def build_closing_brief(games, streaks, starters, movement, game_date,
     avoid_entries     = []
 
     for game in games:
+        enrich_game_with_starters(game, starters)
         sigs = evaluate_signals(game, streaks, "closing")
         g    = game
         lines.append(f"\n  {matchup_line(g)}")
@@ -3587,6 +3618,7 @@ def build_docx_brief(session: str, game_date: str,
     # ── Evaluate signals for all games ───────────────────────────────────
     entries = []
     for game in games:
+        enrich_game_with_starters(game, starters)
         sigs = evaluate_signals(game, streaks, session)
         entries.append({"game": game, "sigs": sigs})
 
@@ -3691,6 +3723,7 @@ def build_docx_brief(session: str, game_date: str,
         # Build evaluated list
         evaluated = []
         for g in games:
+            enrich_game_with_starters(g, starters)
             sigs = evaluate_signals(g, streaks, "primary")
             hs   = g.get("home_score"); as_ = g.get("away_score")
             tot  = g.get("total_line"); hml = g.get("home_ml"); aml = g.get("away_ml")
@@ -4383,15 +4416,17 @@ def main():
         if session in ("primary", "early", "afternoon", "late"):
             all_sig = []
             for g in games:
+                enrich_game_with_starters(g, starters)
                 sigs = evaluate_signals(g, streaks, session)
                 if sigs["picks"]:
                     all_sig.append({"game": g, "sigs": sigs})
             all_sig.sort(key=lambda e: min(p["priority"]
                                           for p in e["sigs"]["picks"]))
             pick_entries_for_log = all_sig
-        picks_count = sum(
-            len(evaluate_signals(g, streaks, session)["picks"]) for g in games
-        )
+        picks_count = 0
+        for g in games:
+            enrich_game_with_starters(g, starters)
+            picks_count += len(evaluate_signals(g, streaks, session)["picks"])
         log_brief(conn, today, session, len(games), picks_count,
                   output_file, pick_entries=pick_entries_for_log, now=now)
         if args.verbose:
