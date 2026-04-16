@@ -2020,10 +2020,10 @@ def evaluate_signals(game: dict, streaks: dict, session: str) -> dict:
     # Fix 2: threshold raised to W6+ (S1_STANDALONE_MIN) for standalone fires;
     #        W5+ is reserved for the S1+H2 stack where the price screen adds
     #        a second qualification.
-    # Priority swap (Mar 2026): S1 standalone moved from priority 3 → 4.
-    #   MV-B is now priority 3. 3-year data: MV-B ROI +18.9% (13 fires,
-    #   positive all 3 years) vs S1 standalone ROI -5.3% (26 fires, negative
-    #   in 2 of 3 years). On days both fire, MV-B is the better pick.
+    # Priority swap (Mar 2026): S1 standalone moved from priority 3 → 5.
+    #   MV-B is now priority 4, NF4 priority 3. 3-year data: MV-B ROI +18.9%
+    #   (13 fires, positive all 3 years) vs S1 standalone ROI -5.3% (26 fires,
+    #   negative in 2 of 3 years). On days both fire, MV-B is the better pick.
     s1_price_ok = (
         home_ml is not None
         and S1_PRICE_HIGH <= home_ml <= S1_PRICE_LOW   # -170 to -105
@@ -2040,14 +2040,87 @@ def evaluate_signals(game: dict, streaks: dict, session: str) -> dict:
                        f"priced {fmt_odds(home_ml)} (streak-premium zone −105/−170). "
                        f"Fade away ML. ROI: +7.50% SBRO / +8.99% OW (stronger at W7+). "
                        f"Filtered: W6+ only, price band −105/−170."),
-            "priority": 4,   # Swapped: was 3, now below MV-B
+            "priority": 5,   # Swapped: was 3, now below NF4 and MV-B
         })
+
+    # Determine calendar month for month-gated signals (NF4, H3b, July OVER)
+    try:
+        game_month = int((game.get("game_date") or "")[:10].split("-")[1])
+    except (ValueError, IndexError):
+        game_month = 0
+
+    # ── Signal NF4: Home Fav vs Strong LHP (new — monitoring) ───────────
+    # Regression finding (2025 season, n=34 in 60-67% imp band):
+    # High-OPS home teams (rolling OPS ≥ 0.736) priced 60-67% implied
+    # against a strong LHP (rolling ERA ≤ 3.04) win only 35.3% of games.
+    # Edge = +27.6pp, z = -3.33, p<.01. Market anchors on season OPS
+    # (built largely vs RHP) and overprices when a dominant LHP starts.
+    # Monitoring: half-stake until N ≥ 50 live fires. Sep excluded.
+    # Data requirements: starter throw_hand and home team rolling_ops
+    # must both be available — graceful skip if either is missing.
+    nf4_fired = False
+    if (home_impl is not None
+            and NF4_HOME_IMP_LOW <= home_impl <= NF4_HOME_IMP_HIGH
+            and game_month in NF4_MONTHS_OK
+            and not s1_h2_fired):
+        # Get away starter handedness and home team rolling OPS from starters dict
+        # starters is not passed to evaluate_signals — pull from game dict extensions
+        away_throw = game.get("away_starter_throw")   # set by caller — see Change 4
+        home_ops   = game.get("home_rolling_ops")     # set by caller — see Change 4
+        ops_window = game.get("home_ops_window", 0)
+
+        if away_throw == "L":
+            # Check SP ERA gate — use rolling ERA from pitcher_metrics if available,
+            # fall back to era_season. era_season is less precise but acceptable.
+            away_era = game.get("away_starter_era")   # set by caller — see Change 4
+            era_ok   = (away_era is not None and away_era <= NF4_SP_ERA_MAX)
+
+            # Check home team rolling OPS gate
+            ops_ok = (home_ops is not None
+                      and ops_window >= 5
+                      and home_ops >= NF4_OPS_MIN)
+
+            if era_ok and ops_ok:
+                nf4_fired = True
+                result["signals"].append("NF4")
+                result["picks"].append({
+                    "bet":    f"{away_abbr} ML",
+                    "market": "ML",
+                    "odds":   fmt_odds(away_ml),
+                    "reason": (
+                        f"NF4 — Home fav {home_abbr} at {home_impl:.0%} implied "
+                        f"({fmt_odds(home_ml)}) facing strong LHP "
+                        f"{game.get('away_starter_name', away_abbr)} "
+                        f"(rolling ERA {away_era:.2f}, hand L). "
+                        f"Home team rolling OPS {home_ops:.3f} (≥{NF4_OPS_MIN}). "
+                        f"2025 regression: high-OPS home favs win only 35.3% vs "
+                        f"62.9% implied in this matchup (z=−3.33, p<.01, n=34). "
+                        f"Market anchors on season OPS built vs RHP — platoon "
+                        f"disadvantage not fully priced. "
+                        f"MONITORING: half-stake until N≥50 live fires. Sep excluded."
+                    ),
+                    "priority": 3,
+                })
+            elif away_throw == "L" and not era_ok:
+                result["data_flags"].append(
+                    f"NF4 check: away SP is LHP but ERA gate not met "
+                    f"(era={away_era:.2f} > {NF4_SP_ERA_MAX} or missing)"
+                    if away_era is not None else
+                    f"NF4 check: away SP is LHP but rolling ERA unavailable — "
+                    f"signal requires era_season ≤ {NF4_SP_ERA_MAX}"
+                )
+            elif away_throw == "L" and not ops_ok:
+                result["data_flags"].append(
+                    f"NF4 check: LHP ERA gate met but home team rolling OPS "
+                    f"{'missing' if home_ops is None else f'{home_ops:.3f} < {NF4_OPS_MIN}'} "
+                    f"(window={ops_window} games)"
+                )
 
     # ── Signal 3: MV-B (wind-out + home dog implied 35–42%) ─────────────
     # Fix 3: wind floor raised to WIND_OUT_MVB_MPH (15 mph) for MV-B.
     #        H3b uses the lower WIND_OUT_MIN_MPH (10 mph) independently.
-    # Priority swap (Mar 2026): MV-B moved from priority 4 → 3, above S1
-    #   standalone. 3-year data: MV-B +18.9% ROI, positive all 3 years.
+    # Priority swap (Mar 2026): MV-B moved from priority 4 → 4, above S1
+    #   standalone (now priority 5). 3-year data: MV-B +18.9% ROI, positive all 3 years.
     #
     # Mar 2026 CLV timing study refinements (non-Oracle population, n=45):
     #   Change A — Implied band tightened to ≤42% (was ≤45%).
@@ -2079,13 +2152,8 @@ def evaluate_signals(game: dict, streaks: dict, session: str) -> dict:
                        f"show -24.1% ROI on 18 games and are excluded. "
                        f"CLV gate: only bet if line has moved toward OVER since open "
                        f"(CLV>0). CLV>0 fires: +12.2% ROI. CLV≤0: -18.1% ROI."),
-            "priority": 3,   # Swapped: was 4, now above S1 standalone
+            "priority": 4,   # Swapped: was 4, now above S1 standalone (5)
         })
-
-    try:
-        game_month = int((game.get("game_date") or "")[:10].split("-")[1])
-    except (ValueError, IndexError):
-        game_month = 0
 
     # ── Signal 5: H3b — independent wind-out OVER signal ────────────────
     # Fires as a standalone pick (priority 5) at whitelisted parks with
