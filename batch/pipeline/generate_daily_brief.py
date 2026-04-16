@@ -207,29 +207,87 @@ except ImportError:
 def build_docx_from_text(session: str, game_date: str, brief_text: str) -> "Document":
     """
     Render the exact same content as the .txt brief into a Word document.
-    This keeps brief logic single-sourced in the text builders.
+    This keeps brief logic single-sourced in the text builders, while restoring
+    the high-level Word formatting (title + section headers + matchup emphasis).
     """
     doc = Document()
+    text = brief_text or ""
+
+    # Base style (match older docs: default font, compact spacing)
     try:
         style = doc.styles["Normal"]
-        style.font.name = "Consolas"
         style.font.size = Pt(9)
     except Exception:
         pass
 
-    for line in (brief_text or "").splitlines():
+    def _add_line(line: str, *, size_pt: float = 9, bold: bool | None = None, align=None, color_hex: str | None = None) -> None:
         p = doc.add_paragraph()
+        if align is not None:
+            try:
+                p.alignment = align
+            except Exception:
+                pass
         r = p.add_run(line)
         try:
-            r.font.name = "Consolas"
-            r.font.size = Pt(9)
+            r.font.size = Pt(size_pt)
         except Exception:
             pass
+        if bold is not None:
+            try:
+                r.bold = bool(bold)
+            except Exception:
+                pass
+        if color_hex:
+            try:
+                r.font.color.rgb = RGBColor(int(color_hex[0:2], 16), int(color_hex[2:4], 16), int(color_hex[4:6], 16))
+            except Exception:
+                pass
         try:
             p.paragraph_format.space_before = Pt(0)
             p.paragraph_format.space_after = Pt(0)
         except Exception:
             pass
+
+    # Heuristic formatting based on the existing text layout.
+    title_written = False
+    for raw in text.splitlines():
+        line = raw.rstrip("\n")
+        s = line.strip()
+
+        # Keep blank lines as blank paragraphs (for spacing consistency).
+        if not s:
+            doc.add_paragraph("")
+            continue
+
+        # Banner / separators: keep but de-emphasize.
+        if set(s) <= {"═"} or set(s) <= {"─"}:
+            _add_line(line, size_pt=8, color_hex="94A3B8")  # slate-300
+            continue
+
+        # Title line: first non-separator line.
+        if not title_written and ("MLB" in s and ("BRIEF" in s or "REPORT" in s)):
+            title_written = True
+            _add_line(s, size_pt=16, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER)
+            continue
+
+        # Section headings (Top Pick / Avoid / No Signal / Ledger Summary etc.)
+        if any(k in s.upper() for k in ("TOP PICK", "ADDITIONAL MODEL SELECTIONS", "BETS TO AVOID", "NO SIGNAL", "BET LEDGER SUMMARY", "SIGNAL TRACKER", "S6 PITCHER")):
+            _add_line(s, size_pt=12, bold=True)
+            continue
+
+        # Matchup lines: "XXX  vs  YYY (h)".
+        if " vs " in s and "[" in s and "]" in s and "ET" in s:
+            _add_line(s, size_pt=11, bold=True)
+            continue
+
+        # Emphasize avoid callouts.
+        if s.upper().startswith("⛔") or s.upper().startswith("AVOID:") or "⛔ AVOID" in s.upper():
+            _add_line(s, size_pt=9, bold=True, color_hex="991B1B")  # red-800
+            continue
+
+        # Default line.
+        _add_line(s, size_pt=9)
+
     return doc
 
 # ── DB location (env / config/.env / cwd fallback via get_db_path) ───────
@@ -2649,6 +2707,42 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
                 f"{s['wins']}W {s['losses']}L {s['pushes']}P   "
                 f"Units: {s['units']:+.2f}u   ROI: {s['roi']:.1f}%"
             )
+
+    # Season-to-date (same season as this game_date, up through game_date_et)
+    try:
+        season_row = conn.execute(
+            "SELECT season FROM games WHERE game_date_et = ? AND game_type = 'R' LIMIT 1",
+            (game_date,),
+        ).fetchone()
+        season_int = int(season_row[0]) if season_row and season_row[0] is not None else int(str(game_date)[:4])
+    except Exception:
+        season_int = int(str(game_date)[:4])
+
+    try:
+        srows = conn.execute(
+            """
+            SELECT
+                bl.game_date, bl.game_pk, bl.market_type, bl.bet, bl.odds_taken,
+                bl.stake_units, bl.signal_at_time, bl.session, bl.placed_at,
+                bl.result, bl.pnl_units
+            FROM bet_ledger bl
+            JOIN games g ON g.game_pk = bl.game_pk
+            WHERE g.season = ?
+              AND g.game_type = 'R'
+              AND g.game_date_et <= ?
+            ORDER BY g.game_date_et, bl.placed_at
+            """,
+            (season_int, game_date),
+        ).fetchall()
+        srows = [dict(r) for r in srows]
+        ssummary = _summarise_bets(srows)
+        lines.append(
+            f"\n  Season-to-date ({season_int} through {game_date}): {ssummary['bets']} bet(s)   "
+            f"{ssummary['wins']}W {ssummary['losses']}L {ssummary['pushes']}P   "
+            f"Units: {ssummary['units']:+.2f}u   ROI: {ssummary['roi']:.1f}%"
+        )
+    except Exception:
+        pass
 
     ou_games = [e for e in evaluated if e["game"]["total_line"] and e["runs"] is not None]
     if ou_games:
