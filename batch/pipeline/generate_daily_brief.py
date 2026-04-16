@@ -324,6 +324,20 @@ STREAK_THRESHOLD   = 5      # W5+  — used by S1+H2 stack
 S1_STANDALONE_MIN  = 6      # standalone S1 requires W6+
 S6_WIN_STREAK_MIN  = 7      # S6 pitcher fade threshold (backtest: +25% ROI, 7/8 seasons positive)
 
+# ── Finding 4: Home Fav vs Strong LHP (NF4) ──────────────────────────────
+# 2025 full-season regression (n=4,856 enriched game rows):
+# Home teams priced 60–67% implied against a strong LHP (rolling 5-start
+# ERA ≤ 3.04) with high rolling OPS (≥ 0.736) win only 36.4% of games
+# while priced at 62.6% implied. Edge = +26.2pp, z = −3.11, p<.01.
+# Signal fires: fade home team (bet away ML).
+# Monitoring status — half-stake until N ≥ 50 live fires.
+# September excluded: only month with inverted edge (66.7% win rate).
+NF4_HOME_IMP_LOW   = 0.60   # home team implied prob lower bound (60%)
+NF4_HOME_IMP_HIGH  = 0.67   # home team implied prob upper bound (67%)
+NF4_SP_ERA_MAX     = 3.04   # strong SP: rolling 5-start ERA at or below p33
+NF4_OPS_MIN        = 0.736  # high-OPS home team: rolling OPS at or above median
+NF4_MONTHS_OK      = {4, 5, 6, 7, 8}   # April–August only; September excluded
+
 # H3b park factor gate — only fire at venues with PF ≥ this value.
 # Derived from 2024-2025 data: wind-out OVER effect is strongest at
 # neutral-to-hitter-friendly parks. Pitcher-friendly parks (PF < 98)
@@ -1822,10 +1836,16 @@ def load_starters(conn: sqlite3.Connection, game_date: str, verbose: bool) -> di
                 gp.game_pk,
                 gp.team_id,
                 p.full_name,
-                p.era_season
+                p.era_season,
+                p.throw_hand,
+                trs.rolling_ops        AS team_rolling_ops,
+                trs.games_in_window    AS team_games_in_window
             FROM   game_probable_pitchers gp
-            JOIN   players p ON p.player_id = gp.player_id
-            JOIN   games   g ON g.game_pk   = gp.game_pk
+            JOIN   players p   ON p.player_id  = gp.player_id
+            JOIN   games   g   ON g.game_pk    = gp.game_pk
+            LEFT JOIN team_rolling_stats trs
+                   ON  trs.game_pk = gp.game_pk
+                   AND trs.team_id = gp.team_id
             WHERE  g.game_date_et = ?
             """,
             (game_date,),
@@ -1835,8 +1855,11 @@ def load_starters(conn: sqlite3.Connection, game_date: str, verbose: bool) -> di
             if r["game_pk"] not in starters:
                 starters[r["game_pk"]] = {}
             starters[r["game_pk"]][r["team_id"]] = {
-                "name": r["full_name"],
-                "era":  r["era_season"],
+                "name":        r["full_name"],
+                "era":         r["era_season"],
+                "throw_hand":  r["throw_hand"],        # 'L', 'R', or None
+                "rolling_ops": r["team_rolling_ops"],  # home team rolling OPS from trs
+                "ops_window":  r["team_games_in_window"],
             }
         if verbose:
             print(f"\n  [verbose] Starters loaded for {len(starters)} games")
