@@ -8,6 +8,8 @@ Polls pipeline_jobs and runs due jobs (single-threaded) in scheduled_time order.
 
 CHANGE LOG (latest first)
 ────────────────────────
+2026-04-16  Failure safety: capture stderr on failed jobs; continue pipeline.
+            Optional retries column (default 0) added best-effort; no retries yet.
 2026-04-16  Add hardcoded dependency checks: skip pending jobs until required
             upstream job_type rows are complete (do not fail on unmet deps).
 2026-04-16  Add --ghost mode to print due jobs/commands without executing or
@@ -165,6 +167,7 @@ def _update_job_status(
     error_message: str | None = None,
     started_at: str | None = None,
     ended_at: str | None = None,
+    retries: int | None = None,
     cols: set[str],
 ) -> None:
     fields: list[str] = ["status = ?"]
@@ -173,6 +176,10 @@ def _update_job_status(
     if error_message is not None and "error_message" in cols:
         fields.append("error_message = ?")
         params.append(error_message)
+
+    if retries is not None and "retries" in cols:
+        fields.append("retries = ?")
+        params.append(int(retries))
 
     if started_at is not None:
         if "started_at" in cols:
@@ -251,6 +258,15 @@ def run_loop(*, db_path: str, once: bool, poll_seconds: int, ghost: bool) -> Non
     if not cols:
         raise RuntimeError("pipeline_jobs table not found or unreadable")
 
+    # Optional: add retries column (default 0). Best-effort only.
+    if "retries" not in cols:
+        try:
+            con.execute("ALTER TABLE pipeline_jobs ADD COLUMN retries INTEGER NOT NULL DEFAULT 0")
+            con.commit()
+        except Exception:
+            pass
+        cols = _table_columns(con, "pipeline_jobs")
+
     print(f"[run_pipeline] db={db_path}")
     print(f"[run_pipeline] mode={'once' if once else 'loop'} poll_seconds={poll_seconds} ghost={ghost}")
 
@@ -292,6 +308,7 @@ def run_loop(*, db_path: str, once: bool, poll_seconds: int, ghost: bool) -> Non
                 error_message=None,
                 started_at=start_iso,
                 ended_at=None,
+                retries=None,
                 cols=cols,
             )
 
@@ -322,13 +339,17 @@ def run_loop(*, db_path: str, once: bool, poll_seconds: int, ghost: bool) -> Non
                     error_message="",
                     started_at=None,
                     ended_at=end_iso,
+                    retries=None,
                     cols=cols,
                 )
             else:
-                tail = (err or out or "").strip()
-                if len(tail) > 2000:
-                    tail = tail[-2000:]
-                msg = f"rc={rc} {tail}".strip()
+                # Capture stderr (preferred) for error_message; fall back to stdout.
+                raw_err = (err or "").strip()
+                raw_out = (out or "").strip()
+                tail = raw_err if raw_err else raw_out
+                if len(tail) > 4000:
+                    tail = tail[-4000:]
+                msg = f"rc={rc} {tail}".strip() if tail else f"rc={rc}"
                 print(f"[job] end={end_iso} status=failed rc={rc}")
                 if tail:
                     print(f"[job] error_tail={tail}")
@@ -339,8 +360,10 @@ def run_loop(*, db_path: str, once: bool, poll_seconds: int, ghost: bool) -> Non
                     error_message=msg,
                     started_at=None,
                     ended_at=end_iso,
+                    retries=None,  # do not retry yet
                     cols=cols,
                 )
+                # Do NOT stop the pipeline on failure — continue to next job.
 
         if once:
             print(f"\n[run_pipeline] {now_iso} processed due jobs; exiting (--once).")
