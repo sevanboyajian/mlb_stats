@@ -8,6 +8,9 @@ Polls pipeline_jobs and runs due jobs (single-threaded) in scheduled_time order.
 
 CHANGE LOG (latest first)
 ────────────────────────
+2026-04-16  Hardened state: commit running+started_at before exec; try/except around
+            subprocess; terminal states set completed_at (or ended_at fallback);
+            stale running jobs (>N min) reset to pending for retry with retries++.
 2026-04-16  Failure safety: capture stderr on failed jobs; continue pipeline.
             Optional retries column (default 0) added best-effort; no retries yet.
 2026-04-16  Add hardcoded dependency checks: skip pending jobs until required
@@ -33,6 +36,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+import traceback
 from pathlib import Path
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
@@ -44,7 +48,24 @@ from core.db.connection import connect as db_connect, get_db_path
 
 
 def _utc_now_iso_z() -> str:
-    return dt.datetime.utcnow().replace(microsecond=0).isoformat() + "Z"
+    return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _parse_started_at(s: str | None) -> dt.datetime | None:
+    if not s:
+        return None
+    raw = str(s).strip()
+    if not raw:
+        return None
+    try:
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        t = dt.datetime.fromisoformat(raw)
+        if t.tzinfo is not None:
+            t = t.astimezone(dt.timezone.utc).replace(tzinfo=None)
+        return t
+    except Exception:
+        return None
 
 def _et_now_str() -> str:
     """
@@ -159,6 +180,19 @@ def _deps_complete(con: sqlite3.Connection, job: dict) -> tuple[bool, str]:
         return False, f"deps not complete ({scope}): {', '.join(missing)}"
     return True, ""
 
+def _set_completion_timestamp(fields: list[str], params: list[object], cols: set[str], ts: str) -> None:
+    """Set completed_at if present, else ended_at / end_time for backward compatibility."""
+    if "completed_at" in cols:
+        fields.append("completed_at = ?")
+        params.append(ts)
+    elif "ended_at" in cols:
+        fields.append("ended_at = ?")
+        params.append(ts)
+    elif "end_time" in cols:
+        fields.append("end_time = ?")
+        params.append(ts)
+
+
 def _update_job_status(
     con: sqlite3.Connection,
     *,
@@ -167,6 +201,7 @@ def _update_job_status(
     error_message: str | None = None,
     started_at: str | None = None,
     ended_at: str | None = None,
+    completed_at: str | None = None,
     retries: int | None = None,
     cols: set[str],
 ) -> None:
@@ -189,18 +224,125 @@ def _update_job_status(
             fields.append("start_time = ?")
             params.append(started_at)
 
-    if ended_at is not None:
-        if "ended_at" in cols:
-            fields.append("ended_at = ?")
-            params.append(ended_at)
-        elif "end_time" in cols:
-            fields.append("end_time = ?")
-            params.append(ended_at)
+    # Terminal completion time: prefer explicit completed_at kwarg, else ended_at for compat.
+    ts = completed_at if completed_at is not None else ended_at
+    if ts is not None:
+        _set_completion_timestamp(fields, params, cols, ts)
 
     sql = f"UPDATE pipeline_jobs SET {', '.join(fields)} WHERE job_id = ?"
     params.append(int(job_id))
     con.execute(sql, params)
     con.commit()
+
+
+def _ensure_pipeline_jobs_extras(con: sqlite3.Connection, cols: set[str]) -> set[str]:
+    """Best-effort columns for retries / completion tracking."""
+    if "retries" not in cols:
+        try:
+            con.execute("ALTER TABLE pipeline_jobs ADD COLUMN retries INTEGER NOT NULL DEFAULT 0")
+            con.commit()
+        except Exception:
+            pass
+        cols = _table_columns(con, "pipeline_jobs")
+    if "completed_at" not in cols:
+        try:
+            con.execute("ALTER TABLE pipeline_jobs ADD COLUMN completed_at TEXT")
+            con.commit()
+        except Exception:
+            pass
+        cols = _table_columns(con, "pipeline_jobs")
+    if "error_message" not in cols:
+        try:
+            con.execute("ALTER TABLE pipeline_jobs ADD COLUMN error_message TEXT")
+            con.commit()
+        except Exception:
+            pass
+        cols = _table_columns(con, "pipeline_jobs")
+    if "started_at" not in cols:
+        try:
+            con.execute("ALTER TABLE pipeline_jobs ADD COLUMN started_at TEXT")
+            con.commit()
+        except Exception:
+            pass
+        cols = _table_columns(con, "pipeline_jobs")
+    return cols
+
+
+def _reset_stale_running_jobs(
+    con: sqlite3.Connection,
+    cols: set[str],
+    *,
+    stale_minutes: int,
+) -> int:
+    """
+    Jobs stuck in 'running' longer than stale_minutes are reset to 'pending'
+    so they can be retried. Increments retries when column exists.
+    """
+    if stale_minutes <= 0:
+        return 0
+    now_utc = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+    cutoff = now_utc - dt.timedelta(minutes=int(stale_minutes))
+
+    start_col = "started_at" if "started_at" in cols else None
+    if not start_col and "start_time" in cols:
+        start_col = "start_time"
+    if not start_col:
+        return 0
+
+    try:
+        cur = con.execute(
+            f"""
+            SELECT job_id, {start_col}
+            FROM pipeline_jobs
+            WHERE status = 'running'
+            """
+        )
+        rows = cur.fetchall()
+    except Exception:
+        return 0
+
+    reset_n = 0
+    for row in rows:
+        jid = int(row[0])
+        st_raw = row[1]
+        t = _parse_started_at(st_raw)
+        if t is None or t >= cutoff:
+            continue
+
+        note = f"stale-running reset after {stale_minutes}m (was running since {st_raw!r})"
+        try:
+            set_parts = ["status = 'pending'"]
+            params: list[object] = []
+            if "error_message" in cols:
+                set_parts.append("error_message = ?")
+                params.append(note)
+            if "started_at" in cols:
+                set_parts.append("started_at = NULL")
+            if "completed_at" in cols:
+                set_parts.append("completed_at = NULL")
+            elif "ended_at" in cols:
+                set_parts.append("ended_at = NULL")
+            elif "end_time" in cols:
+                set_parts.append("end_time = NULL")
+
+            if "retries" in cols:
+                set_parts.append("retries = COALESCE(retries, 0) + 1")
+
+            params.append(jid)
+            con.execute(
+                f"UPDATE pipeline_jobs SET {', '.join(set_parts)} WHERE job_id = ?",
+                params,
+            )
+            con.commit()
+            reset_n += 1
+            print(f"[run_pipeline] STALE running job_id={jid} reset to pending — {note}")
+        except Exception:
+            try:
+                con.rollback()
+            except Exception:
+                pass
+
+    return reset_n
 
 
 def _fetch_due_jobs(con: sqlite3.Connection, now_iso_z: str) -> list[dict]:
@@ -250,7 +392,14 @@ def _run_command(command: str) -> tuple[int, str, str]:
     return int(p.returncode), (p.stdout or ""), (p.stderr or "")
 
 
-def run_loop(*, db_path: str, once: bool, poll_seconds: int, ghost: bool) -> None:
+def run_loop(
+    *,
+    db_path: str,
+    once: bool,
+    poll_seconds: int,
+    ghost: bool,
+    stale_minutes: int,
+) -> None:
     con = db_connect(db_path, timeout=30)
     con.row_factory = sqlite3.Row
 
@@ -258,19 +407,17 @@ def run_loop(*, db_path: str, once: bool, poll_seconds: int, ghost: bool) -> Non
     if not cols:
         raise RuntimeError("pipeline_jobs table not found or unreadable")
 
-    # Optional: add retries column (default 0). Best-effort only.
-    if "retries" not in cols:
-        try:
-            con.execute("ALTER TABLE pipeline_jobs ADD COLUMN retries INTEGER NOT NULL DEFAULT 0")
-            con.commit()
-        except Exception:
-            pass
-        cols = _table_columns(con, "pipeline_jobs")
+    cols = _ensure_pipeline_jobs_extras(con, cols)
 
     print(f"[run_pipeline] db={db_path}")
-    print(f"[run_pipeline] mode={'once' if once else 'loop'} poll_seconds={poll_seconds} ghost={ghost}")
+    print(
+        f"[run_pipeline] mode={'once' if once else 'loop'} poll_seconds={poll_seconds} "
+        f"ghost={ghost} stale_minutes={stale_minutes}"
+    )
 
     while True:
+        _reset_stale_running_jobs(con, cols, stale_minutes=stale_minutes)
+
         now_iso = _utc_now_iso_z()
         due = _fetch_due_jobs(con, now_iso)
 
@@ -301,6 +448,7 @@ def run_loop(*, db_path: str, once: bool, poll_seconds: int, ghost: bool) -> Non
                 print("[job] GHOST MODE — would set status=running, execute command, then set complete/failed")
                 continue
 
+            # Claim job: running + started_at, commit before any subprocess (survives crash mid-run).
             _update_job_status(
                 con,
                 job_id=job_id,
@@ -308,6 +456,7 @@ def run_loop(*, db_path: str, once: bool, poll_seconds: int, ghost: bool) -> Non
                 error_message=None,
                 started_at=start_iso,
                 ended_at=None,
+                completed_at=None,
                 retries=None,
                 cols=cols,
             )
@@ -322,12 +471,34 @@ def run_loop(*, db_path: str, once: bool, poll_seconds: int, ghost: bool) -> Non
                     status="failed",
                     error_message=msg,
                     started_at=None,
-                    ended_at=end_iso,
+                    ended_at=None,
+                    completed_at=end_iso,
                     cols=cols,
                 )
                 continue
 
-            rc, out, err = _run_command(command)
+            try:
+                rc, out, err = _run_command(command)
+            except Exception as exc:
+                end_iso = _utc_now_iso_z()
+                tb = traceback.format_exc()
+                msg = f"exception: {exc!s}\n{tb}"
+                if len(msg) > 8000:
+                    msg = msg[-8000:]
+                print(f"[job] end={end_iso} status=failed exception={exc!r}")
+                _update_job_status(
+                    con,
+                    job_id=job_id,
+                    status="failed",
+                    error_message=msg,
+                    started_at=None,
+                    ended_at=None,
+                    completed_at=end_iso,
+                    retries=None,
+                    cols=cols,
+                )
+                continue
+
             end_iso = _utc_now_iso_z()
 
             if rc == 0:
@@ -338,7 +509,8 @@ def run_loop(*, db_path: str, once: bool, poll_seconds: int, ghost: bool) -> Non
                     status="complete",
                     error_message="",
                     started_at=None,
-                    ended_at=end_iso,
+                    ended_at=None,
+                    completed_at=end_iso,
                     retries=None,
                     cols=cols,
                 )
@@ -359,8 +531,9 @@ def run_loop(*, db_path: str, once: bool, poll_seconds: int, ghost: bool) -> Non
                     status="failed",
                     error_message=msg,
                     started_at=None,
-                    ended_at=end_iso,
-                    retries=None,  # do not retry yet
+                    ended_at=None,
+                    completed_at=end_iso,
+                    retries=None,
                     cols=cols,
                 )
                 # Do NOT stop the pipeline on failure — continue to next job.
@@ -378,6 +551,12 @@ def main() -> None:
     p.add_argument("--once", action="store_true", help="Run one polling pass then exit")
     p.add_argument("--ghost", action="store_true", help="Print what would run; do not execute or update DB")
     p.add_argument("--poll-seconds", type=int, default=20, help="Polling interval when looping (default 20)")
+    p.add_argument(
+        "--stale-minutes",
+        type=int,
+        default=30,
+        help="Reset status=running jobs older than this to pending (retry). 0 disables (default 30)",
+    )
     args = p.parse_args()
 
     db_path = str(Path(args.db).resolve()) if args.db else str(Path(get_db_path()).resolve())
@@ -386,6 +565,7 @@ def main() -> None:
         once=bool(args.once),
         poll_seconds=int(args.poll_seconds),
         ghost=bool(args.ghost),
+        stale_minutes=max(0, int(args.stale_minutes)),
     )
 
 
