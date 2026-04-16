@@ -30,6 +30,7 @@
 -- ============================================================
 -- # CHANGE LOG (latest first)
 -- # -------------------------
+-- # 2026-04-16  pipeline_job_runs: per-execution audit log; duration_seconds on finish
 -- # 2026-04-15  team_rolling_stats: pre-game rolling team metrics (builder-populated)
 -- # 2026-04-14 09:15 ET  
 -- Eastern Time normalized date for all daily logic and reporting
@@ -794,6 +795,31 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_pipeline_jobs_unique
 
 CREATE INDEX IF NOT EXISTS idx_pipeline_jobs_status_time
     ON pipeline_jobs (status, scheduled_time_et);
+
+
+-- ------------------------------------------------------------
+-- pipeline_job_runs
+-- One row per job execution attempt (started when runner claims the job).
+-- duration_seconds is set only when the run finishes (new executions);
+-- existing rows are never backfilled by the runner.
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS pipeline_job_runs (
+    run_id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id              INTEGER NOT NULL,
+    job_type            TEXT,
+    job_date_et         TEXT,
+    started_at_utc      TEXT    NOT NULL,
+    finished_at_utc     TEXT,
+    duration_seconds    REAL,
+    status              TEXT,
+    error_message       TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_pipeline_job_runs_job_id
+    ON pipeline_job_runs (job_id);
+
+CREATE INDEX IF NOT EXISTS idx_pipeline_job_runs_started
+    ON pipeline_job_runs (started_at_utc);
 
 
 -- ============================================================

@@ -8,6 +8,10 @@ Polls pipeline_jobs and runs due jobs (single-threaded) in scheduled_time order.
 
 CHANGE LOG (latest first)
 ────────────────────────
+2026-04-16  pipeline_job_runs: one row per execution; duration_seconds (REAL) set on finish
+            from finished_at_utc - started_at_utc (existing run rows never backfilled).
+2026-04-16  Failure retries: retry_count column (default 0); on failure re-queue pending
+            up to 2 retries (retry_count < 2 before increment); next attempt next poll loop.
 2026-04-16  Hardened state: commit running+started_at before exec; try/except around
             subprocess; terminal states set completed_at (or ended_at fallback);
             stale running jobs (>N min) reset to pending for retry with retries++.
@@ -45,6 +49,9 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from core.db.connection import connect as db_connect, get_db_path
+
+# Max automatic re-runs after a failed attempt (retry_count 0→1→2 then terminal fail).
+_MAX_FAILURE_RETRIES = 2
 
 
 def _utc_now_iso_z() -> str:
@@ -180,6 +187,142 @@ def _deps_complete(con: sqlite3.Connection, job: dict) -> tuple[bool, str]:
         return False, f"deps not complete ({scope}): {', '.join(missing)}"
     return True, ""
 
+
+def _duration_seconds_utc(started_at_utc: str, finished_at_utc: str) -> float | None:
+    """Wall-clock seconds between two UTC ISO timestamps (e.g. ...Z)."""
+    a = _parse_started_at(started_at_utc)
+    b = _parse_started_at(finished_at_utc)
+    if a is None or b is None:
+        return None
+    return float((b - a).total_seconds())
+
+
+def _ensure_pipeline_job_runs(con: sqlite3.Connection) -> set[str]:
+    """
+    Ensure pipeline_job_runs exists (matches core/db/schema.sql).
+    Adds duration_seconds via ALTER if an older table lacked it.
+    """
+    try:
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pipeline_job_runs (
+                run_id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id              INTEGER NOT NULL,
+                job_type            TEXT,
+                job_date_et         TEXT,
+                started_at_utc      TEXT    NOT NULL,
+                finished_at_utc     TEXT,
+                duration_seconds    REAL,
+                status              TEXT,
+                error_message       TEXT
+            )
+            """
+        )
+        con.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_pipeline_job_runs_job_id
+                ON pipeline_job_runs (job_id)
+            """
+        )
+        con.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_pipeline_job_runs_started
+                ON pipeline_job_runs (started_at_utc)
+            """
+        )
+        con.commit()
+    except Exception:
+        try:
+            con.rollback()
+        except Exception:
+            pass
+        return set()
+
+    cols = _table_columns(con, "pipeline_job_runs")
+    if "duration_seconds" not in cols:
+        try:
+            con.execute("ALTER TABLE pipeline_job_runs ADD COLUMN duration_seconds REAL")
+            con.commit()
+        except Exception:
+            pass
+        cols = _table_columns(con, "pipeline_job_runs")
+    return cols
+
+
+def _insert_pipeline_job_run(
+    con: sqlite3.Connection,
+    run_cols: set[str],
+    *,
+    job_id: int,
+    job_type: str,
+    job_date_et: str,
+    started_at_utc: str,
+) -> int | None:
+    """Insert a new run row (duration_seconds NULL until finish). Returns run_id or None."""
+    if not run_cols or "started_at_utc" not in run_cols:
+        return None
+    try:
+        cur = con.execute(
+            """
+            INSERT INTO pipeline_job_runs (
+                job_id, job_type, job_date_et, started_at_utc, finished_at_utc, duration_seconds, status, error_message
+            )
+            VALUES (?, ?, ?, ?, NULL, NULL, 'running', NULL)
+            """,
+            (int(job_id), job_type or None, job_date_et or None, started_at_utc),
+        )
+        con.commit()
+        return int(cur.lastrowid) if cur.lastrowid else None
+    except Exception:
+        try:
+            con.rollback()
+        except Exception:
+            pass
+        return None
+
+
+def _finish_pipeline_job_run(
+    con: sqlite3.Connection,
+    run_cols: set[str],
+    *,
+    run_id: int | None,
+    started_at_utc: str,
+    finished_at_utc: str,
+    status: str,
+    error_message: str | None,
+) -> None:
+    """
+    Set finished_at_utc and duration_seconds for this run only (new executions).
+    Does not update historical rows.
+    """
+    if run_id is None or not run_cols:
+        return
+    dur: float | None = None
+    if "duration_seconds" in run_cols:
+        dur = _duration_seconds_utc(started_at_utc, finished_at_utc)
+
+    fields = ["finished_at_utc = ?", "status = ?"]
+    params: list[object] = [finished_at_utc, status]
+    if "error_message" in run_cols:
+        fields.append("error_message = ?")
+        params.append(error_message if error_message is not None else "")
+    if dur is not None and "duration_seconds" in run_cols:
+        fields.append("duration_seconds = ?")
+        params.append(dur)
+    params.append(int(run_id))
+    try:
+        con.execute(
+            f"UPDATE pipeline_job_runs SET {', '.join(fields)} WHERE run_id = ?",
+            params,
+        )
+        con.commit()
+    except Exception:
+        try:
+            con.rollback()
+        except Exception:
+            pass
+
+
 def _set_completion_timestamp(fields: list[str], params: list[object], cols: set[str], ts: str) -> None:
     """Set completed_at if present, else ended_at / end_time for backward compatibility."""
     if "completed_at" in cols:
@@ -203,6 +346,7 @@ def _update_job_status(
     ended_at: str | None = None,
     completed_at: str | None = None,
     retries: int | None = None,
+    retry_count: int | None = None,
     cols: set[str],
 ) -> None:
     fields: list[str] = ["status = ?"]
@@ -215,6 +359,10 @@ def _update_job_status(
     if retries is not None and "retries" in cols:
         fields.append("retries = ?")
         params.append(int(retries))
+
+    if retry_count is not None and "retry_count" in cols:
+        fields.append("retry_count = ?")
+        params.append(int(retry_count))
 
     if started_at is not None:
         if "started_at" in cols:
@@ -265,7 +413,88 @@ def _ensure_pipeline_jobs_extras(con: sqlite3.Connection, cols: set[str]) -> set
         except Exception:
             pass
         cols = _table_columns(con, "pipeline_jobs")
+    if "retry_count" not in cols:
+        try:
+            con.execute("ALTER TABLE pipeline_jobs ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0")
+            con.commit()
+        except Exception:
+            pass
+        cols = _table_columns(con, "pipeline_jobs")
     return cols
+
+
+def _handle_job_failure(
+    con: sqlite3.Connection,
+    cols: set[str],
+    *,
+    job_id: int,
+    retry_count_before: int,
+    error_message: str,
+    completed_ts: str,
+    run_cols: set[str],
+    run_id: int | None,
+    started_iso: str,
+) -> None:
+    """
+    On failure: increment retry_count. If retry_count_before < _MAX_FAILURE_RETRIES,
+    re-queue as pending (next poll loop). Otherwise mark failed permanently.
+    Successful jobs never enter here.
+    """
+    _finish_pipeline_job_run(
+        con,
+        run_cols,
+        run_id=run_id,
+        started_at_utc=started_iso,
+        finished_at_utc=completed_ts,
+        status="failed",
+        error_message=error_message,
+    )
+
+    rc_col = "retry_count" in cols
+    next_count = int(retry_count_before) + 1
+
+    if int(retry_count_before) < _MAX_FAILURE_RETRIES and rc_col:
+        set_parts = [
+            "status = 'pending'",
+            "retry_count = ?",
+        ]
+        params: list[object] = [next_count]
+        if "error_message" in cols:
+            set_parts.append("error_message = ?")
+            params.append(error_message)
+        if "started_at" in cols:
+            set_parts.append("started_at = NULL")
+        if "completed_at" in cols:
+            set_parts.append("completed_at = NULL")
+        elif "ended_at" in cols:
+            set_parts.append("ended_at = NULL")
+        elif "end_time" in cols:
+            set_parts.append("end_time = NULL")
+        params.append(job_id)
+        con.execute(
+            f"UPDATE pipeline_jobs SET {', '.join(set_parts)} WHERE job_id = ?",
+            params,
+        )
+        con.commit()
+        print(
+            f"[job] RETRY — job_id={job_id} retry_count={next_count}/{_MAX_FAILURE_RETRIES} "
+            f"(will run after next poll loop)"
+        )
+        return
+
+    # No more retries (or no retry_count column): terminal failure
+    _update_job_status(
+        con,
+        job_id=job_id,
+        status="failed",
+        error_message=error_message,
+        started_at=None,
+        ended_at=None,
+        completed_at=completed_ts,
+        retries=None,
+        retry_count=next_count if rc_col else None,
+        cols=cols,
+    )
 
 
 def _reset_stale_running_jobs(
@@ -345,17 +574,19 @@ def _reset_stale_running_jobs(
     return reset_n
 
 
-def _fetch_due_jobs(con: sqlite3.Connection, now_iso_z: str) -> list[dict]:
-    cols = _table_columns(con, "pipeline_jobs")
+def _fetch_due_jobs(con: sqlite3.Connection, now_iso_z: str, cols: set[str]) -> list[dict]:
     if not cols:
         return []
+
+    retry_sel = ", retry_count" if "retry_count" in cols else ""
 
     # Prefer ET-based schedule when present (most current schema).
     if "scheduled_time_et" in cols:
         now_et = _et_now_str()
         cur = con.execute(
-            """
+            f"""
             SELECT job_id, job_type, job_date_et, scheduled_time_et, window_start_et, window_end_et, status, game_group_id
+                   {retry_sel}
             FROM pipeline_jobs
             WHERE status = 'pending'
               AND scheduled_time_et <= ?
@@ -368,8 +599,9 @@ def _fetch_due_jobs(con: sqlite3.Connection, now_iso_z: str) -> list[dict]:
     # Legacy fallback: UTC scheduled_time column.
     if "scheduled_time" in cols:
         cur = con.execute(
-            """
+            f"""
             SELECT job_id, job_type, job_date_et, scheduled_time, status, game_group_id
+                   {retry_sel}
             FROM pipeline_jobs
             WHERE status = 'pending'
               AND scheduled_time <= ?
@@ -408,6 +640,7 @@ def run_loop(
         raise RuntimeError("pipeline_jobs table not found or unreadable")
 
     cols = _ensure_pipeline_jobs_extras(con, cols)
+    run_cols = _ensure_pipeline_job_runs(con)
 
     print(f"[run_pipeline] db={db_path}")
     print(
@@ -419,7 +652,7 @@ def run_loop(
         _reset_stale_running_jobs(con, cols, stale_minutes=stale_minutes)
 
         now_iso = _utc_now_iso_z()
-        due = _fetch_due_jobs(con, now_iso)
+        due = _fetch_due_jobs(con, now_iso, cols)
 
         if not due:
             if once:
@@ -432,6 +665,7 @@ def run_loop(
             job_id = int(job["job_id"])
             job_type = str(job.get("job_type") or "")
             scheduled_time = str(job.get("scheduled_time_et") or job.get("scheduled_time") or "")
+            retry_count_before = int(job.get("retry_count") or 0)
             command = _build_command(job).strip()
 
             start_iso = _utc_now_iso_z()
@@ -458,22 +692,33 @@ def run_loop(
                 ended_at=None,
                 completed_at=None,
                 retries=None,
+                retry_count=None,
                 cols=cols,
+            )
+
+            run_id = _insert_pipeline_job_run(
+                con,
+                run_cols,
+                job_id=job_id,
+                job_type=job_type,
+                job_date_et=str(job.get("job_date_et") or ""),
+                started_at_utc=start_iso,
             )
 
             if not command:
                 end_iso = _utc_now_iso_z()
                 msg = f"no command mapping for job_type={job_type!r}"
-                print(f"[job] end={end_iso} status=failed error={msg}")
-                _update_job_status(
+                print(f"[job] end={end_iso} failure (no command) — {msg}")
+                _handle_job_failure(
                     con,
+                    cols,
                     job_id=job_id,
-                    status="failed",
+                    retry_count_before=retry_count_before,
                     error_message=msg,
-                    started_at=None,
-                    ended_at=None,
-                    completed_at=end_iso,
-                    cols=cols,
+                    completed_ts=end_iso,
+                    run_cols=run_cols,
+                    run_id=run_id,
+                    started_iso=start_iso,
                 )
                 continue
 
@@ -485,17 +730,17 @@ def run_loop(
                 msg = f"exception: {exc!s}\n{tb}"
                 if len(msg) > 8000:
                     msg = msg[-8000:]
-                print(f"[job] end={end_iso} status=failed exception={exc!r}")
-                _update_job_status(
+                print(f"[job] end={end_iso} failure exception={exc!r}")
+                _handle_job_failure(
                     con,
+                    cols,
                     job_id=job_id,
-                    status="failed",
+                    retry_count_before=retry_count_before,
                     error_message=msg,
-                    started_at=None,
-                    ended_at=None,
-                    completed_at=end_iso,
-                    retries=None,
-                    cols=cols,
+                    completed_ts=end_iso,
+                    run_cols=run_cols,
+                    run_id=run_id,
+                    started_iso=start_iso,
                 )
                 continue
 
@@ -512,7 +757,17 @@ def run_loop(
                     ended_at=None,
                     completed_at=end_iso,
                     retries=None,
+                    retry_count=0 if "retry_count" in cols else None,
                     cols=cols,
+                )
+                _finish_pipeline_job_run(
+                    con,
+                    run_cols,
+                    run_id=run_id,
+                    started_at_utc=start_iso,
+                    finished_at_utc=end_iso,
+                    status="complete",
+                    error_message="",
                 )
             else:
                 # Capture stderr (preferred) for error_message; fall back to stdout.
@@ -522,19 +777,19 @@ def run_loop(
                 if len(tail) > 4000:
                     tail = tail[-4000:]
                 msg = f"rc={rc} {tail}".strip() if tail else f"rc={rc}"
-                print(f"[job] end={end_iso} status=failed rc={rc}")
+                print(f"[job] end={end_iso} failure rc={rc}")
                 if tail:
                     print(f"[job] error_tail={tail}")
-                _update_job_status(
+                _handle_job_failure(
                     con,
+                    cols,
                     job_id=job_id,
-                    status="failed",
+                    retry_count_before=retry_count_before,
                     error_message=msg,
-                    started_at=None,
-                    ended_at=None,
-                    completed_at=end_iso,
-                    retries=None,
-                    cols=cols,
+                    completed_ts=end_iso,
+                    run_cols=run_cols,
+                    run_id=run_id,
+                    started_iso=start_iso,
                 )
                 # Do NOT stop the pipeline on failure — continue to next job.
 
