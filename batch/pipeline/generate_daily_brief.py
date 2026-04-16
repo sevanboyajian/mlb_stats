@@ -203,6 +203,35 @@ try:
 except ImportError:
     DOCX_AVAILABLE = False
 
+
+def build_docx_from_text(session: str, game_date: str, brief_text: str) -> "Document":
+    """
+    Render the exact same content as the .txt brief into a Word document.
+    This keeps brief logic single-sourced in the text builders.
+    """
+    doc = Document()
+    try:
+        style = doc.styles["Normal"]
+        style.font.name = "Consolas"
+        style.font.size = Pt(9)
+    except Exception:
+        pass
+
+    for line in (brief_text or "").splitlines():
+        p = doc.add_paragraph()
+        r = p.add_run(line)
+        try:
+            r.font.name = "Consolas"
+            r.font.size = Pt(9)
+        except Exception:
+            pass
+        try:
+            p.paragraph_format.space_before = Pt(0)
+            p.paragraph_format.space_after = Pt(0)
+        except Exception:
+            pass
+    return doc
+
 # ── DB location (env / config/.env / cwd fallback via get_db_path) ───────
 DB_PATH = Path(get_db_path())
 
@@ -3962,52 +3991,9 @@ def main():
                 print("     Install with: pip install python-docx")
             else:
                 try:
-                    # Load completed games so build_docx_brief has data to render
-                    prior_games_cur = conn.execute("""
-                        SELECT
-                            g.game_pk, g.game_date_et AS game_date, g.game_start_utc,
-                            g.home_score, g.away_score,
-                            g.wind_mph, g.wind_direction, g.temp_f, g.sky_condition,
-                            th.team_id   AS home_team_id,
-                            ta.team_id   AS away_team_id,
-                            th.abbreviation AS home_abbr,
-                            ta.abbreviation AS away_abbr,
-                            v.name          AS venue_name,
-                            v.wind_effect, v.wind_note, v.roof_type,
-                            v.park_factor_runs, v.orientation_hp,
-                            go_ml.home_ml,   go_ml.away_ml,
-                            go_tot.total_line, go_tot.over_odds, go_tot.under_odds,
-                            NULL AS home_rl, NULL AS away_rl,
-                            NULL AS home_rl_odds, NULL AS away_rl_odds
-                        FROM   games g
-                        JOIN   teams  th     ON th.team_id  = g.home_team_id
-                        JOIN   teams  ta     ON ta.team_id  = g.away_team_id
-                        LEFT JOIN venues v   ON v.venue_id  = g.venue_id
-                        LEFT JOIN v_closing_game_odds go_ml
-                               ON go_ml.game_pk  = g.game_pk
-                              AND go_ml.market_type  = 'moneyline'
-                        LEFT JOIN v_closing_game_odds go_tot
-                               ON go_tot.game_pk = g.game_pk
-                              AND go_tot.market_type = 'total'
-                        WHERE  g.game_date_et = ?
-                          AND  g.game_type = 'R'
-                          AND  g.status    = 'Final'
-                        ORDER  BY g.game_start_utc, g.game_pk
-                    """, (yesterday,))
-                    prior_games   = [dict(r) for r in prior_games_cur.fetchall()]
-                    prior_team_ids = list(
-                        {g["home_team_id"] for g in prior_games} |
-                        {g["away_team_id"] for g in prior_games}
-                    )
-                    prior_streaks = load_streaks(conn, yesterday,
-                                                 prior_team_ids, args.verbose)
-                    doc = build_docx_brief(
-                        "prior", yesterday,
-                        prior_games, prior_streaks, {},
-                        movement={}
-                    )
                     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
                     docx_path = str(OUTPUT_DIR / f"{yesterday}_prior.docx")
+                    doc = build_docx_from_text("prior", yesterday, brief_text)
                     doc.save(docx_path)
                     print(f"  ✓ Word brief saved to: {docx_path}")
                 except Exception as e:
@@ -4195,12 +4181,9 @@ def main():
             print("     Install with: pip install python-docx")
         else:
             try:
-                doc = build_docx_brief(
-                    session, today, games, streaks, starters,
-                    movement=(movement if session == "closing" else {})
-                )
                 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
                 docx_path = str(OUTPUT_DIR / f"{today}_{session}.docx")
+                doc = build_docx_from_text(session, today, brief_text)
                 doc.save(docx_path)
                 print(f"  ✓ Word brief saved to: {docx_path}")
             except Exception as e:
