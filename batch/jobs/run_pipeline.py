@@ -8,6 +8,8 @@ Polls pipeline_jobs and runs due jobs (single-threaded) in scheduled_time order.
 
 CHANGE LOG (latest first)
 ────────────────────────
+2026-04-16  Add hardcoded dependency checks: skip pending jobs until required
+            upstream job_type rows are complete (do not fail on unmet deps).
 2026-04-16  Add --ghost mode to print due jobs/commands without executing or
             updating DB state. Useful to validate schedule completeness safely.
 2026-04-16  Initial version: single-threaded pipeline runner for pipeline_jobs.
@@ -99,6 +101,61 @@ def _build_command(job: dict) -> str:
         # Emit context only; do not assume scripts accept group_id flags.
         cmd = f"{cmd}  # group_id={group_id} window=[{win_start or '?'} -> {win_end or '?'}]"
     return cmd
+
+
+def _dependency_rules() -> dict[str, list[str]]:
+    """
+    Hardcoded dependencies (simple + readable, no new tables).
+    If a job_type has dependencies, it should not run until those job_types are complete.
+    """
+    return {
+        # load_today must complete before any game-based jobs
+        "odds_pull": ["load_today"],
+        "odds_check": ["load_today", "odds_pull"],
+        "weather": ["load_today"],
+        # odds pulls must complete before brief generation
+        "group_brief": ["load_today", "odds_pull"],
+        "ledger_snapshot": ["load_today", "odds_pull"],
+    }
+
+
+def _deps_complete(con: sqlite3.Connection, job: dict) -> tuple[bool, str]:
+    """
+    Return (ok, message). If dependencies are not met, ok=False and message explains why.
+    On unmet deps the caller should skip the job (leave pending), not fail it.
+    """
+    job_type = str(job.get("job_type") or "").strip()
+    job_date = str(job.get("job_date_et") or "").strip()
+    deps = _dependency_rules().get(job_type, [])
+    if not deps:
+        return True, ""
+
+    date_clause = ""
+    params: list[object] = []
+    if job_date:
+        date_clause = " AND job_date_et = ?"
+        params.append(job_date)
+
+    missing: list[str] = []
+    for dep in deps:
+        cur = con.execute(
+            f"""
+            SELECT COUNT(*) AS n
+            FROM pipeline_jobs
+            WHERE job_type = ?
+              AND status = 'complete'
+              {date_clause}
+            """,
+            (dep, *params),
+        )
+        n = int(cur.fetchone()[0] or 0)
+        if n <= 0:
+            missing.append(dep)
+
+    if missing:
+        scope = f"job_date_et={job_date}" if job_date else "all dates"
+        return False, f"deps not complete ({scope}): {', '.join(missing)}"
+    return True, ""
 
 def _update_job_status(
     con: sqlite3.Connection,
@@ -218,6 +275,11 @@ def run_loop(*, db_path: str, once: bool, poll_seconds: int, ghost: bool) -> Non
             print(f"\n[job] id={job_id} type={job_type} scheduled_time={scheduled_time}")
             print(f"[job] start={start_iso}")
             print(f"[job] command={command!r}")
+
+            ok, dep_msg = _deps_complete(con, job)
+            if not ok:
+                print(f"[job] SKIP — {dep_msg}")
+                continue
 
             if ghost:
                 print("[job] GHOST MODE — would set status=running, execute command, then set complete/failed")
