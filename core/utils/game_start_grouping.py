@@ -168,3 +168,31 @@ def schedule_pipeline_jobs_for_game_groups(
         pass
     return inserted
 
+
+def group_games_and_schedule_jobs(
+    con: Any,
+    games: list[dict[str, Any]],
+    *,
+    job_type: str,
+    window_minutes: int = 30,
+    scheduled_time_key: str = "start_time",
+    status: str = "pending",
+) -> list[dict[str, Any]]:
+    """
+    Default "program" behavior: group games, then persist one job per group.
+
+    - Deterministic grouping via `group_games_by_start_time`
+    - Idempotent DB insert via `schedule_pipeline_jobs_for_game_groups`
+
+    Returns the computed groups (regardless of whether rows already existed).
+    """
+    groups = group_games_by_start_time(games, window_minutes=window_minutes)
+    schedule_pipeline_jobs_for_game_groups(
+        con,
+        groups,
+        job_type=job_type,
+        scheduled_time_key=scheduled_time_key,
+        status=status,
+    )
+    return groups
+
