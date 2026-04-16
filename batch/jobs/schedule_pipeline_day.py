@@ -407,7 +407,7 @@ def main() -> None:
     # - group_brief: T0 - brief_min (default 32m)
     # - ledger_snapshot: T0 - ledger_min (default 29m)
     #
-    # Also insert global daily setup jobs (no group_id).
+    # Also insert global daily setup jobs (group_id = 0).
     print("\n[schedule] inserting global daily setup jobs")
     g_ins = 0
     g_ins += _insert_global_job(con, job_date_et=game_date_et, job_type="stats_pull", scheduled_time_et=f"{game_date_et} 06:00 ET")
@@ -418,6 +418,24 @@ def main() -> None:
     g_ins += _insert_global_job(con, job_date_et=game_date_et, job_type="early_peek", scheduled_time_et=f"{game_date_et} 06:20 ET")
     print(f"[schedule] inserted global jobs: {g_ins}")
     _normalize_and_dedupe_globals(con, job_date_et=game_date_et)
+
+    # Insert a single "schedule_next_day_globals" job near the end of the last game group.
+    # This job's responsibility (handled by the execution engine) is to insert ONLY the
+    # next-day global group-0 jobs into pipeline_jobs for the following date.
+    try:
+        last_t0_utc = max(group_t0_by_id.values())
+        last_t0_et = last_t0_utc.replace(tzinfo=dt.timezone.utc).astimezone(_ET)
+        sched_next_et = last_t0_et + dt.timedelta(minutes=5)
+        sched_next_et_str = sched_next_et.strftime("%Y-%m-%d %H:%M ET")
+        inserted_next = _insert_global_job(
+            con,
+            job_date_et=game_date_et,
+            job_type="schedule_next_day_globals",
+            scheduled_time_et=sched_next_et_str,
+        )
+        print(f"[schedule] inserted schedule_next_day_globals: {inserted_next} at {sched_next_et_str}")
+    except Exception as exc:
+        print(f"[schedule] failed to insert schedule_next_day_globals: {exc}")
 
     # Build odds blocks (merge adjacent groups within args.odds_block_min minutes)
     sorted_groups = sorted(groups, key=lambda g: (_parse_iso_z(str(g["start_time"])), int(g["group_id"])))
