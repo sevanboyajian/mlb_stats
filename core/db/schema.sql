@@ -769,6 +769,28 @@ CREATE TABLE IF NOT EXISTS bet_ledger (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_bet_ledger_game_market
     ON bet_ledger (game_pk, market_type);
 
+-- ------------------------------------------------------------
+-- pipeline_jobs
+-- Scheduler queue for pipeline work (odds pulls, briefs, weather, etc.).
+-- One row per job instance. Designed to be filled by a separate scheduler.
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS pipeline_jobs (
+    job_id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_type        TEXT    NOT NULL,   -- e.g. 'odds_pull','brief','weather'
+    scheduled_time  DATETIME NOT NULL,  -- UTC timestamp (or ISO string)
+    status          TEXT    NOT NULL DEFAULT 'pending'
+                        CHECK (status IN ('pending','running','complete','failed')),
+    game_group_id   INTEGER,            -- cluster id from game start grouping
+    created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Idempotent scheduling (same job_type + time + group should not duplicate)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pipeline_jobs_unique
+    ON pipeline_jobs (job_type, scheduled_time, game_group_id);
+
+CREATE INDEX IF NOT EXISTS idx_pipeline_jobs_status_time
+    ON pipeline_jobs (status, scheduled_time);
+
 
 -- ============================================================
 -- USEFUL VIEWS

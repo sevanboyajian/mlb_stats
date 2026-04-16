@@ -85,3 +85,86 @@ def group_games_by_start_time(
     _flush()
     return out
 
+
+def ensure_pipeline_jobs_table(con: Any) -> None:
+    """
+    Create pipeline_jobs table + indexes if they do not exist.
+    Uses duck-typed DB connection (sqlite3.Connection-like).
+    """
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS pipeline_jobs (
+            job_id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_type        TEXT    NOT NULL,
+            scheduled_time  DATETIME NOT NULL,
+            status          TEXT    NOT NULL DEFAULT 'pending'
+                                CHECK (status IN ('pending','running','complete','failed')),
+            game_group_id   INTEGER,
+            created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    con.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_pipeline_jobs_unique
+            ON pipeline_jobs (job_type, scheduled_time, game_group_id)
+        """
+    )
+    con.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_pipeline_jobs_status_time
+            ON pipeline_jobs (status, scheduled_time)
+        """
+    )
+    try:
+        con.commit()
+    except Exception:
+        pass
+
+
+def schedule_pipeline_jobs_for_game_groups(
+    con: Any,
+    groups: list[dict[str, Any]],
+    *,
+    job_type: str,
+    scheduled_time_key: str = "start_time",
+    status: str = "pending",
+) -> int:
+    """
+    Insert one pipeline_jobs row per game group (idempotent).
+
+    - `scheduled_time` defaults to the group's `start_time` (UTC ISO string).
+    - `game_group_id` is taken from group['group_id'].
+    - Returns number of rows inserted when rowcount is available; otherwise 0.
+    """
+    if not groups:
+        return 0
+
+    ensure_pipeline_jobs_table(con)
+
+    inserted = 0
+    for g in groups:
+        gid = g.get("group_id")
+        sched = g.get(scheduled_time_key)
+        if gid is None or not sched:
+            continue
+        try:
+            cur = con.execute(
+                """
+                INSERT OR IGNORE INTO pipeline_jobs
+                    (job_type, scheduled_time, status, game_group_id)
+                VALUES (?,?,?,?)
+                """,
+                (str(job_type), str(sched), str(status), int(gid)),
+            )
+            if getattr(cur, "rowcount", 0) == 1:
+                inserted += 1
+        except Exception:
+            continue
+
+    try:
+        con.commit()
+    except Exception:
+        pass
+    return inserted
+
