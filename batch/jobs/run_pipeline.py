@@ -50,12 +50,15 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import os
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 import traceback
 from pathlib import Path
+from typing import Any
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _SCRIPT_DIR.parent.parent
@@ -70,6 +73,226 @@ _MAX_FAILURE_RETRIES = 2
 
 def _utc_now_iso_z() -> str:
     return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _ensure_runner_lock_table(con: sqlite3.Connection) -> None:
+    """
+    Create a single-row lock table used to prevent concurrent runner execution.
+    SQLite-compatible, no OS locks.
+    """
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS runner_lock (
+            lock_id INTEGER PRIMARY KEY CHECK (lock_id = 1),
+            acquired_at_utc TEXT NOT NULL,
+            pid INTEGER,
+            host TEXT
+        )
+        """
+    )
+    con.commit()
+
+
+def _try_acquire_runner_lock(con: sqlite3.Connection) -> bool:
+    """
+    Attempt to acquire the runner lock.
+    Returns True if acquired by this process; False if another runner holds it.
+    """
+    try:
+        _ensure_runner_lock_table(con)
+    except Exception:
+        # If we can't ensure the table, do not risk concurrent execution.
+        return False
+
+    acquired_at = _utc_now_iso_z()
+    try:
+        pid: int | None = int(os.getpid())
+    except Exception:
+        pid = None
+    host = (os.getenv("COMPUTERNAME") or os.getenv("HOSTNAME") or "").strip() or None
+
+    try:
+        # Acquire in a transaction so two runners don't both think they succeeded.
+        con.execute("BEGIN IMMEDIATE")
+        cur = con.execute(
+            """
+            INSERT OR IGNORE INTO runner_lock (lock_id, acquired_at_utc, pid, host)
+            VALUES (1, ?, ?, ?)
+            """,
+            (acquired_at, pid, host),
+        )
+        con.commit()
+        return int(getattr(cur, "rowcount", 0) or 0) == 1
+    except Exception:
+        try:
+            con.rollback()
+        except Exception:
+            pass
+        return False
+
+
+def _release_runner_lock(con: sqlite3.Connection) -> None:
+    """
+    Best-effort lock release. Non-fatal.
+    """
+    try:
+        con.execute("DELETE FROM runner_lock WHERE lock_id = 1")
+        con.commit()
+    except Exception:
+        try:
+            con.rollback()
+        except Exception:
+            pass
+
+
+def _repo_root_path() -> Path:
+    # Keep consistent with _REPO_ROOT but return as Path.
+    try:
+        return Path(_REPO_ROOT)
+    except Exception:
+        return Path.cwd()
+
+
+def _alert_log_path() -> Path:
+    return _repo_root_path() / "logs" / "alerts.log"
+
+
+def _print_failure_alert(*, payload: dict[str, Any]) -> None:
+    """
+    Non-fatal alert to console for terminal job failures.
+    Must never raise.
+    """
+    try:
+        print("\n" + "!" * 76)
+        print("! PIPELINE ALERT: JOB FAILED (terminal)")
+        print("!" * 76)
+        print(f"  time_utc:     {payload.get('time_utc', '')}")
+        print(f"  job_id:       {payload.get('job_id', '')}")
+        print(f"  job_type:     {payload.get('job_type', '')}")
+        print(f"  job_date_et:  {payload.get('job_date_et', '')}")
+        print(f"  started_utc:  {payload.get('started_at_utc', '')}")
+        print(f"  finished_utc: {payload.get('finished_at_utc', '')}")
+        err = str(payload.get("error_message", "") or "")
+        if err:
+            if len(err) > 1200:
+                err = err[-1200:]
+            print("  error_tail:")
+            for line in err.splitlines()[-30:]:
+                print(f"    {line}")
+        print("!" * 76 + "\n")
+    except Exception:
+        # Never allow alerting to break pipeline output
+        pass
+
+
+def _append_alert_log(*, payload: dict[str, Any]) -> None:
+    """
+    Best-effort append-only alert log.
+    Must never raise and should be quick.
+    """
+    try:
+        p = _alert_log_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        # One line per alert (easy to tail/grep)
+        err_one_line = str(payload.get("error_message", "") or "").replace("\n", " ")[:2000]
+        line = (
+            f"{payload.get('time_utc','')}\tFAILED\t"
+            f"job_id={payload.get('job_id','')}\t"
+            f"type={payload.get('job_type','')}\t"
+            f"date_et={payload.get('job_date_et','')}\t"
+            f"started_utc={payload.get('started_at_utc','')}\t"
+            f"finished_utc={payload.get('finished_at_utc','')}\t"
+            f"err={err_one_line}"
+            "\n"
+        )
+        p.open("a", encoding="utf-8").write(line)
+    except Exception:
+        pass
+
+
+def _send_smtp_email_alert(*, payload: dict[str, Any]) -> None:
+    """
+    Optional SMTP email alert (best-effort). Runs in background thread.
+    Enabled only when env vars are present.
+    Must never raise.
+    """
+    try:
+        host = (os.getenv("PIPELINE_SMTP_HOST") or "").strip()
+        port = int(os.getenv("PIPELINE_SMTP_PORT") or "587")
+        user = (os.getenv("PIPELINE_SMTP_USER") or "").strip()
+        password = (os.getenv("PIPELINE_SMTP_PASS") or "").strip()
+        mail_from = (os.getenv("PIPELINE_ALERT_FROM") or user or "").strip()
+        mail_to = (os.getenv("PIPELINE_ALERT_TO") or "").strip()
+        if not host or not mail_to or not mail_from:
+            return
+
+        import smtplib
+        from email.message import EmailMessage
+
+        msg = EmailMessage()
+        msg["Subject"] = (
+            f"[mlb_stats] PIPELINE FAILED job_id={payload.get('job_id','')} "
+            f"type={payload.get('job_type','')}"
+        )
+        msg["From"] = mail_from
+        msg["To"] = mail_to
+        body = "\n".join(
+            [
+                "PIPELINE ALERT: JOB FAILED (terminal)",
+                f"time_utc:     {payload.get('time_utc','')}",
+                f"job_id:       {payload.get('job_id','')}",
+                f"job_type:     {payload.get('job_type','')}",
+                f"job_date_et:  {payload.get('job_date_et','')}",
+                f"started_utc:  {payload.get('started_at_utc','')}",
+                f"finished_utc: {payload.get('finished_at_utc','')}",
+                "",
+                "error_message (tail):",
+                str(payload.get("error_message", "") or "")[-4000:],
+                "",
+                f"log_file: {str(_alert_log_path())}",
+            ]
+        )
+        msg.set_content(body)
+
+        with smtplib.SMTP(host, port, timeout=5) as s:
+            try:
+                s.starttls()
+            except Exception:
+                pass
+            if user and password:
+                s.login(user, password)
+            s.send_message(msg)
+    except Exception:
+        pass
+
+
+def _alert_job_failed_terminal(
+    *,
+    job_id: int,
+    job_type: str,
+    job_date_et: str,
+    started_at_utc: str,
+    finished_at_utc: str,
+    error_message: str,
+) -> None:
+    """
+    Non-blocking, non-fatal alert fanout for terminal failures.
+    """
+    payload: dict[str, Any] = {
+        "time_utc": _utc_now_iso_z(),
+        "job_id": int(job_id),
+        "job_type": str(job_type),
+        "job_date_et": str(job_date_et),
+        "started_at_utc": str(started_at_utc),
+        "finished_at_utc": str(finished_at_utc),
+        "error_message": str(error_message or ""),
+    }
+    _print_failure_alert(payload=payload)
+    _append_alert_log(payload=payload)
+
+    # Optional SMTP alert: send in background so pipeline never blocks.
+    t = threading.Thread(target=_send_smtp_email_alert, kwargs={"payload": payload}, daemon=True)
+    t.start()
 
 
 def _parse_started_at(s: str | None) -> dt.datetime | None:
@@ -614,6 +837,16 @@ def _handle_job_failure(
         retry_count_value=next_count if rc_col else None,
     )
 
+    # Alert only on terminal failure (not when re-queued for retry).
+    _alert_job_failed_terminal(
+        job_id=job_id,
+        job_type=job_type,
+        job_date_et=job_date_et,
+        started_at_utc=started_iso,
+        finished_at_utc=completed_ts,
+        error_message=error_message,
+    )
+
 
 def _reset_stale_running_jobs(
     con: sqlite3.Connection,
@@ -853,40 +1086,46 @@ def run_loop(
 ) -> None:
     con = db_connect(db_path, timeout=30)
     con.row_factory = sqlite3.Row
+    lock_acquired = False
+    try:
+        lock_acquired = _try_acquire_runner_lock(con)
+        if not lock_acquired:
+            print("[run_pipeline] runner lock already held; exiting safely.")
+            return
 
-    cols = _table_columns(con, "pipeline_jobs")
-    if not cols:
-        raise RuntimeError("pipeline_jobs table not found or unreadable")
+        cols = _table_columns(con, "pipeline_jobs")
+        if not cols:
+            raise RuntimeError("pipeline_jobs table not found or unreadable")
 
-    cols = _ensure_pipeline_jobs_extras(con, cols)
-    run_cols = _ensure_pipeline_job_runs(con)
+        cols = _ensure_pipeline_jobs_extras(con, cols)
+        run_cols = _ensure_pipeline_job_runs(con)
 
-    print(f"[run_pipeline] db={db_path}")
-    print(
-        f"[run_pipeline] mode={'once' if once else 'loop'} poll_seconds={poll_seconds} "
-        f"ghost={ghost} stale_minutes={stale_minutes} timeout_minutes={timeout_minutes}"
-    )
+        print(f"[run_pipeline] db={db_path}")
+        print(
+            f"[run_pipeline] mode={'once' if once else 'loop'} poll_seconds={poll_seconds} "
+            f"ghost={ghost} stale_minutes={stale_minutes} timeout_minutes={timeout_minutes}"
+        )
 
-    while True:
-        _mark_running_timed_out(con, cols, run_cols, timeout_minutes=timeout_minutes)
-        _reset_stale_running_jobs(con, cols, stale_minutes=stale_minutes)
+        while True:
+            _mark_running_timed_out(con, cols, run_cols, timeout_minutes=timeout_minutes)
+            _reset_stale_running_jobs(con, cols, stale_minutes=stale_minutes)
 
-        now_iso = _utc_now_iso_z()
-        due = _fetch_due_jobs(con, now_iso, cols)
+            now_iso = _utc_now_iso_z()
+            due = _fetch_due_jobs(con, now_iso, cols)
 
-        if not due:
-            if once:
-                print(f"[run_pipeline] {now_iso} no due jobs; exiting (--once).")
-                break
-            time.sleep(max(1, int(poll_seconds)))
-            continue
+            if not due:
+                if once:
+                    print(f"[run_pipeline] {now_iso} no due jobs; exiting (--once).")
+                    break
+                time.sleep(max(1, int(poll_seconds)))
+                continue
 
-        for job in due:
-            job_id = int(job["job_id"])
-            job_type = str(job.get("job_type") or "")
-            scheduled_time = str(job.get("scheduled_time_et") or job.get("scheduled_time") or "")
-            retry_count_before = int(job.get("retry_count") or 0)
-            command = _build_command(job).strip()
+            for job in due:
+                job_id = int(job["job_id"])
+                job_type = str(job.get("job_type") or "")
+                scheduled_time = str(job.get("scheduled_time_et") or job.get("scheduled_time") or "")
+                retry_count_before = int(job.get("retry_count") or 0)
+                command = _build_command(job).strip()
 
             start_iso = _utc_now_iso_z()
             print(f"\n[job] id={job_id} type={job_type} scheduled_time={scheduled_time}")
@@ -1000,11 +1239,16 @@ def run_loop(
                 )
                 # Do NOT stop the pipeline on failure — continue to next job.
 
-        if once:
-            print(f"\n[run_pipeline] {now_iso} processed due jobs; exiting (--once).")
-            break
-
-    con.close()
+            if once:
+                print(f"\n[run_pipeline] {now_iso} processed due jobs; exiting (--once).")
+                break
+    finally:
+        if lock_acquired:
+            _release_runner_lock(con)
+        try:
+            con.close()
+        except Exception:
+            pass
 
 
 def _fmt_row(widths: list[int], cells: list[str]) -> str:
