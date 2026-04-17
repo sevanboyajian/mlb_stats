@@ -7,10 +7,27 @@ current games inserted by load_today.py.
 
 Console output is intentionally verbose so you can see exactly what it is doing.
 
+CHANGE LOG (latest first)
+────────────────────────
+2026-04-16  Split scheduling: --globals-only (evening pre-seed next calendar day),
+            --groups-only (morning intraday groups/jobs), default = full slate +
+            schedule_next_day_globals hook. Shared helper _insert_global_daily_setup_jobs.
+
 Design:
   - game grouping window: 30 minutes (group sessions)
   - odds pull efficiency threshold: 90 minutes (one pull per group at T0-90m)
   - bet logging window: <30 minutes before T0 (ledger_snapshot at T0-29m)
+
+  Modes:
+  - --globals-only --date-et TARGET: insert only group-0 daily globals for TARGET (evening
+    pre-seed for the next calendar day). No games required.
+  - --groups-only: insert only per-group jobs (odds/weather/brief/ledger) for --date-et;
+    use after globals were pre-seeded (e.g. morning day_setup).
+  - default (neither flag): full day — globals + schedule_next_day_globals + per-group jobs.
+
+  Invocation (run_pipeline.py):
+  - job_type schedule_next_day_globals → --globals-only --date-et (job_date_et + 1 day)
+  - job_type day_setup → --groups-only --date-et job_date_et
 
 This script is idempotent: it uses INSERT OR IGNORE via a unique index on
 (job_type, scheduled_time, game_group_id).
@@ -229,6 +246,17 @@ def _normalize_and_dedupe_globals(con: sqlite3.Connection, *, job_date_et: str) 
         pass
 
 
+def _insert_global_daily_setup_jobs(con: sqlite3.Connection, *, job_date_et: str) -> int:
+    """Insert the fixed morning global jobs (group_id=0) for job_date_et."""
+    g_ins = 0
+    g_ins += _insert_global_job(con, job_date_et=job_date_et, job_type="stats_pull", scheduled_time_et=f"{job_date_et} 06:00 ET")
+    g_ins += _insert_global_job(con, job_date_et=job_date_et, job_type="load_today", scheduled_time_et=f"{job_date_et} 06:05 ET")
+    g_ins += _insert_global_job(con, job_date_et=job_date_et, job_type="day_setup", scheduled_time_et=f"{job_date_et} 06:10 ET")
+    g_ins += _insert_global_job(con, job_date_et=job_date_et, job_type="prior_report", scheduled_time_et=f"{job_date_et} 06:15 ET")
+    g_ins += _insert_global_job(con, job_date_et=job_date_et, job_type="early_peek", scheduled_time_et=f"{job_date_et} 06:20 ET")
+    return int(g_ins)
+
+
 def _print_jobs_for_date(con: sqlite3.Connection, game_date_et: str, limit: int = 200) -> None:
     cur = con.execute(
         """
@@ -362,6 +390,17 @@ def _backfill_et_fields_for_existing_rows(
 def main() -> None:
     p = argparse.ArgumentParser(description="Schedule today's pipeline jobs into pipeline_jobs.")
     p.add_argument("--date-et", default=None, help="Eastern date YYYY-MM-DD (default: today)")
+    mode = p.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--globals-only",
+        action="store_true",
+        help="Insert only group-0 daily globals for --date-et (requires --date-et). No games needed.",
+    )
+    mode.add_argument(
+        "--groups-only",
+        action="store_true",
+        help="Insert only per-group jobs for --date-et; skip globals and schedule_next_day_globals.",
+    )
     p.add_argument("--group-window-min", type=int, default=30, help="Start-time grouping window (minutes, default 30)")
     p.add_argument("--odds-threshold-min", type=int, default=90, help="Odds pull threshold (minutes before group start, default 90)")
     p.add_argument("--odds-block-min", type=int, default=90, help="Merge adjacent groups into one odds block when within N minutes (default 90)")
@@ -371,13 +410,38 @@ def main() -> None:
     p.add_argument("--dry-run", action="store_true", help="Compute + print, but do not write pipeline_jobs")
     args = p.parse_args()
 
+    if args.globals_only and not args.date_et:
+        print("error: --globals-only requires --date-et (target calendar day YYYY-MM-DD)")
+        sys.exit(2)
+
     game_date_et = args.date_et or dt.date.today().isoformat()
-    print(f"[schedule_pipeline_day] date_et={game_date_et} dry_run={bool(args.dry_run)}")
+    print(
+        f"[schedule_pipeline_day] date_et={game_date_et} "
+        f"globals_only={bool(args.globals_only)} groups_only={bool(args.groups_only)} dry_run={bool(args.dry_run)}"
+    )
 
     db_path = Path(get_db_path())
     print(f"[db] {db_path}")
     con = db_connect(str(db_path), timeout=30)
     con.row_factory = sqlite3.Row
+
+    if args.globals_only:
+        if args.dry_run:
+            print("\n[dry-run] would insert global daily setup jobs only; not writing to pipeline_jobs.")
+            con.close()
+            return
+        print("\n[db] ensuring pipeline_jobs table exists")
+        ensure_pipeline_jobs_table(con)
+        _print_job_counts(con, game_date_et)
+        print("\n[schedule] inserting global daily setup jobs (globals-only)")
+        g_ins = _insert_global_daily_setup_jobs(con, job_date_et=game_date_et)
+        print(f"[schedule] inserted global jobs: {g_ins}")
+        _normalize_and_dedupe_globals(con, job_date_et=game_date_et)
+        _print_job_counts(con, game_date_et)
+        _print_jobs_for_date(con, game_date_et)
+        con.close()
+        print("\nDone.")
+        return
 
     games = _fetch_games_for_date(con, game_date_et)
     print(f"[games] regular-season games found: {len(games)}")
@@ -400,42 +464,33 @@ def main() -> None:
     group_t0_by_id = {int(g["group_id"]): _parse_iso_z(str(g["start_time"])) for g in groups}
     _print_job_counts(con, game_date_et)
 
-    # Minimal agreed-to schedule (dynamic per game_group_id)
-    # - odds_pull: per odds-block at T0 - odds_threshold (default 90m)
-    # - odds_check: per odds-block at odds_pull + 5m
-    # - weather: per group at T0 - weather_min (default 45m)
-    # - group_brief: T0 - brief_min (default 32m)
-    # - ledger_snapshot: T0 - ledger_min (default 29m)
-    #
-    # Also insert global daily setup jobs (group_id = 0).
-    print("\n[schedule] inserting global daily setup jobs")
     g_ins = 0
-    g_ins += _insert_global_job(con, job_date_et=game_date_et, job_type="stats_pull", scheduled_time_et=f"{game_date_et} 06:00 ET")
-    g_ins += _insert_global_job(con, job_date_et=game_date_et, job_type="load_today", scheduled_time_et=f"{game_date_et} 06:05 ET")
-    g_ins += _insert_global_job(con, job_date_et=game_date_et, job_type="day_setup", scheduled_time_et=f"{game_date_et} 06:10 ET")
-    # Prior-day report runs for "yesterday" but is scheduled on today's date.
-    g_ins += _insert_global_job(con, job_date_et=game_date_et, job_type="prior_report", scheduled_time_et=f"{game_date_et} 06:15 ET")
-    g_ins += _insert_global_job(con, job_date_et=game_date_et, job_type="early_peek", scheduled_time_et=f"{game_date_et} 06:20 ET")
-    print(f"[schedule] inserted global jobs: {g_ins}")
-    _normalize_and_dedupe_globals(con, job_date_et=game_date_et)
+    if not args.groups_only:
+        # Minimal agreed-to schedule (dynamic per game_group_id) follows below.
+        # Also insert global daily setup jobs (group_id = 0) and the next-evening pre-seed job.
+        print("\n[schedule] inserting global daily setup jobs")
+        g_ins = _insert_global_daily_setup_jobs(con, job_date_et=game_date_et)
+        print(f"[schedule] inserted global jobs: {g_ins}")
+        _normalize_and_dedupe_globals(con, job_date_et=game_date_et)
 
-    # Insert a single "schedule_next_day_globals" job near the end of the last game group.
-    # This job's responsibility (handled by the execution engine) is to insert ONLY the
-    # next-day global group-0 jobs into pipeline_jobs for the following date.
-    try:
-        last_t0_utc = max(group_t0_by_id.values())
-        last_t0_et = last_t0_utc.replace(tzinfo=dt.timezone.utc).astimezone(_ET)
-        sched_next_et = last_t0_et + dt.timedelta(minutes=5)
-        sched_next_et_str = sched_next_et.strftime("%Y-%m-%d %H:%M ET")
-        inserted_next = _insert_global_job(
-            con,
-            job_date_et=game_date_et,
-            job_type="schedule_next_day_globals",
-            scheduled_time_et=sched_next_et_str,
-        )
-        print(f"[schedule] inserted schedule_next_day_globals: {inserted_next} at {sched_next_et_str}")
-    except Exception as exc:
-        print(f"[schedule] failed to insert schedule_next_day_globals: {exc}")
+        # Insert a single "schedule_next_day_globals" job near the end of the last game group.
+        # Runner invokes --globals-only --date-et <next calendar day>.
+        try:
+            last_t0_utc = max(group_t0_by_id.values())
+            last_t0_et = last_t0_utc.replace(tzinfo=dt.timezone.utc).astimezone(_ET)
+            sched_next_et = last_t0_et + dt.timedelta(minutes=5)
+            sched_next_et_str = sched_next_et.strftime("%Y-%m-%d %H:%M ET")
+            inserted_next = _insert_global_job(
+                con,
+                job_date_et=game_date_et,
+                job_type="schedule_next_day_globals",
+                scheduled_time_et=sched_next_et_str,
+            )
+            print(f"[schedule] inserted schedule_next_day_globals: {inserted_next} at {sched_next_et_str}")
+        except Exception as exc:
+            print(f"[schedule] failed to insert schedule_next_day_globals: {exc}")
+    else:
+        print("\n[schedule] groups-only: skipping global daily jobs and schedule_next_day_globals")
 
     # Build odds blocks (merge adjacent groups within args.odds_block_min minutes)
     sorted_groups = sorted(groups, key=lambda g: (_parse_iso_z(str(g["start_time"])), int(g["group_id"])))

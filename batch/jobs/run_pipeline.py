@@ -8,6 +8,9 @@ Polls pipeline_jobs and runs due jobs (single-threaded) in scheduled_time order.
 
 CHANGE LOG (latest first)
 ────────────────────────
+2026-04-16  schedule_next_day_globals → schedule_pipeline_day.py --globals-only --date-et
+            (next calendar day after job_date_et); day_setup → --groups-only --date-et.
+            Helpers _next_calendar_date_et, _default_tomorrow_date_et.
 2026-04-16  Align pipeline_jobs extras with schema: started_at/completed_at as DATETIME;
             matches core/db/schema.sql and ensure_pipeline_jobs_table().
 2026-04-16  Read-only --status: print pending / running / failed jobs + last 10 runs.
@@ -39,6 +42,8 @@ Rules:
 - Marks jobs: pending -> running -> complete/failed/timeout
 - Does not modify job definitions
 - Does not run jobs in parallel
+- Command lines for day_setup and schedule_next_day_globals are built in _build_command();
+  they must stay aligned with schedule_pipeline_day.py CLI flags.
 """
 
 from __future__ import annotations
@@ -83,6 +88,32 @@ def _parse_started_at(s: str | None) -> dt.datetime | None:
     except Exception:
         return None
 
+def _next_calendar_date_et(job_date_et: str) -> str:
+    """
+    Return YYYY-MM-DD one calendar day after job_date_et (slate date on the job row).
+
+    Used when building schedule_next_day_globals → schedule_pipeline_day --globals-only
+    so the evening job pre-seeds the *following* calendar day's group-0 globals.
+    """
+    d = dt.date.fromisoformat(str(job_date_et).strip())
+    return (d + dt.timedelta(days=1)).isoformat()
+
+
+def _default_tomorrow_date_et() -> str:
+    """
+    Next calendar day in America/New_York (fallback: local today + 1).
+
+    Used only if job_date_et is missing when building schedule_next_day_globals command.
+    """
+    try:
+        from zoneinfo import ZoneInfo
+
+        et = ZoneInfo("America/New_York")
+        return (dt.datetime.now(tz=et).date() + dt.timedelta(days=1)).isoformat()
+    except Exception:
+        return (dt.date.today() + dt.timedelta(days=1)).isoformat()
+
+
 def _et_now_str() -> str:
     """
     Return a lexicographically sortable ET timestamp string matching pipeline_jobs.scheduled_time_et:
@@ -110,6 +141,11 @@ def _build_command(job: dict) -> str:
     """
     Translate a pipeline_jobs row into an executable command string.
     pipeline_jobs definitions are job_type-driven (no 'command' column).
+
+    Scheduling jobs (see batch/jobs/schedule_pipeline_day.py):
+    - day_setup: morning pass — only per-group jobs for this slate date (--groups-only).
+    - schedule_next_day_globals: evening pass — only next day's group-0 globals
+      (--globals-only --date-et job_date_et + 1 calendar day).
     """
     job_type = str(job.get("job_type") or "").strip()
     job_date = str(job.get("job_date_et") or "").strip()
@@ -119,10 +155,15 @@ def _build_command(job: dict) -> str:
 
     # Note: commands intentionally simple; no parallelism.
     # If a job requires additional parameters later, extend this mapping only.
+    # day_setup / schedule_next_day_globals: must match schedule_pipeline_day.py modes.
     mapping: dict[str, str] = {
         "stats_pull": "python batch/ingestion/load_mlb_stats.py",
         "load_today": f"python batch/ingestion/load_today.py --date {job_date}" if job_date else "python batch/ingestion/load_today.py",
-        "day_setup": f"python batch/jobs/schedule_pipeline_day.py --date-et {job_date}" if job_date else "python batch/jobs/schedule_pipeline_day.py",
+        "day_setup": (
+            f"python batch/jobs/schedule_pipeline_day.py --groups-only --date-et {job_date}"
+            if job_date
+            else "python batch/jobs/schedule_pipeline_day.py --groups-only"
+        ),
         "prior_report": f"python batch/pipeline/generate_daily_brief.py --session prior --date {job_date}" if job_date else "python batch/pipeline/generate_daily_brief.py --session prior",
         "early_peek": f"python batch/pipeline/generate_daily_brief.py --session morning --date {job_date}" if job_date else "python batch/pipeline/generate_daily_brief.py --session morning",
         # Group jobs (windows are informational; scripts should filter by unplayed games / session rules)
@@ -132,7 +173,11 @@ def _build_command(job: dict) -> str:
         # Group brief generation (time-windowing is embedded in generate_daily_brief session logic)
         "group_brief": f"python batch/pipeline/generate_daily_brief.py --session primary --date {job_date}" if job_date else "python batch/pipeline/generate_daily_brief.py --session primary",
         "ledger_snapshot": "python batch/pipeline/daily_results_report.py",
-        "schedule_next_day_globals": "python batch/jobs/schedule_pipeline_day.py",
+        "schedule_next_day_globals": (
+            f"python batch/jobs/schedule_pipeline_day.py --globals-only --date-et {_next_calendar_date_et(job_date)}"
+            if job_date
+            else f"python batch/jobs/schedule_pipeline_day.py --globals-only --date-et {_default_tomorrow_date_et()}"
+        ),
     }
 
     cmd = mapping.get(job_type, "")
