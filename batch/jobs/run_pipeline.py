@@ -1070,6 +1070,8 @@ def _run_command(command: str) -> tuple[int, str, str]:
         command,
         shell=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         capture_output=True,
     )
     return int(p.returncode), (p.stdout or ""), (p.stderr or "")
