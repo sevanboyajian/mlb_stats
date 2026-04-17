@@ -6,6 +6,10 @@ Reads from mlb_stats.db and outputs the formatted betting brief.
 
 CHANGE LOG (latest first)
 ──────────────────────────
+2026-04-17  Research: persist AVOID calls into brief_picks (pick_rank=0, signal='AVOID')
+            so they can be tracked/grated later without generating bets.
+2026-04-17  Fix starters column name: players.throws (was throw_hand). Update
+            load_starters() SELECT + mapping, and enrich_game_with_starters().
 2026-04-16  Finding 5 validated: NF4 implied prob gate confirmed as 60–67%.
             55–60% band shows only 5.5pp edge (not significant). Gate constants
             unchanged (already 0.60/0.67). Comments, signal reason, and constant
@@ -14,7 +18,7 @@ CHANGE LOG (latest first)
 2026-04-16  NF4 signal added — Home Fav vs Strong LHP. Monitoring status,
             half-stake. Constants: NF4_HOME_IMP_LOW/HIGH, NF4_SP_ERA_MAX,
             NF4_OPS_MIN, NF4_MONTHS_OK. load_starters() extended to pull
-            throw_hand and team_rolling_ops. enrich_game_with_starters()
+            throws and team_rolling_ops. enrich_game_with_starters()
             helper injects these into game dict before signal evaluation.
             Priority order: S1+H2=1, MV-F=2, NF4=3, MV-B=4, S1=5, H3b=6.
 2026-04-13 22:15 ET  Default DB from get_db_path(); repo root on sys.path for core.* imports.
@@ -434,6 +438,11 @@ H3B_PARK_WHITELIST = {
     "Yankee Stadium",          # New York Yankees — open (wind tunnel effect)
     "Citi Field",              # New York Mets — open
     "Oakland Coliseum",        # Athletics — very open, bay wind
+    # Added 2026-04-17: confirmed HIGH wind_effect in venues table,
+    # PF >= 98, appeared in 2026 wind-out qualifying games with no H3b fire
+    "Citizens Bank Park",      # Philadelphia Phillies — HIGH, PF 104
+    "Target Field",            # Minnesota Twins — HIGH, PF 99
+    "Rate Field",              # Chicago White Sox — HIGH, PF 102
 }
 
 # ── Session → expected pull window (for --check-prereqs) ──────────────────
@@ -1228,53 +1237,139 @@ def grade_bet_ledger(conn: sqlite3.Connection, game_date: str | None = None) -> 
     return updated
 
 
-def save_brief_picks(conn: sqlite3.Connection, game_date: str,
-                     session: str, pick_entries: list,
-                     now: datetime.datetime | None = None) -> None:
+def save_brief_picks(
+    conn: sqlite3.Connection,
+    game_date: str,
+    session: str,
+    pick_entries: list | None,
+    *,
+    avoid_entries: list | None = None,
+    now: datetime.datetime | None = None,
+) -> None:
     """Record picks shown in this brief for prior-report grading.
     pick_entries: sorted list of entry dicts from the brief builder.
-    Only records top pick (rank 1) and additional picks (ranks 2-6).
+    Records top pick (rank 1) and additional picks (ranks 2-6).
+    Also records AVOID flags for research as pick_rank=0 with signal='AVOID'
+    (does not affect betting; avoids never generate bet_ledger rows).
     Idempotent — INSERT OR IGNORE on (game_date, session, game_pk, signal).
     """
-    if not pick_entries:
-        return
     if now is None:
         now = _now_et()
     now_et = now.strftime("%Y-%m-%d %H:%M ET")
-    for rank, entry in enumerate(pick_entries[:6], start=1):
-        g = entry["game"]
-        # Use highest-priority pick for this game
-        p = sorted(entry["sigs"]["picks"], key=lambda x: x["priority"])[0]
-        signal = ", ".join(entry["sigs"]["signals"])
-        odds_raw = _parse_odds(p.get("odds", ""))
-        total_line_val = None
-        if p.get("market") == "TOTAL":
-            total_line_val = entry["game"].get("total_line")
-        try:
-            conn.execute("""
-                INSERT OR IGNORE INTO brief_picks
-                    (game_date, session, game_pk, pick_rank, signal,
-                     bet, market, odds, total_line, recorded_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?)
-            """, (game_date, session, g["game_pk"], rank, signal,
-                  p["bet"], p["market"], odds_raw, total_line_val, now_et))
-        except Exception:
-            pass
-    conn.commit()
+
+    def _avoid_fields(entry: dict) -> tuple[str, str, float | None]:
+        """
+        Return (market, bet_text, total_line) for an avoid row.
+        Keep it descriptive and robust to changing avoid_reason formats.
+        """
+        g = (entry.get("game") or {})
+        sigs = (entry.get("sigs") or {})
+        reason = (sigs.get("avoid_reason") or "").strip()
+        reason_u = reason.upper()
+        home = (g.get("home_abbr") or "").strip()
+        away = (g.get("away_abbr") or "").strip()
+        total_line = g.get("total_line")
+
+        market = "OTHER"
+        bet_text = None
+
+        if "AVOID HOME ML" in reason_u and home:
+            market = "ML"
+            bet_text = f"Avoid {home} ML"
+        elif "AVOID AWAY ML" in reason_u and away:
+            market = "ML"
+            bet_text = f"Avoid {away} ML"
+        elif ("DO NOT BET OVER" in reason_u or ("OVER" in reason_u and "DO NOT BET" in reason_u)) and total_line is not None:
+            market = "TOTAL"
+            bet_text = f"Avoid OVER {total_line}"
+        elif ("DO NOT BET UNDER" in reason_u or ("UNDER" in reason_u and "DO NOT BET" in reason_u)) and total_line is not None:
+            market = "TOTAL"
+            bet_text = f"Avoid UNDER {total_line}"
+        elif "ML" in reason_u:
+            market = "ML"
+            bet_text = f"Avoid {home} ML" if home else "Avoid ML"
+        elif "TOTAL" in reason_u or "O/U" in reason_u or "OVER" in reason_u or "UNDER" in reason_u:
+            market = "TOTAL"
+            bet_text = f"Avoid total" if total_line is None else f"Avoid total ({total_line})"
+
+        if not bet_text:
+            bet_text = ("Avoid: " + reason) if reason else "Avoid"
+
+        return market, bet_text, (float(total_line) if total_line is not None else None)
+
+    wrote_any = False
+
+    if pick_entries:
+        for rank, entry in enumerate(pick_entries[:6], start=1):
+            g = entry["game"]
+            # Use highest-priority pick for this game
+            p = sorted(entry["sigs"]["picks"], key=lambda x: x["priority"])[0]
+            signal = ", ".join(entry["sigs"]["signals"])
+            odds_raw = _parse_odds(p.get("odds", ""))
+            total_line_val = None
+            if p.get("market") == "TOTAL":
+                total_line_val = entry["game"].get("total_line")
+            try:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO brief_picks
+                        (game_date, session, game_pk, pick_rank, signal,
+                         bet, market, odds, total_line, recorded_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    (game_date, session, g["game_pk"], rank, signal, p["bet"], p["market"], odds_raw, total_line_val, now_et),
+                )
+                wrote_any = True
+            except Exception:
+                pass
+
+    if avoid_entries:
+        for entry in avoid_entries:
+            g = (entry.get("game") or {})
+            gpk = g.get("game_pk")
+            if gpk is None:
+                continue
+            market, bet_text, total_line_val = _avoid_fields(entry)
+            try:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO brief_picks
+                        (game_date, session, game_pk, pick_rank, signal,
+                         bet, market, odds, total_line, recorded_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    (game_date, session, int(gpk), 0, "AVOID", bet_text, market, None, total_line_val, now_et),
+                )
+                wrote_any = True
+            except Exception:
+                pass
+
+    if wrote_any:
+        conn.commit()
 
 
-def load_brief_picks(conn: sqlite3.Connection, game_date: str,
-                     session: str = "primary") -> list:
-    """Load confirmed picks that were shown in yesterday's primary brief.
+def load_brief_picks(
+    conn: sqlite3.Connection,
+    game_date: str,
+    session: str = "primary",
+    *,
+    include_avoids: bool = False,
+) -> list:
+    """
+    Load confirmed picks that were shown in yesterday's primary brief.
     Returns list of dicts ordered by pick_rank.
+
+    By default excludes AVOID research rows (pick_rank=0, signal='AVOID').
     """
     try:
+        avoid_clause = "" if include_avoids else " AND pick_rank > 0 "
         rows = conn.execute("""
             SELECT game_pk, pick_rank, signal, bet, market, odds
             FROM   brief_picks
             WHERE  game_date = ? AND session = ?
+              {avoid_clause}
             ORDER  BY pick_rank
-        """, (game_date, session)).fetchall()
+        """.format(avoid_clause=avoid_clause), (game_date, session)).fetchall()
         return [dict(r) for r in rows]
     except Exception:
         return []
@@ -1308,6 +1403,7 @@ def load_todays_prior_sessions(conn: sqlite3.Connection, game_date: str,
             FROM   brief_picks
             WHERE  game_date  = ?
               AND  session    IN ({placeholders})
+              AND  pick_rank  > 0
             ORDER  BY
                 CASE session
                     WHEN 'early'     THEN 1
@@ -1367,6 +1463,7 @@ def movement_alert(conn: sqlite3.Connection, game_date: str,
             FROM   brief_picks
             WHERE  game_date = ? AND game_pk = ?
               AND  session IN ({placeholders})
+              AND  pick_rank > 0
             ORDER  BY
                 CASE session
                     WHEN 'early'     THEN 1
@@ -1671,8 +1768,17 @@ def format_dollar_pnl_block(today_rows: list, season_pnl: dict,
     return "\n".join(lines)
 
 
-def log_brief(conn, game_date, session, games_covered, picks_count,
-              output_file, pick_entries=None, now: datetime.datetime | None = None):
+def log_brief(
+    conn,
+    game_date,
+    session,
+    games_covered,
+    picks_count,
+    output_file,
+    pick_entries=None,
+    avoid_entries=None,
+    now: datetime.datetime | None = None,
+):
     if now is None:
         now = _now_et()
     generated_at_et = now.strftime("%Y-%m-%d %H:%M ET")
@@ -1687,7 +1793,7 @@ def log_brief(conn, game_date, session, games_covered, picks_count,
         conn.commit()
         # Save confirmed picks for prior-report grading (action sessions only)
         if pick_entries is not None and session in ("primary", "early", "afternoon", "late"):
-            save_brief_picks(conn, game_date, session, pick_entries, now=now)
+            save_brief_picks(conn, game_date, session, pick_entries, avoid_entries=avoid_entries, now=now)
     except sqlite3.OperationalError:
         # Best-effort logging: don't fail the brief if another process holds a DB lock.
         try:
@@ -1854,7 +1960,7 @@ def load_starters(conn: sqlite3.Connection, game_date: str, verbose: bool) -> di
                 gp.team_id,
                 p.full_name,
                 p.era_season,
-                p.throw_hand,
+                p.throws,
                 trs.rolling_ops        AS team_rolling_ops,
                 trs.games_in_window    AS team_games_in_window
             FROM   game_probable_pitchers gp
@@ -1874,7 +1980,7 @@ def load_starters(conn: sqlite3.Connection, game_date: str, verbose: bool) -> di
             starters[r["game_pk"]][r["team_id"]] = {
                 "name":        r["full_name"],
                 "era":         r["era_season"],
-                "throw_hand":  r["throw_hand"],        # 'L', 'R', or None
+                "throws":     r["throws"],            # 'L', 'R', or None
                 "rolling_ops": r["team_rolling_ops"],  # home team rolling OPS from trs
                 "ops_window":  r["team_games_in_window"],
             }
@@ -1939,7 +2045,7 @@ def enrich_game_with_starters(game: dict, starters: dict) -> None:
     away_s = game_starters.get(away_id, {})
     home_s = game_starters.get(home_id, {})
 
-    game["away_starter_throw"] = away_s.get("throw_hand")
+    game["away_starter_throw"] = away_s.get("throws")
     game["away_starter_era"]   = away_s.get("era")
     game["away_starter_name"]  = away_s.get("name")
     game["home_rolling_ops"]   = home_s.get("rolling_ops")
@@ -2097,7 +2203,7 @@ def evaluate_signals(game: dict, streaks: dict, session: str) -> dict:
     # built largely vs RHP and fails to adjust for LHP platoon disadvantage.
     # Independent of MV-F — wind-in and strong LHP co-occur too rarely to stack.
     # Monitoring: half-stake until N ≥ 50 live fires. Sep excluded.
-    # Data requirements: starter throw_hand and home team rolling_ops
+    # Data requirements: starter throws and home team rolling_ops
     # must both be available — graceful skip if either is missing.
     nf4_fired = False
     if (home_impl is not None
@@ -4431,22 +4537,27 @@ def main():
         # Build pick_entries for action sessions so they can be saved
         # to brief_picks for confirmed prior-report grading.
         pick_entries_for_log = None
+        avoid_entries_for_log = None
         if session in ("primary", "early", "afternoon", "late"):
             all_sig = []
+            all_avoid = []
             for g in games:
                 enrich_game_with_starters(g, starters)
                 sigs = evaluate_signals(g, streaks, session)
                 if sigs["picks"]:
                     all_sig.append({"game": g, "sigs": sigs})
+                elif sigs.get("avoid"):
+                    all_avoid.append({"game": g, "sigs": sigs})
             all_sig.sort(key=lambda e: min(p["priority"]
                                           for p in e["sigs"]["picks"]))
             pick_entries_for_log = all_sig
+            avoid_entries_for_log = all_avoid
         picks_count = 0
         for g in games:
             enrich_game_with_starters(g, starters)
             picks_count += len(evaluate_signals(g, streaks, session)["picks"])
         log_brief(conn, today, session, len(games), picks_count,
-                  output_file, pick_entries=pick_entries_for_log, now=now)
+                  output_file, pick_entries=pick_entries_for_log, avoid_entries=avoid_entries_for_log, now=now)
         if args.verbose:
             print(f"  [verbose] brief_log entry written: {today} / {session} / {picks_count} picks")
 
