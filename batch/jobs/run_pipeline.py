@@ -8,6 +8,7 @@ Polls pipeline_jobs and runs due jobs (single-threaded) in scheduled_time order.
 
 CHANGE LOG (latest first)
 ────────────────────────
+2026-04-16  Read-only --status: print pending / running / failed jobs + last 10 runs.
 2026-04-16  Duplicate execution guard: claim via UPDATE … WHERE status='pending'
             (rowcount check); skip if another worker already claimed the job.
 2026-04-16  Running timeout: jobs left in running > N minutes → status timeout + run row
@@ -959,8 +960,150 @@ def run_loop(
     con.close()
 
 
+def _fmt_row(widths: list[int], cells: list[str]) -> str:
+    parts = []
+    for w, c in zip(widths, cells):
+        parts.append((c or "")[: w].ljust(w))
+    return "  ".join(parts)
+
+
+def print_pipeline_status(db_path: str) -> None:
+    """
+    Read-only snapshot: pending / running / failed jobs and last 10 pipeline_job_runs.
+    """
+    con = db_connect(db_path, timeout=30)
+    con.row_factory = sqlite3.Row
+
+    pj = _table_columns(con, "pipeline_jobs")
+    pr = _table_columns(con, "pipeline_job_runs")
+
+    print()
+    print("═" * 76)
+    print("  PIPELINE STATUS  (read-only)")
+    print("═" * 76)
+    print(f"  Database: {db_path}")
+    print()
+
+    if not pj:
+        print("  pipeline_jobs: (table missing)")
+        con.close()
+        return
+
+    sched = "scheduled_time_et" if "scheduled_time_et" in pj else "scheduled_time" if "scheduled_time" in pj else None
+    sched_sel = f", {sched}" if sched else ""
+
+    def _print_job_block(title: str, where_sql: str, params: tuple = ()) -> None:
+        try:
+            cur = con.execute(
+                f"""
+                SELECT job_id, job_type, job_date_et, status, game_group_id
+                       {sched_sel}
+                FROM pipeline_jobs
+                WHERE {where_sql}
+                ORDER BY job_id
+                """,
+                params,
+            )
+            rows = [dict(r) for r in cur.fetchall()]
+        except Exception as exc:
+            print(f"  [{title}] query error: {exc}")
+            print()
+            return
+
+        print(f"── {title}  ({len(rows)}) " + "─" * max(0, 60 - len(title)))
+        if not rows:
+            print("  (none)")
+            print()
+            return
+
+        headers = ["job_id", "job_type", "job_date_et", "status", "group", "scheduled"]
+        sc = sched or ""
+        widths = [8, 18, 12, 10, 6, 22]
+        print(_fmt_row(widths, headers))
+        print("  " + "-" * 72)
+        for r in rows:
+            line = [
+                str(r.get("job_id", "")),
+                str(r.get("job_type", "")),
+                str(r.get("job_date_et", "")),
+                str(r.get("status", "")),
+                str(r.get("game_group_id", "")),
+                str(r.get(sc, "")) if sc else "",
+            ]
+            print(_fmt_row(widths, line))
+        print()
+
+    _print_job_block("Pending jobs", "status = 'pending'")
+    _print_job_block("Running jobs", "status = 'running'")
+    _print_job_block("Failed & timeout jobs", "status IN ('failed','timeout')")
+
+    # Last 10 runs
+    print("── Last 10 job runs " + "─" * 52)
+    if not pr or "run_id" not in pr:
+        print("  pipeline_job_runs: (table missing or empty schema)")
+        print()
+        con.close()
+        return
+
+    order_by = "run_id DESC"
+    try:
+        cur = con.execute(
+            f"""
+            SELECT run_id, job_id, job_type, status, started_at_utc, finished_at_utc,
+                   duration_seconds, substr(COALESCE(error_message,''),1,48) AS err48
+            FROM pipeline_job_runs
+            ORDER BY {order_by}
+            LIMIT 10
+            """
+        )
+        rrows = cur.fetchall()
+    except Exception as exc:
+        print(f"  query error: {exc}")
+        print()
+        con.close()
+        return
+
+    if not rrows:
+        print("  (none)")
+        print()
+        con.close()
+        return
+
+    hdr = ["run_id", "job_id", "type", "status", "started_utc", "finished_utc", "sec", "error (trunc)"]
+    w = [7, 8, 14, 10, 21, 21, 6, 50]
+    print(_fmt_row(w, hdr))
+    print("  " + "-" * 72)
+    for r in rrows:
+        d = dict(r)
+        print(
+            _fmt_row(
+                w,
+                [
+                    str(d.get("run_id", "")),
+                    str(d.get("job_id", "")),
+                    str(d.get("job_type", "")),
+                    str(d.get("status", "")),
+                    str(d.get("started_at_utc", "")),
+                    str(d.get("finished_at_utc", "")),
+                    "" if d.get("duration_seconds") is None else f"{float(d['duration_seconds']):.1f}",
+                    str(d.get("err48", "")),
+                ],
+            )
+        )
+    print()
+    print("═" * 76)
+    print()
+
+    con.close()
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description="Run due pipeline_jobs in scheduled order (single-threaded).")
+    p.add_argument(
+        "--status",
+        action="store_true",
+        help="Print pending/running/failed jobs and last 10 runs, then exit (read-only)",
+    )
     p.add_argument("--db", default=None, help="Path to mlb_stats.db (defaults to core.db.connection.get_db_path())")
     p.add_argument("--once", action="store_true", help="Run one polling pass then exit")
     p.add_argument("--ghost", action="store_true", help="Print what would run; do not execute or update DB")
@@ -980,6 +1123,10 @@ def main() -> None:
     args = p.parse_args()
 
     db_path = str(Path(args.db).resolve()) if args.db else str(Path(get_db_path()).resolve())
+    if args.status:
+        print_pipeline_status(db_path)
+        return
+
     run_loop(
         db_path=db_path,
         once=bool(args.once),
