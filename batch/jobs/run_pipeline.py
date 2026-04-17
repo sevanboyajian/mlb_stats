@@ -1176,7 +1176,7 @@ def main() -> None:
     )
     p.add_argument("--once", action="store_true", help="Run one polling pass then exit")
     p.add_argument("--ghost", action="store_true", help="Print what would run; do not execute or update DB")
-    p.add_argument("--poll-seconds", type=int, default=20, help="Polling interval when looping (default 20)")
+    p.add_argument("--poll-seconds", type=int, default=60, help="Polling interval when looping (default 60)")
     p.add_argument(
         "--stale-minutes",
         type=int,
