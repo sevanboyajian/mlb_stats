@@ -872,12 +872,14 @@ def save_signal_state(conn: sqlite3.Connection, game_date: str, session: str,
     if top_entry is not None:
         g = (top_entry.get("game") or {})
         market_type, bet, odds = _best_pick_fields(top_entry)
-        rows.append((game_date, g.get("game_pk"), market_type, "top", bet, odds, session, recorded_at))
+        if market_type is not None:
+            rows.append((game_date, g.get("game_pk"), market_type, "top", bet, odds, session, recorded_at))
 
     for ne in (next_entries or []):
         g = (ne.get("game") or {})
         market_type, bet, odds = _best_pick_fields(ne)
-        rows.append((game_date, g.get("game_pk"), market_type, "next", bet, odds, session, recorded_at))
+        if market_type is not None:
+            rows.append((game_date, g.get("game_pk"), market_type, "next", bet, odds, session, recorded_at))
 
     for e in (avoid_entries or []):
         g = (e.get("game") or {})
@@ -932,11 +934,14 @@ def generate_bets_from_signal_state(conn: sqlite3.Connection, game_date: str,
     def _parse_recorded_at_et(s: str | None) -> datetime.datetime | None:
         if not s:
             return None
-        try:
-            dt = datetime.datetime.strptime(str(s).strip(), "%Y-%m-%d %H:%M ET")
-            return dt.replace(tzinfo=_ET)
-        except Exception:
-            return None
+        raw = str(s).strip()
+        for fmt in ("%Y-%m-%d %H:%M ET", "%Y-%m-%d %I:%M %p ET"):
+            try:
+                parsed = datetime.datetime.strptime(raw, fmt)
+                return parsed.replace(tzinfo=_ET)
+            except Exception:
+                continue
+        return None
 
     try:
         ensure_bet_ledger(conn)
@@ -1002,7 +1007,11 @@ def generate_bets_from_signal_state(conn: sqlite3.Connection, game_date: str,
             continue
 
         rec_dt = _parse_recorded_at_et(r["recorded_at"])
-        if rec_dt is None or rec_dt >= now_et:
+        if rec_dt is None:
+            continue
+        # recorded_at is minute-precision; allow same wall minute as now (exclude only
+        # genuinely future timestamps, e.g. clock skew).
+        if rec_dt > now_et:
             continue
 
         key = (int(gpk), str(mt))
@@ -4560,6 +4569,20 @@ def main():
                   output_file, pick_entries=pick_entries_for_log, avoid_entries=avoid_entries_for_log, now=now)
         if args.verbose:
             print(f"  [verbose] brief_log entry written: {today} / {session} / {picks_count} picks")
+
+        # Materialize bet_ledger from signal_state inside the 30-minute pregame window.
+        if session != "prior":
+            try:
+                n_bets = generate_bets_from_signal_state(conn, today, now=now)
+                if n_bets:
+                    print(f"  ✓ bet_ledger: inserted {n_bets} row(s) from signal_state (pregame window).")
+                elif args.verbose:
+                    print(
+                        "  [verbose] bet_ledger: no new rows "
+                        "(outside 30m window, duplicate game_pk+market_type, or no top/next signals)."
+                    )
+            except Exception as e:
+                print(f"  ⚠  bet_ledger sync failed (non-fatal): {e}")
 
     conn.close()
     print(f"\n  Done.\n")

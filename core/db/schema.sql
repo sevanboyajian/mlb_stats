@@ -895,6 +895,28 @@ CREATE TABLE IF NOT EXISTS brief_picks (
 
 
 -- ------------------------------------------------------------
+-- PLANNED (not created yet): game_signal_log
+-- ------------------------------------------------------------
+-- One row per game per session when the Fully Dressed / scoring function ran.
+-- Stores which cell of the tier matrix applied and which signals fired — supports
+-- post-season debugging ("why did this game show Tier 1?") and backtests without
+-- re-running enrichment. Uncomment and adjust when ready to ship.
+--
+-- Proposed shape:
+--   game_pk           INTEGER NOT NULL REFERENCES games (game_pk)
+--   session           TEXT    NOT NULL   -- brief session key (primary / early / …)
+--   output_tier       TEXT               -- Tier1 | Tier2 | Tier3 | Avoid | NULL
+--   tier_basis        TEXT               -- human-readable tier driver
+--   signals_fired     TEXT               -- JSON: fired signals + metadata
+--   env_ceiling       TEXT               -- from GameEnvironment at scoring time
+--   completeness_tier TEXT               -- from DataCompleteness at scoring time
+--   computed_at       TEXT    NOT NULL   -- ISO / ET stamp when scoring ran
+--
+-- Index ideas: (game_pk), (session, computed_at). Unique key TBD: either one row
+-- per (game_pk, session) overwrite, or append-only with (game_pk, session, computed_at).
+
+
+-- ------------------------------------------------------------
 -- pipeline_jobs
 -- Scheduler queue for pipeline work (odds pulls, briefs, weather, etc.).
 -- One row per job instance. Designed to be filled by a separate scheduler.

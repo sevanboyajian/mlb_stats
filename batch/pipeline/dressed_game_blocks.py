@@ -1,6 +1,10 @@
 """
 Blocks 3–6 — matchup, market, data completeness, decision shell (Fully Dressed Game).
 Read-only DB access. Intended for briefs / signal design alongside fully_dressed_game.py.
+
+DB access for ``dress_full_game_row`` is batched: one ``sqlite_master`` probe for optional
+tables, then at most four data queries (odds, probable starters, team rolling stats, batched
+prior pitcher lines). No per-field ``execute`` loops.
 """
 
 from __future__ import annotations
@@ -36,6 +40,24 @@ SIGNAL_STRENGTH: dict[str, str] = {
 }
 
 _BOOK_PRIORITY = ("draftkings", "fanduel", "betmgm", "pinnacle", "caesars")
+
+_OPTIONAL_TABLES = (
+    "game_probable_pitchers",
+    "player_game_stats",
+    "team_rolling_stats",
+    "game_odds",
+)
+
+
+@dataclass(frozen=True)
+class DressingBundle:
+    """One fetch pass for matchup + market inputs (see ``fetch_dressing_bundle``)."""
+
+    tables_present: frozenset[str]
+    odds_rows: list[dict[str, Any]]
+    starter_rows: list[dict[str, Any]]
+    team_rolling_rows: list[dict[str, Any]]
+    pitcher_prior_rows: list[dict[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -147,12 +169,99 @@ class FullyDressedGame:
     stake_multiplier: float = 1.0
 
 
-def _table_exists(con: sqlite3.Connection, name: str) -> bool:
-    r = con.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
-        (name,),
-    ).fetchone()
-    return r is not None
+def _optional_tables_present(con: sqlite3.Connection) -> frozenset[str]:
+    ph = ",".join("?" * len(_OPTIONAL_TABLES))
+    cur = con.execute(
+        f"SELECT name FROM sqlite_master WHERE type='table' AND name IN ({ph})",
+        _OPTIONAL_TABLES,
+    )
+    return frozenset(str(r[0]) for r in cur.fetchall())
+
+
+def fetch_dressing_bundle(con: sqlite3.Connection, game_pk: int, game_date_et: str) -> DressingBundle:
+    """
+    Single batched read for matchup + market raw rows (5 DB round-trips max:
+    sqlite_master probe + odds + starters + team_rolling + batched pitcher history).
+    """
+    tabs = _optional_tables_present(con)
+    odds_rows: list[dict[str, Any]] = []
+    starter_rows: list[dict[str, Any]] = []
+    trs_rows: list[dict[str, Any]] = []
+    pgs_rows: list[dict[str, Any]] = []
+
+    if "game_odds" in tabs:
+        cur = con.execute(
+            """
+            SELECT bookmaker, market_type, home_ml, away_ml, total_line,
+                   over_odds, under_odds, captured_at_utc,
+                   is_opening_line, is_closing_line
+            FROM game_odds
+            WHERE game_pk = ?
+              AND market_type IN ('moneyline', 'total')
+            ORDER BY bookmaker, market_type, captured_at_utc
+            """,
+            (game_pk,),
+        )
+        odds_rows = [dict(r) for r in cur.fetchall()]
+
+    if "game_probable_pitchers" in tabs:
+        cur = con.execute(
+            """
+            SELECT gp.team_id AS team_id, gp.player_id AS player_id,
+                   p.full_name AS full_name, p.throws AS throws, p.era_season AS era_season
+            FROM game_probable_pitchers gp
+            JOIN players p ON p.player_id = gp.player_id
+            WHERE gp.game_pk = ?
+            """,
+            (game_pk,),
+        )
+        starter_rows = [dict(r) for r in cur.fetchall()]
+
+    if "team_rolling_stats" in tabs:
+        cur = con.execute(
+            """
+            SELECT team_id, games_in_window, rolling_ops, rolling_ops_home, rolling_ops_road,
+                   rolling_runs_scored_pg, rolling_k_pct, rolling_iso, rolling_hr_pg
+            FROM team_rolling_stats
+            WHERE game_pk = ?
+            """,
+            (game_pk,),
+        )
+        trs_rows = [dict(r) for r in cur.fetchall()]
+
+    pids = sorted({int(r["player_id"]) for r in starter_rows})
+    if pids and "player_game_stats" in tabs:
+        ph = ",".join("?" * len(pids))
+        cur = con.execute(
+            f"""
+            SELECT pgs.player_id AS player_id,
+                   pgs.innings_pitched AS ip,
+                   pgs.earned_runs AS er,
+                   g.game_date AS gd,
+                   g.game_pk AS gpk
+            FROM player_game_stats pgs
+            JOIN games g ON g.game_pk = pgs.game_pk
+            WHERE pgs.player_id IN ({ph})
+              AND pgs.player_role = 'pitcher'
+              AND g.status = 'Final'
+              AND g.game_type = 'R'
+              AND (
+                    g.game_date < ?
+                 OR (g.game_date = ? AND g.game_pk < ?)
+              )
+            ORDER BY pgs.player_id, g.game_date DESC, g.game_pk DESC
+            """,
+            (*pids, game_date_et, game_date_et, game_pk),
+        )
+        pgs_rows = [dict(r) for r in cur.fetchall()]
+
+    return DressingBundle(
+        tables_present=tabs,
+        odds_rows=odds_rows,
+        starter_rows=starter_rows,
+        team_rolling_rows=trs_rows,
+        pitcher_prior_rows=pgs_rows,
+    )
 
 
 def _parse_utc(ts: str | None) -> dt.datetime | None:
@@ -232,34 +341,18 @@ def _quality_tier_from_era(era: float | None, era_confidence: str) -> str | None
     return "middle"
 
 
-def _rolling_starts_era(
-    con: sqlite3.Connection,
+def _rolling_starts_era_from_rows(
+    all_rows: list[dict[str, Any]],
     player_id: int,
-    before_date: str,
-    before_game_pk: int,
     min_ip: float = 3.0,
     max_starts: int = 5,
 ) -> tuple[float | None, int]:
     """
-    Last up to `max_starts` prior appearances with IP >= min_ip (proxy for starts).
-    ERA = 9 * ER / IP across those rows.
+    Last up to ``max_starts`` prior appearances with IP >= min_ip from a pre-fetched
+    pitcher line list (already filtered to games before the target game).
     """
-    rows = con.execute(
-        """
-        SELECT pgs.innings_pitched AS ip, pgs.earned_runs AS er,
-               g.game_date AS gd, g.game_pk AS gpk
-        FROM player_game_stats pgs
-        JOIN games g ON g.game_pk = pgs.game_pk
-        WHERE pgs.player_id = ?
-          AND pgs.player_role = 'pitcher'
-          AND g.status = 'Final'
-          AND g.game_type = 'R'
-          AND (g.game_date < ? OR (g.game_date = ? AND g.game_pk < ?))
-        ORDER BY g.game_date DESC, g.game_pk DESC
-        """,
-        (player_id, before_date, before_date, before_game_pk),
-    ).fetchall()
-
+    rows = [r for r in all_rows if int(r["player_id"]) == int(player_id)]
+    rows.sort(key=lambda r: (str(r["gd"]), int(r["gpk"])), reverse=True)
     starts: list[tuple[float, int]] = []
     for r in rows:
         ip = float(r["ip"] or 0.0)
@@ -268,7 +361,6 @@ def _rolling_starts_era(
             starts.append((ip, er))
         if len(starts) >= max_starts:
             break
-
     if not starts:
         return None, 0
     t_ip = sum(x[0] for x in starts)
@@ -278,64 +370,38 @@ def _rolling_starts_era(
     return round(9.0 * t_er / t_ip, 3), len(starts)
 
 
-def _build_pitcher_profile(
-    con: sqlite3.Connection,
-    game_pk: int,
-    team_id: int,
-    game_date_et: str,
-    gpp_ok: bool,
+def _pitcher_profile_missing() -> PitcherProfile:
+    return PitcherProfile(
+        player_id=None,
+        name=None,
+        hand=None,
+        hand_confirmed=False,
+        era_rolling=None,
+        era_rolling_n=0,
+        era_season=None,
+        era_quality=None,
+        era_source="missing",
+        era_confidence="none",
+        quality_tier=None,
+    )
+
+
+def _pitcher_profile_from_starter_row(
+    starter_row: dict[str, Any] | None,
+    era_roll: tuple[float | None, int],
 ) -> PitcherProfile:
-    if not gpp_ok:
-        return PitcherProfile(
-            player_id=None,
-            name=None,
-            hand=None,
-            hand_confirmed=False,
-            era_rolling=None,
-            era_rolling_n=0,
-            era_season=None,
-            era_quality=None,
-            era_source="missing",
-            era_confidence="none",
-            quality_tier=None,
-        )
+    if starter_row is None:
+        return _pitcher_profile_missing()
 
-    row = con.execute(
-        """
-        SELECT gp.player_id, p.full_name, p.throws, p.era_season
-        FROM game_probable_pitchers gp
-        JOIN players p ON p.player_id = gp.player_id
-        WHERE gp.game_pk = ? AND gp.team_id = ?
-        """,
-        (game_pk, team_id),
-    ).fetchone()
-
-    if not row:
-        return PitcherProfile(
-            player_id=None,
-            name=None,
-            hand=None,
-            hand_confirmed=False,
-            era_rolling=None,
-            era_rolling_n=0,
-            era_season=None,
-            era_quality=None,
-            era_source="missing",
-            era_confidence="none",
-            quality_tier=None,
-        )
-
-    pid = int(row["player_id"])
-    name = str(row["full_name"]) if row["full_name"] else None
-    throws = row["throws"]
+    pid = int(starter_row["player_id"])
+    name = str(starter_row["full_name"]) if starter_row.get("full_name") else None
+    throws = starter_row.get("throws")
     hand = str(throws).strip().upper() if throws else None
     hand_confirmed = bool(hand)
-    era_season = float(row["era_season"]) if row["era_season"] is not None else None
-
-    era_r: float | None = None
-    n_r = 0
-    if _table_exists(con, "player_game_stats"):
-        era_r, n_r = _rolling_starts_era(con, pid, game_date_et, game_pk)
+    era_season = (
+        float(starter_row["era_season"]) if starter_row.get("era_season") is not None else None
+    )
+    era_r, n_r = era_roll
 
     era_quality: float | None = None
     era_source = "missing"
@@ -381,46 +447,29 @@ def _ops_confidence(games_in_window: int) -> str:
     return "none"
 
 
-def _build_team_offense(con: sqlite3.Connection, game_pk: int, team_id: int) -> TeamOffenseProfile:
-    if not _table_exists(con, "team_rolling_stats"):
-        return TeamOffenseProfile(
-            team_id=team_id,
-            rolling_ops=None,
-            rolling_ops_home=None,
-            rolling_ops_road=None,
-            rolling_runs_pg=None,
-            rolling_k_pct=None,
-            rolling_iso=None,
-            rolling_hr_pg=None,
-            games_in_window=0,
-            ops_confidence="none",
-            stats_valid=False,
-        )
+def _team_offense_empty(team_id: int) -> TeamOffenseProfile:
+    return TeamOffenseProfile(
+        team_id=team_id,
+        rolling_ops=None,
+        rolling_ops_home=None,
+        rolling_ops_road=None,
+        rolling_runs_pg=None,
+        rolling_k_pct=None,
+        rolling_iso=None,
+        rolling_hr_pg=None,
+        games_in_window=0,
+        ops_confidence="none",
+        stats_valid=False,
+    )
 
-    row = con.execute(
-        """
-        SELECT games_in_window, rolling_ops, rolling_ops_home, rolling_ops_road,
-               rolling_runs_scored_pg, rolling_k_pct, rolling_iso, rolling_hr_pg
-        FROM team_rolling_stats
-        WHERE game_pk = ? AND team_id = ?
-        """,
-        (game_pk, team_id),
-    ).fetchone()
 
+def _build_team_offense_from_rows(
+    trs_rows: list[dict[str, Any]],
+    team_id: int,
+) -> TeamOffenseProfile:
+    row = next((r for r in trs_rows if int(r["team_id"]) == int(team_id)), None)
     if not row:
-        return TeamOffenseProfile(
-            team_id=team_id,
-            rolling_ops=None,
-            rolling_ops_home=None,
-            rolling_ops_road=None,
-            rolling_runs_pg=None,
-            rolling_k_pct=None,
-            rolling_iso=None,
-            rolling_hr_pg=None,
-            games_in_window=0,
-            ops_confidence="none",
-            stats_valid=False,
-        )
+        return _team_offense_empty(team_id)
 
     giw = int(row["games_in_window"] or 0)
     oc = _ops_confidence(giw)
@@ -444,15 +493,40 @@ def _build_team_offense(con: sqlite3.Connection, game_pk: int, team_id: int) -> 
     )
 
 
-def _pick_book(con: sqlite3.Connection, game_pk: int) -> str | None:
-    rows = con.execute(
-        """
-        SELECT DISTINCT bookmaker FROM game_odds
-        WHERE game_pk = ? AND market_type = 'moneyline'
-        """,
-        (game_pk,),
-    ).fetchall()
-    books = {str(r["bookmaker"]).lower() for r in rows}
+def _empty_market_snapshot() -> MarketSnapshot:
+    return MarketSnapshot(
+        home_ml_open=None,
+        home_ml_current=None,
+        home_ml_close=None,
+        away_ml_open=None,
+        away_ml_current=None,
+        away_ml_close=None,
+        home_impl=None,
+        away_impl=None,
+        home_impl_open=None,
+        away_impl_open=None,
+        clv_away_delta=None,
+        clv_available=False,
+        total_open=None,
+        total_current=None,
+        total_close=None,
+        over_odds=None,
+        under_odds=None,
+        home_in_fade_band=False,
+        home_in_heavy_band=False,
+        home_is_dog=False,
+        odds_source="none",
+        odds_age_minutes=None,
+        market_confidence="none",
+    )
+
+
+def _pick_book_from_odds_rows(odds_rows: list[dict[str, Any]]) -> str | None:
+    books = {
+        str(r["bookmaker"]).lower()
+        for r in odds_rows
+        if str(r.get("market_type") or "") == "moneyline"
+    }
     for b in _BOOK_PRIORITY:
         if b in books:
             return b
@@ -461,23 +535,12 @@ def _pick_book(con: sqlite3.Connection, game_pk: int) -> str | None:
     return None
 
 
-def _ml_snapshots_for_book(
-    con: sqlite3.Connection,
-    game_pk: int,
-    book: str,
+def _ml_snapshots_from_book_rows(
+    ml_rows: list[dict[str, Any]],
     game_start_utc: str | None,
 ) -> dict[str, Any]:
     gs = _parse_utc(game_start_utc)
-    cur = con.execute(
-        """
-        SELECT home_ml, away_ml, captured_at_utc, is_opening_line, is_closing_line
-        FROM game_odds
-        WHERE game_pk = ? AND market_type = 'moneyline' AND bookmaker = ?
-        ORDER BY captured_at_utc ASC
-        """,
-        (game_pk, book),
-    )
-    rows = [dict(r) for r in cur.fetchall()]
+    rows = sorted(ml_rows, key=lambda r: str(r["captured_at_utc"]))
 
     home_open = away_open = None
     for r in rows:
@@ -496,7 +559,11 @@ def _ml_snapshots_for_book(
     home_cur = away_cur = None
     cap_cur: str | None = None
     if gs and rows:
-        pre = [r for r in rows if _parse_utc(r["captured_at_utc"]) and _parse_utc(r["captured_at_utc"]) <= gs]
+        pre = [
+            r
+            for r in rows
+            if _parse_utc(r["captured_at_utc"]) and _parse_utc(r["captured_at_utc"]) <= gs
+        ]
         if pre:
             last = pre[-1]
             home_cur = last["home_ml"]
@@ -519,24 +586,12 @@ def _ml_snapshots_for_book(
     }
 
 
-def _total_snapshots_for_book(
-    con: sqlite3.Connection,
-    game_pk: int,
-    book: str,
+def _total_snapshots_from_book_rows(
+    tt_rows: list[dict[str, Any]],
     game_start_utc: str | None,
 ) -> dict[str, Any]:
     gs = _parse_utc(game_start_utc)
-    cur = con.execute(
-        """
-        SELECT total_line, over_odds, under_odds, captured_at_utc,
-               is_opening_line, is_closing_line
-        FROM game_odds
-        WHERE game_pk = ? AND market_type = 'total' AND bookmaker = ?
-        ORDER BY captured_at_utc ASC
-        """,
-        (game_pk, book),
-    )
-    rows = [dict(r) for r in cur.fetchall()]
+    rows = sorted(tt_rows, key=lambda r: str(r["captured_at_utc"]))
 
     total_open = total_close = None
     for r in rows:
@@ -550,7 +605,11 @@ def _total_snapshots_for_book(
 
     tot_cur = over_o = under_o = None
     if gs and rows:
-        pre = [r for r in rows if _parse_utc(r["captured_at_utc"]) and _parse_utc(r["captured_at_utc"]) <= gs]
+        pre = [
+            r
+            for r in rows
+            if _parse_utc(r["captured_at_utc"]) and _parse_utc(r["captured_at_utc"]) <= gs
+        ]
         if pre:
             last = pre[-1]
             tot_cur = last["total_line"]
@@ -571,43 +630,25 @@ def _total_snapshots_for_book(
     }
 
 
-def build_market_snapshot(
-    con: sqlite3.Connection,
-    game_pk: int,
+def build_market_snapshot_from_odds_rows(
+    odds_rows: list[dict[str, Any]],
     game_start_utc: str | None,
     now_utc: dt.datetime | None = None,
 ) -> MarketSnapshot:
+    """Build ``MarketSnapshot`` from a pre-fetched ``game_odds`` row list (no DB)."""
     now = now_utc or dt.datetime.now(dt.timezone.utc)
-    book = _pick_book(con, game_pk)
-    if not book or not _table_exists(con, "game_odds"):
-        return MarketSnapshot(
-            home_ml_open=None,
-            home_ml_current=None,
-            home_ml_close=None,
-            away_ml_open=None,
-            away_ml_current=None,
-            away_ml_close=None,
-            home_impl=None,
-            away_impl=None,
-            home_impl_open=None,
-            away_impl_open=None,
-            clv_away_delta=None,
-            clv_available=False,
-            total_open=None,
-            total_current=None,
-            total_close=None,
-            over_odds=None,
-            under_odds=None,
-            home_in_fade_band=False,
-            home_in_heavy_band=False,
-            home_is_dog=False,
-            odds_source="none",
-            odds_age_minutes=None,
-            market_confidence="none",
-        )
+    book = _pick_book_from_odds_rows(odds_rows)
+    if not book:
+        return _empty_market_snapshot()
 
-    ml = _ml_snapshots_for_book(con, game_pk, book, game_start_utc)
-    tt = _total_snapshots_for_book(con, game_pk, book, game_start_utc)
+    b = book.lower()
+    ml_rows = [r for r in odds_rows if r["market_type"] == "moneyline" and str(r["bookmaker"]).lower() == b]
+    tt_rows = [r for r in odds_rows if r["market_type"] == "total" and str(r["bookmaker"]).lower() == b]
+    if not ml_rows:
+        return _empty_market_snapshot()
+
+    ml = _ml_snapshots_from_book_rows(ml_rows, game_start_utc)
+    tt = _total_snapshots_from_book_rows(tt_rows, game_start_utc)
 
     h_cur = ml["home_current"]
     a_cur = ml["away_current"]
@@ -642,18 +683,13 @@ def build_market_snapshot(
     else:
         mconf = "low"
 
-    only_close = False
     gs = _parse_utc(game_start_utc)
     cap2 = _parse_utc(ml["captured_current"])
     if gs and cap2 and cap2 > gs:
-        only_close = True
-    if only_close:
         mconf = "low"
 
     hml = int(h_cur) if h_cur is not None else None
-    in_fade = (
-        hml is not None and HOME_FAV_MV_F_HIGH <= hml <= HOME_FAV_MV_F_LOW
-    )
+    in_fade = hml is not None and HOME_FAV_MV_F_HIGH <= hml <= HOME_FAV_MV_F_LOW
     in_heavy = hi is not None and 0.60 <= hi <= 0.67
     is_dog = hi is not None and hi <= 0.42
 
@@ -682,6 +718,32 @@ def build_market_snapshot(
         odds_age_minutes=age_min,
         market_confidence=mconf,
     )
+
+
+def build_market_snapshot(
+    con: sqlite3.Connection,
+    game_pk: int,
+    game_start_utc: str | None,
+    now_utc: dt.datetime | None = None,
+) -> MarketSnapshot:
+    """Single ``game_odds`` SELECT, then in-memory market build (standalone helper)."""
+    try:
+        cur = con.execute(
+            """
+            SELECT bookmaker, market_type, home_ml, away_ml, total_line,
+                   over_odds, under_odds, captured_at_utc,
+                   is_opening_line, is_closing_line
+            FROM game_odds
+            WHERE game_pk = ?
+              AND market_type IN ('moneyline', 'total')
+            ORDER BY bookmaker, market_type, captured_at_utc
+            """,
+            (game_pk,),
+        )
+        odds_rows = [dict(r) for r in cur.fetchall()]
+    except sqlite3.OperationalError:
+        return _empty_market_snapshot()
+    return build_market_snapshot_from_odds_rows(odds_rows, game_start_utc, now_utc)
 
 
 def build_data_completeness(
@@ -750,13 +812,22 @@ def build_data_completeness(
 def dress_full_game_row(con: sqlite3.Connection, row: dict[str, Any]) -> FullyDressedGame:
     """Identifiers + environment (blocks 1–2) + matchup + market + completeness shell."""
     ids, env = dress_game_row(row)
-    gpk = ids.game_pk
-    gpp_ok = _table_exists(con, "game_probable_pitchers")
+    bundle = fetch_dressing_bundle(con, ids.game_pk, ids.game_date_et)
 
-    home_sp = _build_pitcher_profile(con, gpk, ids.home_team_id, ids.game_date_et, gpp_ok)
-    away_sp = _build_pitcher_profile(con, gpk, ids.away_team_id, ids.game_date_et, gpp_ok)
-    home_off = _build_team_offense(con, gpk, ids.home_team_id)
-    away_off = _build_team_offense(con, gpk, ids.away_team_id)
+    rolling: dict[int, tuple[float | None, int]] = {}
+    if bundle.pitcher_prior_rows:
+        for pid in {int(r["player_id"]) for r in bundle.starter_rows}:
+            rolling[pid] = _rolling_starts_era_from_rows(bundle.pitcher_prior_rows, pid)
+
+    home_sr = next((r for r in bundle.starter_rows if int(r["team_id"]) == ids.home_team_id), None)
+    away_sr = next((r for r in bundle.starter_rows if int(r["team_id"]) == ids.away_team_id), None)
+    home_roll = rolling.get(int(home_sr["player_id"]), (None, 0)) if home_sr else (None, 0)
+    away_roll = rolling.get(int(away_sr["player_id"]), (None, 0)) if away_sr else (None, 0)
+
+    home_sp = _pitcher_profile_from_starter_row(home_sr, home_roll)
+    away_sp = _pitcher_profile_from_starter_row(away_sr, away_roll)
+    home_off = _build_team_offense_from_rows(bundle.team_rolling_rows, ids.home_team_id)
+    away_off = _build_team_offense_from_rows(bundle.team_rolling_rows, ids.away_team_id)
 
     platoon = (
         away_sp.hand == "L"
@@ -772,7 +843,7 @@ def dress_full_game_row(con: sqlite3.Connection, row: dict[str, Any]) -> FullyDr
         home_platoon_disadvantage=platoon,
     )
 
-    market = build_market_snapshot(con, gpk, row.get("game_start_utc"))
+    market = build_market_snapshot_from_odds_rows(bundle.odds_rows, row.get("game_start_utc"))
     comp = build_data_completeness(env, matchup, market)
 
     return FullyDressedGame(
