@@ -22,14 +22,19 @@
 --
 --  TABLE ORDER (dependency safe):
 --    1. Reference     : seasons, venues, teams, players
---    2. Schedule      : games
---    3. Stats         : player_game_stats, play_by_play, standings
---    4. Odds          : game_odds, player_props, line_movement
+--    2. Schedule      : games, game_probable_pitchers
+--    3. Stats         : player_game_stats, play_by_play, standings, team_rolling_stats
+--    4. Odds          : game_odds, game_odds_f5, player_props, line_movement
 --    5. Backtesting   : model_predictions, backtest_results
---    6. Operations    : ingest_log, odds_ingest_log
+--    6. Operations    : ingest_log, odds_ingest_log, signal_state, bet_ledger,
+--                       brief_log, daily_pnl, brief_picks
+--    7. Pipeline      : pipeline_jobs, pipeline_job_runs, runner_lock
 -- ============================================================
 -- # CHANGE LOG (latest first)
 -- # -------------------------
+-- # 2026-04-17  Consolidated application DDL into this file: game_probable_pitchers,
+-- #              brief_log, daily_pnl, brief_picks, game_odds_f5, v_closing_f5_odds,
+-- #              runner_lock; columns players.era_season, games.wind_source
 -- # 2026-04-16  pipeline_jobs: started_at, completed_at, error_message, retry_count, retries
 -- # 2026-04-16  pipeline_jobs.status: add 'timeout' for runner-detected hung jobs
 -- # 2026-04-16  pipeline_job_runs: per-execution audit log; duration_seconds on finish
@@ -159,7 +164,8 @@ CREATE TABLE IF NOT EXISTS players (
     primary_position TEXT,               -- e.g. 'P', 'C', '1B', 'OF'
     debut_date      DATE,
     active          INTEGER NOT NULL DEFAULT 1,
-    last_updated    DATETIME
+    last_updated    DATETIME,
+    era_season      REAL                 -- season-to-date ERA for pitchers (ingestion / backfill)
 );
 
 
@@ -222,7 +228,10 @@ CREATE TABLE IF NOT EXISTS games (
     double_header       TEXT    CHECK (double_header IN ('N','Y','S')),
                             -- N=No, Y=Yes, S=Split doubleheader
     game_number         INTEGER NOT NULL DEFAULT 1,
-    game_date_est       DATE
+    game_date_est       DATE,
+
+    -- Retractable roof / brief logic: 'actual' = observed conditions; 'forecast' when unknown
+    wind_source         TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_games_date    ON games (game_date);
@@ -230,6 +239,24 @@ CREATE INDEX IF NOT EXISTS idx_games_season  ON games (season);
 CREATE INDEX IF NOT EXISTS idx_games_home    ON games (home_team_id, season);
 CREATE INDEX IF NOT EXISTS idx_games_away    ON games (away_team_id, season);
 CREATE INDEX IF NOT EXISTS idx_games_status  ON games (status);
+
+
+-- ------------------------------------------------------------
+-- game_probable_pitchers
+-- Probable starting pitcher per (game_pk, team_id). Populated by
+-- load_mlb_stats / backfill_starters / weather pipeline.
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS game_probable_pitchers (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_pk     INTEGER NOT NULL REFERENCES games (game_pk),
+    team_id     INTEGER NOT NULL REFERENCES teams (team_id),
+    player_id   INTEGER NOT NULL REFERENCES players (player_id),
+    fetched_at  TEXT    NOT NULL,
+    UNIQUE (game_pk, team_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_gpp_game   ON game_probable_pitchers (game_pk);
+CREATE INDEX IF NOT EXISTS idx_gpp_player ON game_probable_pitchers (player_id);
 
 
 -- ============================================================
@@ -471,6 +498,43 @@ CREATE INDEX IF NOT EXISTS idx_godds_book     ON game_odds (bookmaker);
 CREATE INDEX IF NOT EXISTS idx_godds_market   ON game_odds (market_type);
 CREATE INDEX IF NOT EXISTS idx_godds_closing  ON game_odds (game_pk, is_closing_line);
 CREATE INDEX IF NOT EXISTS idx_godds_captured ON game_odds (captured_at_utc);
+
+
+-- ------------------------------------------------------------
+-- game_odds_f5
+-- First-5-innings lines per bookmaker per game (The Odds API F5 markets).
+-- Same backtest timestamp rule as game_odds: captured_at_utc < game_start_utc.
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS game_odds_f5 (
+    id                  INTEGER PRIMARY KEY,
+    game_pk             INTEGER NOT NULL REFERENCES games (game_pk),
+    bookmaker           TEXT    NOT NULL,
+    data_source         TEXT    NOT NULL DEFAULT 'the-odds-api',
+    captured_at_utc     DATETIME NOT NULL,
+    hours_before_game   REAL,
+
+    home_f5_ml          INTEGER,
+    away_f5_ml          INTEGER,
+
+    home_f5_rl_line     REAL,
+    home_f5_rl_odds     INTEGER,
+    away_f5_rl_line     REAL,
+    away_f5_rl_odds   INTEGER,
+
+    f5_total_line       REAL,
+    f5_over_odds        INTEGER,
+    f5_under_odds       INTEGER,
+
+    is_opening_line     INTEGER NOT NULL DEFAULT 0,
+    is_closing_line     INTEGER NOT NULL DEFAULT 0,
+
+    UNIQUE (game_pk, bookmaker, captured_at_utc)
+);
+
+CREATE INDEX IF NOT EXISTS idx_f5_game     ON game_odds_f5 (game_pk);
+CREATE INDEX IF NOT EXISTS idx_f5_book     ON game_odds_f5 (bookmaker);
+CREATE INDEX IF NOT EXISTS idx_f5_closing  ON game_odds_f5 (game_pk, is_closing_line);
+CREATE INDEX IF NOT EXISTS idx_f5_captured ON game_odds_f5 (captured_at_utc);
 
 
 -- ------------------------------------------------------------
@@ -772,6 +836,64 @@ CREATE TABLE IF NOT EXISTS bet_ledger (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_bet_ledger_game_market
     ON bet_ledger (game_pk, market_type);
 
+
+-- ------------------------------------------------------------
+-- brief_log
+-- One row per daily brief generation (generate_daily_brief.py).
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS brief_log (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_date       TEXT    NOT NULL,
+    session         TEXT    NOT NULL,
+    generated_at    TEXT    NOT NULL,
+    games_covered   INTEGER,
+    picks_count     INTEGER,
+    output_file     TEXT
+);
+
+
+-- ------------------------------------------------------------
+-- daily_pnl
+-- Paper-trading ledger (per-game results for brief signals).
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS daily_pnl (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_date       TEXT    NOT NULL,
+    game_pk         INTEGER NOT NULL,
+    signal          TEXT    NOT NULL,
+    pick_tier       TEXT    NOT NULL,
+    bet             TEXT    NOT NULL,
+    market          TEXT    NOT NULL,
+    odds            INTEGER,
+    stake_dollars   REAL    NOT NULL,
+    late_season     INTEGER NOT NULL DEFAULT 0,
+    result          TEXT    NOT NULL,
+    pnl_units       REAL    NOT NULL,
+    pnl_dollars     REAL    NOT NULL,
+    recorded_at     TEXT    NOT NULL
+);
+
+
+-- ------------------------------------------------------------
+-- brief_picks
+-- Confirmed picks shown in each brief (idempotent on game_date+session+game_pk+signal).
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS brief_picks (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_date   TEXT    NOT NULL,
+    session     TEXT    NOT NULL,
+    game_pk     INTEGER NOT NULL,
+    pick_rank   INTEGER NOT NULL,
+    signal      TEXT    NOT NULL,
+    bet         TEXT    NOT NULL,
+    market      TEXT    NOT NULL,
+    odds        INTEGER,
+    total_line  REAL,
+    recorded_at TEXT    NOT NULL,
+    UNIQUE (game_date, session, game_pk, signal)
+);
+
+
 -- ------------------------------------------------------------
 -- pipeline_jobs
 -- Scheduler queue for pipeline work (odds pulls, briefs, weather, etc.).
@@ -834,6 +956,18 @@ CREATE INDEX IF NOT EXISTS idx_pipeline_job_runs_job_id
 
 CREATE INDEX IF NOT EXISTS idx_pipeline_job_runs_started
     ON pipeline_job_runs (started_at_utc);
+
+
+-- ------------------------------------------------------------
+-- runner_lock
+-- Single-row mutex for batch/jobs/run_pipeline.py (prevents concurrent runner).
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS runner_lock (
+    lock_id         INTEGER PRIMARY KEY CHECK (lock_id = 1),
+    acquired_at_utc TEXT    NOT NULL,
+    pid             INTEGER,
+    host            TEXT
+);
 
 
 -- ============================================================
@@ -902,6 +1036,32 @@ WHERE go.is_closing_line = 1
           END
       LIMIT 1
   );
+
+
+-- ------------------------------------------------------------
+-- v_closing_f5_odds
+-- Last F5 snapshot flagged as closing line per game per book (joins games).
+-- ------------------------------------------------------------
+CREATE VIEW IF NOT EXISTS v_closing_f5_odds AS
+SELECT
+    f5.game_pk,
+    g.game_date_et AS game_date,
+    g.season,
+    f5.bookmaker,
+    f5.home_f5_ml,
+    f5.away_f5_ml,
+    f5.home_f5_rl_line,
+    f5.home_f5_rl_odds,
+    f5.away_f5_rl_line,
+    f5.away_f5_rl_odds,
+    f5.f5_total_line,
+    f5.f5_over_odds,
+    f5.f5_under_odds,
+    f5.captured_at_utc,
+    f5.hours_before_game
+FROM  game_odds_f5 f5
+JOIN  games g ON g.game_pk = f5.game_pk
+WHERE f5.is_closing_line = 1;
 
 
 -- ------------------------------------------------------------
