@@ -6,6 +6,11 @@ Reads from mlb_stats.db and outputs the formatted betting brief.
 
 CHANGE LOG (latest first)
 ──────────────────────────
+2026-04-16  Finding 5 validated: NF4 implied prob gate confirmed as 60–67%.
+            55–60% band shows only 5.5pp edge (not significant). Gate constants
+            unchanged (already 0.60/0.67). Comments, signal reason, and constant
+            block updated to document the band validation and independence from
+            MV-F (wind-in + strong LHP co-occur too rarely to stack).
 2026-04-16  NF4 signal added — Home Fav vs Strong LHP. Monitoring status,
             half-stake. Constants: NF4_HOME_IMP_LOW/HIGH, NF4_SP_ERA_MAX,
             NF4_OPS_MIN, NF4_MONTHS_OK. load_starters() extended to pull
@@ -330,18 +335,24 @@ STREAK_THRESHOLD   = 5      # W5+  — used by S1+H2 stack
 S1_STANDALONE_MIN  = 6      # standalone S1 requires W6+
 S6_WIN_STREAK_MIN  = 7      # S6 pitcher fade threshold (backtest: +25% ROI, 7/8 seasons positive)
 
-# ── Finding 4: Home Fav vs Strong LHP (NF4) ──────────────────────────────
-# 2025 full-season regression (n=4,856 enriched game rows):
-# Home teams priced 60–67% implied against a strong LHP (rolling 5-start
-# ERA ≤ 3.04) with high rolling OPS (≥ 0.736) win only 36.4% of games
-# while priced at 62.6% implied. Edge = +26.2pp, z = −3.11, p<.01.
+# ── Finding 4 / Finding 5: Home Fav vs Strong LHP (NF4) ─────────────────
+# 2025 full-season regression (n=4,856 enriched game rows).
+# Finding 4: high-OPS home teams (rolling OPS ≥ 0.736) vs strong LHP
+#   (rolling 5-start ERA ≤ 3.04) win only 36.4% while priced at 62.6%.
+#   Edge = +26.2pp, z = −3.11, p<.01.
+# Finding 5 (band validation): the 60–67% implied band is where the signal
+#   lives. z = −3.33, p<.01, n=34, win 35.3% vs 62.9% implied, edge +27.6pp.
+#   The 55–60% band showed only 5.5pp edge (not significant) — confirmed
+#   that moderate home favs do NOT show meaningful overpricing here.
+#   The 60–67% gate (approximately −150 to −200 ML) is the validated range.
 # Signal fires: fade home team (bet away ML).
+# Independent of MV-F — wind-in and strong LHP co-occur too rarely to stack.
 # Monitoring status — half-stake until N ≥ 50 live fires.
 # September excluded: only month with inverted edge (66.7% win rate).
-NF4_HOME_IMP_LOW   = 0.60   # home team implied prob lower bound (60%)
-NF4_HOME_IMP_HIGH  = 0.67   # home team implied prob upper bound (67%)
-NF4_SP_ERA_MAX     = 3.04   # strong SP: rolling 5-start ERA at or below p33
-NF4_OPS_MIN        = 0.736  # high-OPS home team: rolling OPS at or above median
+NF4_HOME_IMP_LOW   = 0.60   # validated lower bound (60%) — 55-60% not significant
+NF4_HOME_IMP_HIGH  = 0.67   # validated upper bound (67%) — approx -150 to -200 ML
+NF4_SP_ERA_MAX     = 3.04   # strong SP: rolling 5-start ERA ≤ p33 (2025 tertile)
+NF4_OPS_MIN        = 0.736  # high-OPS home team: rolling OPS ≥ median (Finding 4)
 NF4_MONTHS_OK      = {4, 5, 6, 7, 8}   # April–August only; September excluded
 
 # H3b park factor gate — only fire at venues with PF ≥ this value.
@@ -2076,12 +2087,15 @@ def evaluate_signals(game: dict, streaks: dict, session: str) -> dict:
     except (ValueError, IndexError):
         game_month = 0
 
-    # ── Signal NF4: Home Fav vs Strong LHP (new — monitoring) ───────────
-    # Regression finding (2025 season, n=34 in 60-67% imp band):
-    # High-OPS home teams (rolling OPS ≥ 0.736) priced 60-67% implied
-    # against a strong LHP (rolling ERA ≤ 3.04) win only 35.3% of games.
-    # Edge = +27.6pp, z = -3.33, p<.01. Market anchors on season OPS
-    # (built largely vs RHP) and overprices when a dominant LHP starts.
+    # ── Signal NF4: Home Fav vs Strong LHP (monitoring) ────────────────
+    # Finding 4 + Finding 5 (2025 full-season regression, enriched dataset):
+    # Gate: home imp 60–67% (heavy fav ~-150 to -200 ML). The 55–60% band
+    # shows only 5.5pp edge (not significant) — validated by Finding 5.
+    # High-OPS home teams (rolling OPS ≥ 0.736) priced 60–67% implied
+    # against a strong LHP (rolling 5-start ERA ≤ 3.04) win only 35.3%.
+    # Edge = +27.6pp, z = −3.33, p<.01, n=34. Market anchors on season OPS
+    # built largely vs RHP and fails to adjust for LHP platoon disadvantage.
+    # Independent of MV-F — wind-in and strong LHP co-occur too rarely to stack.
     # Monitoring: half-stake until N ≥ 50 live fires. Sep excluded.
     # Data requirements: starter throw_hand and home team rolling_ops
     # must both be available — graceful skip if either is missing.
@@ -2116,14 +2130,15 @@ def evaluate_signals(game: dict, streaks: dict, session: str) -> dict:
                     "odds":   fmt_odds(away_ml),
                     "reason": (
                         f"NF4 — Home fav {home_abbr} at {home_impl:.0%} implied "
-                        f"({fmt_odds(home_ml)}) facing strong LHP "
+                        f"({fmt_odds(home_ml)}) vs strong LHP "
                         f"{game.get('away_starter_name', away_abbr)} "
                         f"(rolling ERA {away_era:.2f}, hand L). "
-                        f"Home team rolling OPS {home_ops:.3f} (≥{NF4_OPS_MIN}). "
-                        f"2025 regression: high-OPS home favs win only 35.3% vs "
-                        f"62.9% implied in this matchup (z=−3.33, p<.01, n=34). "
-                        f"Market anchors on season OPS built vs RHP — platoon "
-                        f"disadvantage not fully priced. "
+                        f"Home OPS {home_ops:.3f} (≥{NF4_OPS_MIN}, high-OPS gate). "
+                        f"Finding 4+5 (2025, n=34): high-OPS home favs in 60–67% "
+                        f"imp band win 35.3% vs 62.9% implied (z=−3.33, p<.01, +27.6pp). "
+                        f"55–60% band validated as not significant (Finding 5) — "
+                        f"signal is heavy-fav specific (~−150 to −200 ML). "
+                        f"Independent of MV-F (wind+LHP co-occur too rarely). "
                         f"MONITORING: half-stake until N≥50 live fires. Sep excluded."
                     ),
                     "priority": 3,
