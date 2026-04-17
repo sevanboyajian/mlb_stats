@@ -8,6 +8,8 @@ Polls pipeline_jobs and runs due jobs (single-threaded) in scheduled_time order.
 
 CHANGE LOG (latest first)
 ────────────────────────
+2026-04-16  Align pipeline_jobs extras with schema: started_at/completed_at as DATETIME;
+            matches core/db/schema.sql and ensure_pipeline_jobs_table().
 2026-04-16  Read-only --status: print pending / running / failed jobs + last 10 runs.
 2026-04-16  Duplicate execution guard: claim via UPDATE … WHERE status='pending'
             (rowcount check); skip if another worker already claimed the job.
@@ -478,7 +480,7 @@ def _ensure_pipeline_jobs_extras(con: sqlite3.Connection, cols: set[str]) -> set
         cols = _table_columns(con, "pipeline_jobs")
     if "completed_at" not in cols:
         try:
-            con.execute("ALTER TABLE pipeline_jobs ADD COLUMN completed_at TEXT")
+            con.execute("ALTER TABLE pipeline_jobs ADD COLUMN completed_at DATETIME")
             con.commit()
         except Exception:
             pass
@@ -492,7 +494,7 @@ def _ensure_pipeline_jobs_extras(con: sqlite3.Connection, cols: set[str]) -> set
         cols = _table_columns(con, "pipeline_jobs")
     if "started_at" not in cols:
         try:
-            con.execute("ALTER TABLE pipeline_jobs ADD COLUMN started_at TEXT")
+            con.execute("ALTER TABLE pipeline_jobs ADD COLUMN started_at DATETIME")
             con.commit()
         except Exception:
             pass
@@ -967,11 +969,28 @@ def _fmt_row(widths: list[int], cells: list[str]) -> str:
     return "  ".join(parts)
 
 
+def _rule_line_for_widths(widths: list[int]) -> str:
+    total = sum(widths) + 2 * (len(widths) - 1)
+    return "  " + ("-" * total)
+
+
 def print_pipeline_status(db_path: str) -> None:
     """
     Read-only snapshot: pending / running / failed jobs and last 10 pipeline_job_runs.
     """
-    con = db_connect(db_path, timeout=30)
+    p = Path(db_path)
+    if not p.is_file():
+        print(f"Error: database file not found:\n  {p.resolve()}", file=sys.stderr)
+        print(
+            "  Omit --db to use the default from config/env, or pass the full path to mlb_stats.db.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    try:
+        con = db_connect(db_path, timeout=30)
+    except sqlite3.OperationalError as exc:
+        print(f"Error: could not open database:\n  {db_path}\n  {exc}", file=sys.stderr)
+        sys.exit(1)
     con.row_factory = sqlite3.Row
 
     pj = _table_columns(con, "pipeline_jobs")
@@ -1018,9 +1037,10 @@ def print_pipeline_status(db_path: str) -> None:
 
         headers = ["job_id", "job_type", "job_date_et", "status", "group", "scheduled"]
         sc = sched or ""
-        widths = [8, 18, 12, 10, 6, 22]
+        # job_type must fit longest names (e.g. schedule_next_day_globals)
+        widths = [8, 30, 12, 10, 6, 22]
         print(_fmt_row(widths, headers))
-        print("  " + "-" * 72)
+        print(_rule_line_for_widths(widths))
         for r in rows:
             line = [
                 str(r.get("job_id", "")),
@@ -1070,9 +1090,9 @@ def print_pipeline_status(db_path: str) -> None:
         return
 
     hdr = ["run_id", "job_id", "type", "status", "started_utc", "finished_utc", "sec", "error (trunc)"]
-    w = [7, 8, 14, 10, 21, 21, 6, 50]
+    w = [7, 8, 30, 10, 20, 20, 6, 44]
     print(_fmt_row(w, hdr))
-    print("  " + "-" * 72)
+    print(_rule_line_for_widths(w))
     for r in rrows:
         d = dict(r)
         print(
@@ -1104,7 +1124,11 @@ def main() -> None:
         action="store_true",
         help="Print pending/running/failed jobs and last 10 runs, then exit (read-only)",
     )
-    p.add_argument("--db", default=None, help="Path to mlb_stats.db (defaults to core.db.connection.get_db_path())")
+    p.add_argument(
+        "--db",
+        default=None,
+        help="Path to mlb_stats.db (defaults to core.db.connection.get_db_path()); must exist for --status",
+    )
     p.add_argument("--once", action="store_true", help="Run one polling pass then exit")
     p.add_argument("--ghost", action="store_true", help="Print what would run; do not execute or update DB")
     p.add_argument("--poll-seconds", type=int, default=20, help="Polling interval when looping (default 20)")

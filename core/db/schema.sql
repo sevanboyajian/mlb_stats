@@ -30,6 +30,7 @@
 -- ============================================================
 -- # CHANGE LOG (latest first)
 -- # -------------------------
+-- # 2026-04-16  pipeline_jobs: started_at, completed_at, error_message, retry_count, retries
 -- # 2026-04-16  pipeline_jobs.status: add 'timeout' for runner-detected hung jobs
 -- # 2026-04-16  pipeline_job_runs: per-execution audit log; duration_seconds on finish
 -- # 2026-04-15  team_rolling_stats: pre-game rolling team metrics (builder-populated)
@@ -775,6 +776,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_bet_ledger_game_market
 -- pipeline_jobs
 -- Scheduler queue for pipeline work (odds pulls, briefs, weather, etc.).
 -- One row per job instance. Designed to be filled by a separate scheduler.
+--
+-- Execution tracking (latest run only; runner syncs from pipeline_job_runs):
+--   started_at, completed_at — UTC wall times (ISO strings in practice)
+--   error_message — last failure / timeout text
+-- Retry tracking:
+--   retry_count — incremented on failed attempts (run_pipeline.py)
+--   retries — incremented on stale-running reset (run_pipeline.py)
 -- ------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS pipeline_jobs (
     job_id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -787,6 +795,11 @@ CREATE TABLE IF NOT EXISTS pipeline_jobs (
     status          TEXT    NOT NULL DEFAULT 'pending'
                         CHECK (status IN ('pending','running','complete','failed','timeout')),
     game_group_id   INTEGER,            -- cluster id from game start grouping
+    started_at      DATETIME,           -- latest job execution start (UTC)
+    completed_at    DATETIME,           -- latest job execution end (UTC)
+    error_message   TEXT,               -- last error or timeout message
+    retry_count     INTEGER NOT NULL DEFAULT 0,
+    retries         INTEGER NOT NULL DEFAULT 0,
     created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
