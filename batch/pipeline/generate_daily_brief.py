@@ -6,6 +6,9 @@ Reads from mlb_stats.db and outputs the formatted betting brief.
 
 CHANGE LOG (latest first)
 ──────────────────────────
+2026-04-17  brief_picks: skip inserts after game start (vs ``now``); cross-session
+            dedupe on (game_date, game_pk, signal, market); ``model_version``
+            column (default ``legacy``); ``ensure_brief_picks`` before save.
 2026-04-17  CLI: --debug-wind prints per-game wind debug (DB row vs dressed
             GameEnvironment) during brief / prior; pair with --verbose for tiers.
 2026-04-17  Venue wind suppression no longer emits an AvoidFinding (tier/env gates +
@@ -206,6 +209,45 @@ def _game_start_utc_dt(g: dict) -> datetime.datetime | None:
         return datetime.datetime.fromisoformat(raw.rstrip("Z"))
     except ValueError:
         return None
+
+
+def _game_already_started_for_brief_picks(game: dict, now: datetime.datetime) -> bool:
+    """
+    True if game_start_utc is known and ``now`` is after first pitch (UTC).
+    Used to skip brief_picks rows for retroactive/late-session writes.
+    """
+    gst = _game_start_utc_dt(game)
+    if gst is None:
+        return False
+    gst_utc = (
+        gst.replace(tzinfo=datetime.timezone.utc)
+        if gst.tzinfo is None
+        else gst.astimezone(datetime.timezone.utc)
+    )
+    now_utc = now.astimezone(datetime.timezone.utc)
+    return now_utc > gst_utc
+
+
+def _brief_pick_exists_cross_session(
+    conn: sqlite3.Connection,
+    game_date: str,
+    game_pk: int,
+    signal: str,
+    market: str,
+) -> bool:
+    """True if any session already recorded this game/signal/market for game_date."""
+    try:
+        row = conn.execute(
+            """
+            SELECT 1 FROM brief_picks
+            WHERE game_pk = ? AND game_date = ? AND signal = ? AND market = ?
+            LIMIT 1
+            """,
+            (game_pk, game_date, signal, market),
+        ).fetchone()
+        return row is not None
+    except Exception:
+        return False
 
 
 def _game_start_et(game: dict) -> str:
@@ -802,15 +844,7 @@ def load_season_pnl(conn: sqlite3.Connection, game_date: str) -> dict:
 
 def ensure_brief_picks(conn: sqlite3.Connection) -> None:
     """Create table that stores confirmed picks shown in each brief.
-    Also migrates existing tables to add total_line column if absent."""
-    # Migration: add total_line column to existing tables that lack it
-    try:
-        cols = [r[1] for r in conn.execute("PRAGMA table_info(brief_picks)").fetchall()]
-        if cols and "total_line" not in cols:
-            conn.execute("ALTER TABLE brief_picks ADD COLUMN total_line REAL")
-            conn.commit()
-    except Exception:
-        pass
+    Migrates existing tables: total_line, model_version."""
     conn.execute("""
         CREATE TABLE IF NOT EXISTS brief_picks (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -824,10 +858,23 @@ def ensure_brief_picks(conn: sqlite3.Connection) -> None:
             odds        INTEGER,
             total_line  REAL,              -- stored when market=TOTAL; enables movement alert
             recorded_at TEXT    NOT NULL,
+            model_version TEXT DEFAULT 'legacy',
             UNIQUE (game_date, session, game_pk, signal)
         )
     """)
     conn.commit()
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(brief_picks)").fetchall()]
+        if cols:
+            if "total_line" not in cols:
+                conn.execute("ALTER TABLE brief_picks ADD COLUMN total_line REAL")
+            if "model_version" not in cols:
+                conn.execute(
+                    "ALTER TABLE brief_picks ADD COLUMN model_version TEXT DEFAULT 'legacy'"
+                )
+            conn.commit()
+    except Exception:
+        pass
 
 
 def ensure_signal_state(conn: sqlite3.Connection) -> None:
@@ -1681,6 +1728,7 @@ def save_brief_picks(
     *,
     avoid_entries: list | None = None,
     now: datetime.datetime | None = None,
+    model_version: str = "legacy",
 ) -> None:
     """Record picks shown in this brief for prior-report grading.
     pick_entries: sorted list of entry dicts from the brief builder.
@@ -1688,10 +1736,15 @@ def save_brief_picks(
     Also records AVOID flags for research as pick_rank=0 with signal='AVOID'.
     AVOID rows sync into bet_ledger via signal_state + backfill (stake 0).
     Idempotent — INSERT OR IGNORE on (game_date, session, game_pk, signal).
+
+    Skips insert when the game has already started (vs ``now``) or when the same
+    game_date + game_pk + signal + market was stored in an earlier session.
     """
     if now is None:
         now = _now_et()
     now_et = now.strftime("%Y-%m-%d %H:%M ET")
+
+    ensure_brief_picks(conn)
 
     wrote_any = False
 
@@ -1701,6 +1754,12 @@ def save_brief_picks(
             # Use highest-priority pick for this game
             p = sorted(entry["sigs"]["picks"], key=lambda x: x["priority"])[0]
             signal = ", ".join(entry["sigs"]["signals"])
+            if _game_already_started_for_brief_picks(g, now):
+                continue
+            if _brief_pick_exists_cross_session(
+                conn, game_date, int(g["game_pk"]), signal, p["market"],
+            ):
+                continue
             odds_raw = _parse_odds(p.get("odds", ""))
             total_line_val = None
             if p.get("market") == "TOTAL":
@@ -1710,10 +1769,22 @@ def save_brief_picks(
                     """
                     INSERT OR IGNORE INTO brief_picks
                         (game_date, session, game_pk, pick_rank, signal,
-                         bet, market, odds, total_line, recorded_at)
-                    VALUES (?,?,?,?,?,?,?,?,?,?)
+                         bet, market, odds, total_line, recorded_at, model_version)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?)
                     """,
-                    (game_date, session, g["game_pk"], rank, signal, p["bet"], p["market"], odds_raw, total_line_val, now_et),
+                    (
+                        game_date,
+                        session,
+                        g["game_pk"],
+                        rank,
+                        signal,
+                        p["bet"],
+                        p["market"],
+                        odds_raw,
+                        total_line_val,
+                        now_et,
+                        model_version,
+                    ),
                 )
                 wrote_any = True
             except Exception:
@@ -1725,16 +1796,34 @@ def save_brief_picks(
             gpk = g.get("game_pk")
             if gpk is None:
                 continue
+            if _game_already_started_for_brief_picks(g, now):
+                continue
             market, bet_text, total_line_val = avoid_entry_bet_fields(entry)
+            if _brief_pick_exists_cross_session(
+                conn, game_date, int(gpk), "AVOID", market,
+            ):
+                continue
             try:
                 conn.execute(
                     """
                     INSERT OR IGNORE INTO brief_picks
                         (game_date, session, game_pk, pick_rank, signal,
-                         bet, market, odds, total_line, recorded_at)
-                    VALUES (?,?,?,?,?,?,?,?,?,?)
+                         bet, market, odds, total_line, recorded_at, model_version)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?)
                     """,
-                    (game_date, session, int(gpk), 0, "AVOID", bet_text, market, None, total_line_val, now_et),
+                    (
+                        game_date,
+                        session,
+                        int(gpk),
+                        0,
+                        "AVOID",
+                        bet_text,
+                        market,
+                        None,
+                        total_line_val,
+                        now_et,
+                        model_version,
+                    ),
                 )
                 wrote_any = True
             except Exception:
