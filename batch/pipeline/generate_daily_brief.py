@@ -6,6 +6,11 @@ Reads from mlb_stats.db and outputs the formatted betting brief.
 
 CHANGE LOG (latest first)
 ──────────────────────────
+2026-04-17  Prior report: NEXT picks use the same ledger box as TOP; AVOID section
+            spells out bet-to-skip + counterfactual verdict; bet_ledger unique key
+            includes signal_at_time so AVOID rows (stake 0) materialize from
+            signal_state; backfill_bet_ledger_from_signal_state runs on prior;
+            grade_bet_ledger scores avoids as good_avoid / bad_avoid / push_avoid.
 2026-04-17  Scoring function implemented. score_game() replaces evaluate_signals().
             All signal logic consolidated into per-signal evaluator functions in
             batch/pipeline/score_game.py. Three-dimension tier decision: signal_strength
@@ -299,6 +304,11 @@ def build_docx_from_text(session: str, game_date: str, brief_text: str) -> "Docu
         # Section headings (Top Pick / Avoid / No Signal / Ledger Summary etc.)
         if any(k in s.upper() for k in ("TOP PICK", "ADDITIONAL MODEL SELECTIONS", "BETS TO AVOID", "NO SIGNAL", "BET LEDGER SUMMARY", "SIGNAL TRACKER", "S6 PITCHER")):
             _add_line(s, size_pt=12, bold=True)
+            continue
+
+        # Ledger / pick boxes (same visual weight as TOP pick)
+        if s.startswith("┌") or s.startswith("│") or s.startswith("└"):
+            _add_line(s, size_pt=9, bold=True)
             continue
 
         # Matchup lines: "XXX  vs  YYY (h)".
@@ -785,10 +795,14 @@ def ensure_bet_ledger(conn: sqlite3.Connection) -> None:
             pnl_units     REAL
         )
     """)
-    # Bulletproof duplicate protection (even across concurrent runs)
+    # Allow top / next / avoid on the same (game_pk, market_type) as separate rows.
+    try:
+        conn.execute("DROP INDEX IF EXISTS idx_bet_ledger_game_market")
+    except Exception:
+        pass
     conn.execute("""
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_bet_ledger_game_market
-        ON bet_ledger (game_pk, market_type)
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_bet_ledger_game_market_signal
+        ON bet_ledger (game_pk, market_type, IFNULL(signal_at_time, ''))
     """)
     conn.commit()
 
@@ -911,22 +925,113 @@ def save_signal_state(conn: sqlite3.Connection, game_date: str, session: str,
         pass
 
 
+def _parse_recorded_at_et_ledger(s: str | None) -> datetime.datetime | None:
+    if not s:
+        return None
+    raw = str(s).strip()
+    for fmt in ("%Y-%m-%d %H:%M ET", "%Y-%m-%d %I:%M %p ET"):
+        try:
+            parsed = datetime.datetime.strptime(raw, fmt)
+            return parsed.replace(tzinfo=_ET)
+        except Exception:
+            continue
+    return None
+
+
+def _ledger_latest_from_signal_rows(
+    sig_rows: list,
+    start_by_pk: dict[int, datetime.datetime],
+    now_et: datetime.datetime,
+    *,
+    pregame_window_only: bool,
+) -> dict[tuple[int, str, str], tuple[datetime.datetime, sqlite3.Row]]:
+    """
+    Latest signal_state row per (game_pk, market_type, signal_type).
+    When pregame_window_only=True, only rows inside [start−30m, start) apply.
+    """
+    latest: dict[tuple[int, str, str], tuple[datetime.datetime, sqlite3.Row]] = {}
+    for r in sig_rows:
+        gpk = r["game_pk"]
+        mt = r["market_type"]
+        st = (r["signal_type"] or "").strip()
+        if gpk is None or not mt or st not in ("top", "next", "avoid"):
+            continue
+        start_et = start_by_pk.get(int(gpk))
+        if start_et is None:
+            continue
+        if pregame_window_only:
+            window_start = start_et - datetime.timedelta(minutes=30)
+            if not (window_start <= now_et < start_et):
+                continue
+
+        rec_dt = _parse_recorded_at_et_ledger(r["recorded_at"])
+        if rec_dt is None:
+            continue
+        if rec_dt > now_et:
+            continue
+
+        key = (int(gpk), str(mt), st)
+        prev = latest.get(key)
+        if prev is None or rec_dt > prev[0]:
+            latest[key] = (rec_dt, r)
+    return latest
+
+
+def _insert_bet_ledger_from_latest(
+    conn: sqlite3.Connection,
+    game_date: str,
+    latest: dict[tuple[int, str, str], tuple[datetime.datetime, sqlite3.Row]],
+) -> int:
+    inserted = 0
+    for (_gpk, _mt, _st), (_dt, r) in latest.items():
+        sig_type = (r["signal_type"] or "").strip()
+        if sig_type not in ("top", "next", "avoid"):
+            continue
+        stake = 0.0 if sig_type == "avoid" else 1.0
+        odds_val = None if sig_type == "avoid" else r["odds"]
+        try:
+            cur = conn.execute(
+                """
+                INSERT OR IGNORE INTO bet_ledger
+                    (game_date, game_pk, market_type, bet, odds_taken, stake_units,
+                     signal_at_time, session, placed_at, result, pnl_units)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    game_date,
+                    int(r["game_pk"]),
+                    r["market_type"],
+                    r["bet"],
+                    odds_val,
+                    stake,
+                    sig_type,
+                    r["session"],
+                    r["recorded_at"],
+                    None,
+                    None,
+                ),
+            )
+            if getattr(cur, "rowcount", 0) == 1:
+                inserted += 1
+        except sqlite3.OperationalError:
+            continue
+    return inserted
+
+
 def generate_bets_from_signal_state(conn: sqlite3.Connection, game_date: str,
                                     now: datetime.datetime | None = None) -> int:
     """
     Create bet_ledger rows from signal_state in a rolling pregame window.
 
-    A bet is created when:
+    A row is created when:
         game_start_utc - 30 minutes <= current_time < game_start_utc
 
     Selection:
-      - For each (game_pk, market_type), choose the most recent signal_state row
-        strictly BEFORE current_time (ordered by recorded_at).
-      - Only signal_type in ('top','next') creates a bet.
-      - signal_type == 'avoid' never creates a bet.
+      - Latest signal_state row per (game_pk, market_type, signal_type).
+      - signal_type in ('top','next','avoid'). Avoid rows use stake_units=0.
 
     Idempotency:
-      - Enforced with UNIQUE index on (game_pk, market_type) and INSERT OR IGNORE.
+      - UNIQUE (game_pk, market_type, signal_at_time) + INSERT OR IGNORE.
 
     Returns number of rows inserted.
     """
@@ -942,24 +1047,11 @@ def generate_bets_from_signal_state(conn: sqlite3.Connection, game_date: str,
     except Exception:
         now_et = _now_et()
 
-    def _parse_recorded_at_et(s: str | None) -> datetime.datetime | None:
-        if not s:
-            return None
-        raw = str(s).strip()
-        for fmt in ("%Y-%m-%d %H:%M ET", "%Y-%m-%d %I:%M %p ET"):
-            try:
-                parsed = datetime.datetime.strptime(raw, fmt)
-                return parsed.replace(tzinfo=_ET)
-            except Exception:
-                continue
-        return None
-
     try:
         ensure_bet_ledger(conn)
     except Exception:
         return 0
 
-    # Pull all signals for the date. We select latest per (game_pk, market_type).
     try:
         sig_rows = conn.execute(
             """
@@ -1004,69 +1096,13 @@ def generate_bets_from_signal_state(conn: sqlite3.Connection, game_date: str,
         except Exception:
             continue
 
-    latest: dict[tuple[int, str], tuple[datetime.datetime, sqlite3.Row]] = {}
-    for r in sig_rows:
-        gpk = r["game_pk"]
-        mt = r["market_type"]
-        if gpk is None or not mt:
-            continue
-        start_et = start_by_pk.get(int(gpk))
-        if start_et is None:
-            continue
-        window_start = start_et - datetime.timedelta(minutes=30)
-        if not (window_start <= now_et < start_et):
-            continue
-
-        rec_dt = _parse_recorded_at_et(r["recorded_at"])
-        if rec_dt is None:
-            continue
-        # recorded_at is minute-precision; allow same wall minute as now (exclude only
-        # genuinely future timestamps, e.g. clock skew).
-        if rec_dt > now_et:
-            continue
-
-        key = (int(gpk), str(mt))
-        prev = latest.get(key)
-        if prev is None or rec_dt > prev[0]:
-            latest[key] = (rec_dt, r)
-
+    latest = _ledger_latest_from_signal_rows(
+        sig_rows, start_by_pk, now_et, pregame_window_only=True,
+    )
     if not latest:
         return 0
 
-    inserted = 0
-    for (gpk, mt), (_dt, r) in latest.items():
-        sig_type = (r["signal_type"] or "").strip()
-        if sig_type not in ("top", "next"):
-            continue
-
-        try:
-            cur = conn.execute(
-                """
-                INSERT OR IGNORE INTO bet_ledger
-                    (game_date, game_pk, market_type, bet, odds_taken, stake_units,
-                     signal_at_time, session, placed_at, result, pnl_units)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?)
-                """,
-                (
-                    game_date,
-                    gpk,
-                    mt,
-                    r["bet"],
-                    r["odds"],
-                    1.0,
-                    sig_type,
-                    r["session"],
-                    r["recorded_at"],
-                    None,
-                    None,
-                ),
-            )
-            # rowcount is 1 if inserted, 0 if ignored
-            if getattr(cur, "rowcount", 0) == 1:
-                inserted += 1
-        except sqlite3.OperationalError:
-            continue
-
+    inserted = _insert_bet_ledger_from_latest(conn, game_date, latest)
     if inserted:
         try:
             conn.commit()
@@ -1075,13 +1111,217 @@ def generate_bets_from_signal_state(conn: sqlite3.Connection, game_date: str,
     return inserted
 
 
+def backfill_bet_ledger_from_signal_state(conn: sqlite3.Connection, game_date: str,
+                                          now: datetime.datetime | None = None) -> int:
+    """
+    Materialize all top/next/avoid rows from signal_state for game_date into bet_ledger
+    (no pregame window). Idempotent. Used by prior-day report so ledger matches
+    archived signals including avoids.
+    """
+    if conn is None:
+        return 0
+    if now is None:
+        now = _now_et()
+    try:
+        now_et = now if getattr(now, "tzinfo", None) else now.replace(tzinfo=_ET)
+        now_et = now_et.astimezone(_ET)
+    except Exception:
+        now_et = _now_et()
+
+    try:
+        ensure_bet_ledger(conn)
+    except Exception:
+        return 0
+
+    try:
+        sig_rows = conn.execute(
+            """
+            SELECT
+                game_pk, market_type, signal_type, bet, odds, session, recorded_at
+            FROM signal_state
+            WHERE game_date = ?
+              AND game_pk IS NOT NULL
+              AND market_type IS NOT NULL
+              AND recorded_at IS NOT NULL
+            """,
+            (game_date,),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return 0
+
+    if not sig_rows:
+        return 0
+
+    game_pks = sorted({r["game_pk"] for r in sig_rows if r["game_pk"] is not None})
+    placeholders = ",".join("?" * len(game_pks))
+    try:
+        g_rows = conn.execute(
+            f"SELECT game_pk, game_start_utc FROM games WHERE game_pk IN ({placeholders})",
+            tuple(game_pks),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return 0
+
+    start_by_pk: dict[int, datetime.datetime] = {}
+    for r in g_rows:
+        raw = r["game_start_utc"] or ""
+        if "T" not in raw:
+            continue
+        try:
+            utc_dt = datetime.datetime.fromisoformat(raw.rstrip("Z")).replace(
+                tzinfo=datetime.timezone.utc
+            )
+            start_by_pk[int(r["game_pk"])] = utc_dt.astimezone(_ET)
+        except Exception:
+            continue
+
+    latest = _ledger_latest_from_signal_rows(
+        sig_rows, start_by_pk, now_et, pregame_window_only=False,
+    )
+    if not latest:
+        return 0
+
+    inserted = _insert_bet_ledger_from_latest(conn, game_date, latest)
+    if inserted:
+        try:
+            conn.commit()
+        except Exception:
+            pass
+    return inserted
+
+
+def strip_avoid_bet_label(bet_text: str) -> str:
+    """Strip leading 'Avoid:' / 'Avoid ' so ML/total parsers can grade counterfactuals."""
+    s = (bet_text or "").strip()
+    su = s.upper()
+    if su.startswith("AVOID "):
+        return s[6:].strip()
+    if su.startswith("AVOID:"):
+        return s[6:].strip()
+    return s
+
+
+def avoid_entry_bet_fields(entry: dict) -> tuple[str, str, float | None]:
+    """Return (market, bet_label, total_line) for an AVOID entry (brief / prior display)."""
+    g = (entry.get("game") or {})
+    sigs = (entry.get("sigs") or {})
+    reason = (sigs.get("avoid_reason") or "").strip()
+    reason_u = reason.upper()
+    home = (g.get("home_abbr") or "").strip()
+    away = (g.get("away_abbr") or "").strip()
+    total_line = g.get("total_line")
+
+    market = "OTHER"
+    bet_text = None
+
+    if "AVOID HOME ML" in reason_u and home:
+        market = "ML"
+        bet_text = f"Avoid {home} ML"
+    elif "AVOID AWAY ML" in reason_u and away:
+        market = "ML"
+        bet_text = f"Avoid {away} ML"
+    elif ("DO NOT BET OVER" in reason_u or ("OVER" in reason_u and "DO NOT BET" in reason_u)) and total_line is not None:
+        market = "TOTAL"
+        bet_text = f"Avoid OVER {total_line}"
+    elif ("DO NOT BET UNDER" in reason_u or ("UNDER" in reason_u and "DO NOT BET" in reason_u)) and total_line is not None:
+        market = "TOTAL"
+        bet_text = f"Avoid UNDER {total_line}"
+    elif "ML" in reason_u:
+        market = "ML"
+        bet_text = f"Avoid {home} ML" if home else "Avoid ML"
+    elif "TOTAL" in reason_u or "O/U" in reason_u or "OVER" in reason_u or "UNDER" in reason_u:
+        market = "TOTAL"
+        bet_text = f"Avoid total" if total_line is None else f"Avoid total ({total_line})"
+
+    if not bet_text:
+        bet_text = ("Avoid: " + reason) if reason else "Avoid"
+
+    return market, bet_text, (float(total_line) if total_line is not None else None)
+
+
+def prior_avoid_outcome_lines(entry: dict) -> tuple[str, str, str] | None:
+    """
+    Human lines for prior report: (bet_to_skip, counterfactual, verdict).
+    None if game not final or not parseable.
+    """
+    g = entry.get("game") or {}
+    hs, as_ = g.get("home_score"), g.get("away_score")
+    if hs is None or as_ is None:
+        return None
+    market, bet_label, _tl = avoid_entry_bet_fields(entry)
+    equiv = strip_avoid_bet_label(bet_label)
+    home_abbr = (g.get("home_abbr") or "").strip().upper()
+    away_abbr = (g.get("away_abbr") or "").strip().upper()
+    runs = hs + as_
+
+    def _parse_ml_team_local(bt: str) -> str | None:
+        s = (bt or "").strip().upper()
+        if not s:
+            return None
+        return s.split()[0]
+
+    def _parse_total_local(bt: str) -> tuple[str | None, float | None]:
+        s = (bt or "").strip().upper()
+        if not s:
+            return None, None
+        side = "over" if s.startswith("OVER") else ("under" if s.startswith("UNDER") else None)
+        if side is None:
+            return None, None
+        try:
+            return side, float(s.split()[1])
+        except Exception:
+            return side, None
+
+    hypo: str | None = None
+    if market == "ML":
+        team = _parse_ml_team_local(equiv)
+        if not team:
+            return None
+        if team == home_abbr:
+            hypo = "win" if hs > as_ else "loss"
+        elif team == away_abbr:
+            hypo = "win" if as_ > hs else "loss"
+        else:
+            return None
+    elif market == "TOTAL":
+        side, line = _parse_total_local(equiv)
+        if side is None or line is None:
+            return None
+        if runs == line:
+            hypo = "push"
+        else:
+            won = (side == "over" and runs > line) or (side == "under" and runs < line)
+            hypo = "win" if won else "loss"
+    else:
+        bet_line = f"  BET TO SKIP: {bet_label}"
+        tail = (
+            "  (Counterfactual not parsed for this flag type — see model note below.)"
+        )
+        return (bet_line, tail, "  Verdict: —")
+
+    bet_line = f"  BET TO SKIP: {bet_label}"
+    if hypo == "push":
+        cf = "  If you had taken it: PUSH vs closing total (no win/loss edge)."
+        ver = "  Verdict on the call: — (push — neither good nor bad in 1u terms)."
+    elif hypo == "win":
+        cf = "  If you had taken it: would have WON (vs closing line / side above)."
+        ver = "  Verdict on the call: ✗ Poor avoid — you skipped a winning side."
+    else:
+        cf = "  If you had taken it: would have LOST."
+        ver = "  Verdict on the call: ✓ Good avoid — you dodged a losing bet."
+
+    return (bet_line, cf, ver)
+
+
 def grade_bet_ledger(conn: sqlite3.Connection, game_date: str | None = None) -> int:
     """
     Grade bets in bet_ledger for games that are Final.
 
     - Joins bet_ledger -> games on game_pk
     - Only processes games where games.status = 'Final'
-    - Updates bet_ledger.result in ('win','loss','push') and bet_ledger.pnl_units
+    - Top/next rows: result in ('win','loss','push'), pnl_units at stake 1
+    - Avoid rows (signal_at_time='avoid'): result good_avoid / bad_avoid / push_avoid —
+      counterfactual for the skipped bet; pnl_units 0 (informational only)
 
     Market rules:
       moneyline:
@@ -1158,6 +1398,7 @@ def grade_bet_ledger(conn: sqlite3.Connection, game_date: str | None = None) -> 
             bl.market_type,
             bl.bet,
             bl.odds_taken,
+            bl.signal_at_time,
             g.home_team_id,
             g.away_team_id,
             g.home_score,
@@ -1189,6 +1430,69 @@ def grade_bet_ledger(conn: sqlite3.Connection, game_date: str | None = None) -> 
 
         res = None
         pnl = None
+        sig_at = (r["signal_at_time"] or "").strip().lower()
+
+        if sig_at == "avoid":
+            equiv = strip_avoid_bet_label(bet_text)
+            home_abbr = (r["home_abbr"] or "").upper()
+            away_abbr = (r["away_abbr"] or "").upper()
+            runs = hs + as_
+            hypo: str | None = None
+
+            if market == "moneyline":
+                team = _parse_ml_team(equiv)
+                if not team:
+                    continue
+                if team == home_abbr:
+                    won = hs > as_
+                elif team == away_abbr:
+                    won = as_ > hs
+                else:
+                    continue
+                hypo = "win" if won else "loss"
+            elif market == "total":
+                side, line = _parse_total_bet(equiv)
+                if side is None or line is None:
+                    continue
+                if runs == line:
+                    hypo = "push"
+                else:
+                    won = (side == "over" and runs > line) or (side == "under" and runs < line)
+                    hypo = "win" if won else "loss"
+            elif market in ("spread", "runline"):
+                team, line = _parse_runline_bet(equiv)
+                if team is None or line is None:
+                    continue
+                if team == home_abbr:
+                    adj = hs + line
+                    opp = as_
+                elif team == away_abbr:
+                    adj = as_ + line
+                    opp = hs
+                else:
+                    continue
+                if adj == opp:
+                    hypo = "push"
+                else:
+                    won = adj > opp
+                    hypo = "win" if won else "loss"
+            else:
+                continue
+
+            if hypo == "push":
+                res = "push_avoid"
+            elif hypo == "win":
+                res = "bad_avoid"
+            else:
+                res = "good_avoid"
+            pnl = 0.0
+
+            conn.execute(
+                "UPDATE bet_ledger SET result = ?, pnl_units = ? WHERE id = ?",
+                (res, float(round(pnl, 4)), r["id"]),
+            )
+            updated += 1
+            continue
 
         if market == "moneyline":
             team = _parse_ml_team(bet_text)
@@ -1269,53 +1573,13 @@ def save_brief_picks(
     """Record picks shown in this brief for prior-report grading.
     pick_entries: sorted list of entry dicts from the brief builder.
     Records top pick (rank 1) and additional picks (ranks 2-6).
-    Also records AVOID flags for research as pick_rank=0 with signal='AVOID'
-    (does not affect betting; avoids never generate bet_ledger rows).
+    Also records AVOID flags for research as pick_rank=0 with signal='AVOID'.
+    AVOID rows sync into bet_ledger via signal_state + backfill (stake 0).
     Idempotent — INSERT OR IGNORE on (game_date, session, game_pk, signal).
     """
     if now is None:
         now = _now_et()
     now_et = now.strftime("%Y-%m-%d %H:%M ET")
-
-    def _avoid_fields(entry: dict) -> tuple[str, str, float | None]:
-        """
-        Return (market, bet_text, total_line) for an avoid row.
-        Keep it descriptive and robust to changing avoid_reason formats.
-        """
-        g = (entry.get("game") or {})
-        sigs = (entry.get("sigs") or {})
-        reason = (sigs.get("avoid_reason") or "").strip()
-        reason_u = reason.upper()
-        home = (g.get("home_abbr") or "").strip()
-        away = (g.get("away_abbr") or "").strip()
-        total_line = g.get("total_line")
-
-        market = "OTHER"
-        bet_text = None
-
-        if "AVOID HOME ML" in reason_u and home:
-            market = "ML"
-            bet_text = f"Avoid {home} ML"
-        elif "AVOID AWAY ML" in reason_u and away:
-            market = "ML"
-            bet_text = f"Avoid {away} ML"
-        elif ("DO NOT BET OVER" in reason_u or ("OVER" in reason_u and "DO NOT BET" in reason_u)) and total_line is not None:
-            market = "TOTAL"
-            bet_text = f"Avoid OVER {total_line}"
-        elif ("DO NOT BET UNDER" in reason_u or ("UNDER" in reason_u and "DO NOT BET" in reason_u)) and total_line is not None:
-            market = "TOTAL"
-            bet_text = f"Avoid UNDER {total_line}"
-        elif "ML" in reason_u:
-            market = "ML"
-            bet_text = f"Avoid {home} ML" if home else "Avoid ML"
-        elif "TOTAL" in reason_u or "O/U" in reason_u or "OVER" in reason_u or "UNDER" in reason_u:
-            market = "TOTAL"
-            bet_text = f"Avoid total" if total_line is None else f"Avoid total ({total_line})"
-
-        if not bet_text:
-            bet_text = ("Avoid: " + reason) if reason else "Avoid"
-
-        return market, bet_text, (float(total_line) if total_line is not None else None)
 
     wrote_any = False
 
@@ -1349,7 +1613,7 @@ def save_brief_picks(
             gpk = g.get("game_pk")
             if gpk is None:
                 continue
-            market, bet_text, total_line_val = _avoid_fields(entry)
+            market, bet_text, total_line_val = avoid_entry_bet_fields(entry)
             try:
                 conn.execute(
                     """
@@ -2486,8 +2750,13 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
                 + (f"  |  O/U {tot}" if tot else ""))
 
     # ════════════════════════════════════════════════════════════════════
-    # BET LEDGER (source of truth) — load + grade
+    # BET LEDGER (source of truth) — backfill from signal_state, then grade
     # ════════════════════════════════════════════════════════════════════
+    try:
+        if PERSIST_WRITES:
+            backfill_bet_ledger_from_signal_state(conn, game_date, now=now)
+    except Exception:
+        pass
     try:
         grade_bet_ledger(conn, game_date=game_date)
     except Exception:
@@ -2506,15 +2775,48 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
     except Exception:
         bet_rows = []
 
+    def _ledger_signal_label(sig: str | None) -> str:
+        s = (sig or "").strip().lower()
+        if s == "top":
+            return "TOP PICK"
+        if s == "next":
+            return "NEXT (additional)"
+        if s == "avoid":
+            return "AVOID (do not bet)"
+        return (sig or "").upper() or "—"
+
     def _summarise_bets(rows: list) -> dict:
-        graded = [r for r in rows if r.get("result") in ("win", "loss", "push")]
+        stake_rows = [
+            r for r in rows
+            if (r.get("signal_at_time") or "").lower() != "avoid"
+        ]
+        avoid_rows = [
+            r for r in rows
+            if (r.get("signal_at_time") or "").lower() == "avoid"
+        ]
+        graded = [r for r in stake_rows if r.get("result") in ("win", "loss", "push")]
         wins   = sum(1 for r in graded if r["result"] == "win")
         losses = sum(1 for r in graded if r["result"] == "loss")
         pushes = sum(1 for r in graded if r["result"] == "push")
         units  = sum(float(r.get("pnl_units") or 0.0) for r in graded)
         n      = len(graded)
         roi    = (100.0 * units / n) if n else 0.0
-        return {"bets": n, "wins": wins, "losses": losses, "pushes": pushes, "units": units, "roi": roi}
+        av_done = [r for r in avoid_rows if r.get("result") in ("good_avoid", "bad_avoid", "push_avoid")]
+        agood = sum(1 for r in av_done if r["result"] == "good_avoid")
+        abad = sum(1 for r in av_done if r["result"] == "bad_avoid")
+        apush = sum(1 for r in av_done if r["result"] == "push_avoid")
+        return {
+            "bets": n,
+            "wins": wins,
+            "losses": losses,
+            "pushes": pushes,
+            "units": units,
+            "roi": roi,
+            "avoid_graded": len(av_done),
+            "avoid_good": agood,
+            "avoid_bad": abad,
+            "avoid_push": apush,
+        }
 
     bet_summary = _summarise_bets(bet_rows)
     by_market: dict[str, list] = {}
@@ -2545,7 +2847,7 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
             if ol: lines.append(ol)
         lines.append(f"\n  ┌─────────────────────────────────────────────────────────┐")
         lines.append(f"  │  BET:     {str(b.get('bet') or ''):<20}  ODDS: {fmt_odds(b.get('odds_taken')) if b.get('odds_taken') is not None else 'N/A':<8}        │")
-        lines.append(f"  │  SIGNAL:  {str(b.get('signal_at_time') or ''):<47}  │")
+        lines.append(f"  │  SIGNAL:  {_ledger_signal_label(b.get('signal_at_time')):<47}  │")
         res_field = (b.get("result") or "—").upper()
         pnl_field = pnl_str(float(b.get("pnl_units") or 0.0)) if b.get("result") else "—"
         lines.append(f"  │  RESULT:  {res_field:<20}  P&L: {pnl_field:<16}    │")
@@ -2570,15 +2872,18 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
                 if g.get("home_score") is not None:
                     lines.append(f"       {game_score_line(e, indent='')}")
                 ol = game_odds_line(e, indent="       ")
-                if ol: lines.append(ol)
+                if ol:
+                    lines.append(ol)
             res_field = (b.get("result") or "—").upper()
             pnl_field = pnl_str(float(b.get("pnl_units") or 0.0)) if b.get("result") else "—"
+            lines.append(f"\n  ┌─────────────────────────────────────────────────────────┐")
             lines.append(
-                f"       BET: {str(b.get('bet') or '')}  ODDS: "
-                f"{fmt_odds(b.get('odds_taken')) if b.get('odds_taken') is not None else 'N/A'}"
-                f"  SIGNAL: {str(b.get('signal_at_time') or '')}"
+                f"  │  BET:     {str(b.get('bet') or ''):<20}  ODDS: "
+                f"{fmt_odds(b.get('odds_taken')) if b.get('odds_taken') is not None else 'N/A':<8}        │"
             )
-            lines.append(f"       RESULT: {res_field}  P&L: {pnl_field}")
+            lines.append(f"  │  SIGNAL:  {_ledger_signal_label(b.get('signal_at_time')):<47}  │")
+            lines.append(f"  │  RESULT:  {res_field:<20}  P&L: {pnl_field:<16}    │")
+            lines.append(f"  └─────────────────────────────────────────────────────────┘")
             lines.append("")
 
     # Further signals beyond top 6
@@ -2600,7 +2905,16 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
     if not avoid_entries:
         lines.append("\n  No avoid flags were active yesterday.\n")
     else:
-        lines.append("\n  These games were flagged to AVOID. Outcome confirms whether avoidance was correct.\n")
+        lines.append(
+            "\n  Each flag names the concrete bet to skip, then a counterfactual: if you had\n"
+            "  placed that bet at the closing line, would it have won? Good avoid = you\n"
+            "  dodged a loser; poor avoid = you skipped a winner. (Stake 0u — informational.)\n"
+        )
+        avoid_by_gpk = {
+            r["game_pk"]: r
+            for r in bet_rows
+            if (r.get("signal_at_time") or "").lower() == "avoid" and r.get("game_pk") is not None
+        }
         for e in avoid_entries:
             g = e["game"]
             lines.append(f"  {matchup_line(g)}")
@@ -2608,8 +2922,24 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
             if g["home_score"] is not None:
                 lines.append(game_score_line(e))
             ol = game_odds_line(e)
-            if ol: lines.append(ol)
-            lines.append(f"  ⛔ AVOID: {textwrap.fill(e['sigs']['avoid_reason'], width=64, subsequent_indent='          ')}")
+            if ol:
+                lines.append(ol)
+            av_lines = prior_avoid_outcome_lines(e)
+            if av_lines:
+                a, b, c = av_lines
+                lines.append(a)
+                lines.append(b)
+                lines.append(c)
+            gpk = g.get("game_pk")
+            br = avoid_by_gpk.get(gpk) if gpk is not None else None
+            if br and br.get("result"):
+                lr = (br.get("result") or "").replace("_", " ").upper()
+                lines.append(f"  Ledger match: {lr}  (recorded stake {float(br.get('stake_units') or 0):.0f}u)")
+            reason = (e["sigs"].get("avoid_reason") or "").strip()
+            if reason:
+                lines.append(
+                    f"  Model detail: {textwrap.fill(reason, width=64, subsequent_indent='                ')}"
+                )
             lines.append("")
 
     # ════════════════════════════════════════════════════════════════════
@@ -2639,10 +2969,19 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
     # ════════════════════════════════════════════════════════════════════
     lines.append(section("📈  BET LEDGER SUMMARY"))
     lines.append(
-        f"\n  Total bets: {bet_summary['bets']}   "
+        f"\n  Staked plays: {bet_summary['bets']}   "
         f"{bet_summary['wins']}W {bet_summary['losses']}L {bet_summary['pushes']}P   "
         f"Units: {bet_summary['units']:+.2f}u   ROI: {bet_summary['roi']:.1f}%"
     )
+    if bet_summary.get("avoid_graded"):
+        lines.append(
+            f"\n  Avoid calls (graded, counterfactual):  {bet_summary['avoid_good']} good  /  "
+            f"{bet_summary['avoid_bad']} poor  /  {bet_summary['avoid_push']} push"
+        )
+    elif any((r.get("signal_at_time") or "").lower() == "avoid" for r in bet_rows):
+        lines.append(
+            "\n  Avoid calls: rows in ledger — counterfactual grades appear once games are Final."
+        )
 
     # Optional grouping by market_type
     for m, rows_m in sorted(by_market.items(), key=lambda x: x[0]):
@@ -4025,8 +4364,8 @@ def main():
                     print(f"\n  ✓ bet_ledger: inserted {n_bets} row(s) from signal_state (pregame window).\n")
                 else:
                     msg = (
-                        "no new rows (outside 30m window, duplicate game_pk+market_type, "
-                        "or no qualifying top/next signals)."
+                        "no new rows (outside 30m window, duplicate keys, "
+                        "or no qualifying signal_state rows)."
                     )
                     if args.verbose:
                         print(f"\n  [verbose] bet_ledger: {msg}\n")
