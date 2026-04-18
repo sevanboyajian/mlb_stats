@@ -6,6 +6,8 @@ Reads from mlb_stats.db and outputs the formatted betting brief.
 
 CHANGE LOG (latest first)
 ──────────────────────────
+2026-04-17  CLI: --debug-wind prints per-game wind debug (DB row vs dressed
+            GameEnvironment) during brief / prior; pair with --verbose for tiers.
 2026-04-17  Venue wind suppression no longer emits an AvoidFinding (tier/env gates +
             data_flags only). Legacy avoid=True only for hard avoids or no-signal
             avoid rows; Word brief avoids duplicate AVOID banner when picks exist.
@@ -114,6 +116,10 @@ RECOVERY / RERUN FLAGS
 
 --verbose               Print extra diagnostic rows from the DB (line counts,
                         data freshness, signal evaluation details).
+
+--debug-wind            For each game, print wind classification debug to stdout:
+                        raw DB wind_* / roof / park vs dressed wind_dir_label,
+                        wind_in/out, suppression, env_ceiling (see evaluate_signals).
 
 DOCX OUTPUT (DEFAULT)
 --------------------
@@ -521,6 +527,68 @@ def wind_direction_label(direction: str) -> str:
     if any(k in d for k in ("CALM", "STILL", "0 MPH")):
         return "CALM"
     return direction  # pass through if unrecognised
+
+
+def print_wind_debug_for_game(game: dict, fdg) -> None:
+    """
+    Print DB wind fields vs dressed ``FullyDressedGame.environment`` to stdout.
+    Used with ``--debug-wind`` to trace OUT/IN/CROSS, suppression, and env_ceiling.
+    """
+    try:
+        env = fdg.environment
+        ids = fdg.identifiers
+    except Exception as e:
+        print(f"\n  [debug-wind] (could not read dressed game: {e})\n")
+        return
+    gpk = game.get("game_pk")
+    ab = f"{ids.away_team_abbr}@{ids.home_team_abbr}"
+    raw_dir = game.get("wind_direction")
+    brief_lbl = wind_direction_label(str(raw_dir or ""))
+    mph = game.get("wind_mph")
+    try:
+        mph_f = float(mph) if mph is not None else None
+    except (TypeError, ValueError):
+        mph_f = None
+    mph_gate = 10.0
+    mph_ok = mph_f is not None and mph_f >= mph_gate
+    print("\n  [debug-wind] ───────────────────────────────────────────────────────────")
+    print(f"  [debug-wind] game_pk={gpk}  {ab}  {ids.venue_name or ''}")
+    print(
+        f"  [debug-wind] DB row: wind_mph={mph!r}  temp_f={game.get('temp_f')!r}  "
+        f"sky={game.get('sky_condition')!r}"
+    )
+    print(
+        f"  [debug-wind] DB row: wind_direction(raw)={raw_dir!r}  "
+        f"wind_effect={game.get('wind_effect')!r}  "
+        f"wind_source={game.get('wind_source')!r}"
+    )
+    print(
+        f"  [debug-wind] DB row: roof_type={game.get('roof_type')!r}  "
+        f"orientation_hp={game.get('orientation_hp')!r}  "
+        f"park_factor_runs={game.get('park_factor_runs')!r}"
+    )
+    print(
+        f"  [debug-wind] brief.wind_direction_label(raw) -> {brief_lbl!r}  "
+        f"(mph>={mph_gate} for in/out gates: {mph_ok})"
+    )
+    print(
+        f"  [debug-wind] dressed: wind_dir_label={env.wind_dir_label!r}  "
+        f"wind_in={env.wind_in}  wind_out={env.wind_out}"
+    )
+    print(
+        f"  [debug-wind] dressed: is_wind_suppressed={env.is_wind_suppressed}  "
+        f"env_ceiling={env.env_ceiling!r}  h3b_eligible={env.h3b_eligible}"
+    )
+    print(
+        f"  [debug-wind] dressed: is_retractable={env.is_retractable}  "
+        f"roof_status_known={env.roof_status_known}  wind_source={env.wind_source!r}"
+    )
+    if brief_lbl != env.wind_dir_label:
+        print(
+            f"  [debug-wind] NOTE: brief label {brief_lbl!r} != dressed {env.wind_dir_label!r} "
+            f"(fully_dressed_game uses its own normalizer on the same row)."
+        )
+    print("  [debug-wind] ───────────────────────────────────────────────────────────\n")
 
 
 def banner(text: str, width: int = 72) -> str:
@@ -2403,6 +2471,7 @@ def evaluate_signals(
     starters: dict | None = None,
     *,
     verbose: bool = False,
+    debug_wind: bool = False,
 ) -> dict:
     """
     Evaluate all model signals for a single game.
@@ -2411,6 +2480,7 @@ def evaluate_signals(
     Flow: ``enrich_game`` → ``score_game`` → ``scored_game_to_eval_dict``. Extra keys:
     ``output_tier``, ``tier_basis``, ``stake_multiplier`` (from ``ScoredGame``).
     When ``verbose`` is True, prints tier_basis per game to stdout.
+    When ``debug_wind`` is True, prints a wind classification dump per game (DB vs dressed env).
     """
     from batch.pipeline.score_game import score_game, scored_game_to_eval_dict
 
@@ -2433,6 +2503,8 @@ def evaluate_signals(
             home_streak=home_streak,
             away_streak=away_streak,
         )
+        if debug_wind:
+            print_wind_debug_for_game(game, fdg)
         gd = fdg.identifiers.game_date_et
         game_month = int(gd[5:7]) if len(gd) >= 7 else 0
         scored = score_game(fdg, home_streak, game_month)
@@ -2623,7 +2695,8 @@ def movement_line(game: dict, movement: dict) -> str:
 
 
 def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
-                            verbose: bool, now: datetime.datetime | None = None) -> str:
+                            verbose: bool, now: datetime.datetime | None = None,
+                            *, debug_wind: bool = False) -> str:
     """
     Prior day performance report — full slate with signal grading.
 
@@ -2721,7 +2794,10 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
     # ── Retroactive signal evaluation + grading ───────────────────────────
     evaluated = []
     for g in games:
-        sigs = evaluate_signals(conn, g, streaks, "primary", starters, verbose=verbose)
+        sigs = evaluate_signals(
+            conn, g, streaks, "primary", starters,
+            verbose=verbose, debug_wind=debug_wind,
+        )
         hs   = g["home_score"]; as_  = g["away_score"]
         tot  = g["total_line"]; hml  = g["home_ml"]; aml = g["away_ml"]
         runs = (hs + as_) if (hs is not None and as_ is not None) else None
@@ -3121,7 +3197,8 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
 def build_morning_brief(games, streaks, starters, game_date,
                         conn=None, session=None,
                         now: datetime.datetime | None = None,
-                        verbose: bool = False):
+                        verbose: bool = False,
+                        debug_wind: bool = False):
     lines = []
     if now is None:
         now = _now_et()
@@ -3143,7 +3220,10 @@ def build_morning_brief(games, streaks, starters, game_date,
     avoid_entries     = []
 
     for game in games:
-        sigs = evaluate_signals(conn, game, streaks, "morning", starters, verbose=verbose)
+        sigs = evaluate_signals(
+            conn, game, streaks, "morning", starters,
+            verbose=verbose, debug_wind=debug_wind,
+        )
         entry = {
             "game":   game,
             "sigs":   sigs,
@@ -3220,7 +3300,8 @@ def build_morning_brief(games, streaks, starters, game_date,
 def build_primary_brief(games, streaks, starters, game_date,
                         session_label="PRIMARY", s6_fires=None,
                         conn=None, session=None, now: datetime.datetime | None = None,
-                        verbose: bool = False):
+                        verbose: bool = False,
+                        debug_wind: bool = False):
     if s6_fires is None:
         s6_fires = {}
     _action = {
@@ -3246,7 +3327,10 @@ def build_primary_brief(games, streaks, starters, game_date,
     no_signal   = []
 
     for game in games:
-        sigs = evaluate_signals(conn, game, streaks, "primary", starters, verbose=verbose)
+        sigs = evaluate_signals(
+            conn, game, streaks, "primary", starters,
+            verbose=verbose, debug_wind=debug_wind,
+        )
         entry = {
             "game":    game,
             "sigs":    sigs,
@@ -3408,7 +3492,8 @@ def build_primary_brief(games, streaks, starters, game_date,
 def build_closing_brief(games, streaks, starters, movement, game_date,
                         conn=None, session=None,
                         now: datetime.datetime | None = None,
-                        verbose: bool = False):
+                        verbose: bool = False,
+                        debug_wind: bool = False):
     lines = []
     if now is None:
         now = _now_et()
@@ -3426,7 +3511,10 @@ def build_closing_brief(games, streaks, starters, movement, game_date,
     avoid_entries     = []
 
     for game in games:
-        sigs = evaluate_signals(conn, game, streaks, "closing", starters, verbose=verbose)
+        sigs = evaluate_signals(
+            conn, game, streaks, "closing", starters,
+            verbose=verbose, debug_wind=debug_wind,
+        )
         g    = game
         lines.append(f"\n  {matchup_line(g)}")
         lines.append(f"  {weather_line(g)}")
@@ -3793,6 +3881,7 @@ def build_docx_brief(
     starters: dict,
     movement: dict = None,
     verbose: bool = False,
+    debug_wind: bool = False,
 ) -> "Document":
     """
     Build a Word Document for any session type.
@@ -3832,7 +3921,10 @@ def build_docx_brief(
     # ── Evaluate signals for all games ───────────────────────────────────
     entries = []
     for game in games:
-        sigs = evaluate_signals(conn, game, streaks, session, starters, verbose=verbose)
+        sigs = evaluate_signals(
+            conn, game, streaks, session, starters,
+            verbose=verbose, debug_wind=debug_wind,
+        )
         entries.append({"game": game, "sigs": sigs})
 
     # ── MORNING layout ────────────────────────────────────────────────────
@@ -3936,7 +4028,10 @@ def build_docx_brief(
         # Build evaluated list
         evaluated = []
         for g in games:
-            sigs = evaluate_signals(conn, g, streaks, "primary", starters, verbose=verbose)
+            sigs = evaluate_signals(
+                conn, g, streaks, "primary", starters,
+                verbose=verbose, debug_wind=debug_wind,
+            )
             hs   = g.get("home_score"); as_ = g.get("away_score")
             tot  = g.get("total_line"); hml = g.get("home_ml"); aml = g.get("away_ml")
             runs = (hs + as_) if (hs is not None and as_ is not None) else None
@@ -4301,6 +4396,9 @@ def parse_args():
 
             Sync bet_ledger from signal_state only (pregame T−30 window; no brief output):
               python generate_daily_brief.py --sync-bet-ledger-only --date YYYY-MM-DD
+
+            Wind classification investigation:
+              python generate_daily_brief.py --session primary --verbose --debug-wind
         """),
     )
     p.add_argument(
@@ -4345,6 +4443,12 @@ def parse_args():
     p.add_argument(
         "--verbose", action="store_true",
         help="Print extra DB diagnostic info during execution.",
+    )
+    p.add_argument(
+        "--debug-wind", action="store_true",
+        help="Per game, print wind classification debug: DB row vs dressed environment "
+             "(direction, in/out gates, suppression, env_ceiling). Implies detailed stdout; "
+             "pair with --verbose for tier lines too.",
     )
     p.add_argument(
         "--as-of",
@@ -4426,6 +4530,11 @@ def main():
     print(f"\n{'═'*72}")
     print(f"  MLB Betting Model · Daily Brief · {session.upper()} · {today}")
     print(f"{'═'*72}")
+    if args.debug_wind:
+        print(
+            "\n  [debug-wind] ENABLED — printing DB vs dressed wind fields for each game "
+            "(see evaluate_signals / fully_dressed_game.build_game_environment).\n"
+        )
 
     conn = open_db(DB_PATH)
 
@@ -4445,7 +4554,9 @@ def main():
     if session == "prior":
         yesterday = (datetime.date.fromisoformat(today)
                      - datetime.timedelta(days=1)).isoformat()
-        brief_text = build_prior_day_report(conn, yesterday, args.verbose, now=now)
+        brief_text = build_prior_day_report(
+            conn, yesterday, args.verbose, now=now, debug_wind=args.debug_wind,
+        )
         print(brief_text)
 
         # ── Save txt file ──────────────────────────────────────────────────
@@ -4620,20 +4731,26 @@ def main():
 
     # ── Generate brief ───────────────────────────────────────────────────
     if session == "morning":
-        brief_text = build_morning_brief(games, streaks, starters, today,
-                                         conn=conn, session=session, now=now,
-                                         verbose=args.verbose)
+        brief_text = build_morning_brief(
+            games, streaks, starters, today,
+            conn=conn, session=session, now=now,
+            verbose=args.verbose, debug_wind=args.debug_wind,
+        )
     elif session in ("early", "afternoon", "primary", "late"):
         label = {"early": "EARLY GAMES", "afternoon": "AFTERNOON",
                  "primary": "PRIMARY", "late": "LATE GAMES"}.get(session, "PRIMARY")
-        brief_text = build_primary_brief(games, streaks, starters, today,
-                                         session_label=label, s6_fires=s6_fires,
-                                         conn=conn, session=session, now=now,
-                                         verbose=args.verbose)
+        brief_text = build_primary_brief(
+            games, streaks, starters, today,
+            session_label=label, s6_fires=s6_fires,
+            conn=conn, session=session, now=now,
+            verbose=args.verbose, debug_wind=args.debug_wind,
+        )
     else:
-        brief_text = build_closing_brief(games, streaks, starters, movement, today,
-                                         conn=conn, session=session, now=now,
-                                         verbose=args.verbose)
+        brief_text = build_closing_brief(
+            games, streaks, starters, movement, today,
+            conn=conn, session=session, now=now,
+            verbose=args.verbose, debug_wind=args.debug_wind,
+        )
 
     # ── Output ───────────────────────────────────────────────────────────
     print(brief_text)
@@ -4676,7 +4793,10 @@ def main():
             all_sig = []
             all_avoid = []
             for g in games:
-                sigs = evaluate_signals(conn, g, streaks, session, starters, verbose=args.verbose)
+                sigs = evaluate_signals(
+                    conn, g, streaks, session, starters,
+                    verbose=args.verbose, debug_wind=False,
+                )
                 if sigs["picks"]:
                     all_sig.append({"game": g, "sigs": sigs})
                 elif sigs.get("avoid"):
@@ -4688,7 +4808,10 @@ def main():
         picks_count = 0
         for g in games:
             picks_count += len(
-                evaluate_signals(conn, g, streaks, session, starters, verbose=args.verbose)["picks"]
+                evaluate_signals(
+                    conn, g, streaks, session, starters,
+                    verbose=args.verbose, debug_wind=False,
+                )["picks"]
             )
         log_brief(conn, today, session, len(games), picks_count,
                   output_file, pick_entries=pick_entries_for_log, avoid_entries=avoid_entries_for_log, now=now)
