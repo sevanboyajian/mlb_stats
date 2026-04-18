@@ -402,18 +402,16 @@ def _eval_h3b(g: FullyDressedGame, mvb_fires: bool) -> SignalFinding:
 
 
 def _eval_avoids(g: FullyDressedGame) -> list[AvoidFinding]:
+    """
+    Hard avoids only — things that should persist as signal_state / brief AVOID rows.
+
+    Venue wind suppression is NOT listed here: it is already encoded in
+    GameEnvironment (env_ceiling=NoSignal, wind_effect=SUPPRESSED) and blocks
+    MV-F / MV-B / H3b via gates, plus data_flags in score_game. Treating it as an
+    AvoidFinding caused legacy ``avoid=True`` alongside matchup signals (e.g.
+    LHP_FADE), which read as “override everything.”
+    """
     avoids: list[AvoidFinding] = []
-    if g.environment.is_wind_suppressed:
-        avoids.append(
-            AvoidFinding(
-                avoid_type="venue_suppressed",
-                bet_type="wind_signals",
-                reason=(
-                    f"Wind signals suppressed at {g.identifiers.venue_name}. "
-                    f"Market is efficient here — no weather edge."
-                ),
-            )
-        )
     if g.environment.is_retractable and g.environment.wind_source != "actual":
         avoids.append(
             AvoidFinding(
@@ -769,11 +767,20 @@ def scored_game_to_eval_dict(scored: ScoredGame, session: str) -> dict[str, Any]
                 (watch_reason + " | " if watch_reason else "") + extra
             )
 
+    # Legacy ``avoid``: do not conflate “venue note” with “this card is an AVOID.”
+    # If any signal fires, soft environment avoids must not set avoid=True (Word
+    # brief showed picks + AVOID banner). Hard avoid = tier Avoid, or no signals
+    # but a persisted AvoidFinding (e.g. retractable roof pregame).
+    hard_avoid = bool(scored.avoids) and (
+        scored.output_tier == "Avoid" or not scored.signals_fired
+    )
     return {
         "signals": legacy_signals,
         "picks": picks,
-        "avoid": bool(scored.avoids),
-        "avoid_reason": "; ".join(a.reason for a in scored.avoids) if scored.avoids else None,
+        "avoid": hard_avoid,
+        "avoid_reason": (
+            "; ".join(a.reason for a in scored.avoids) if scored.avoids else None
+        ),
         "watch": watch,
         "watch_reason": watch_reason,
         "data_flags": scored.data_flags,

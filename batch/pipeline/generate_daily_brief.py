@@ -6,6 +6,9 @@ Reads from mlb_stats.db and outputs the formatted betting brief.
 
 CHANGE LOG (latest first)
 ──────────────────────────
+2026-04-17  Venue wind suppression no longer emits an AvoidFinding (tier/env gates +
+            data_flags only). Legacy avoid=True only for hard avoids or no-signal
+            avoid rows; Word brief avoids duplicate AVOID banner when picks exist.
 2026-04-17  Prior report: removed duplicate FURTHER SIGNALS block (ranks #7+ only in
             RETROACTIVE); ENV/venue avoids spell out “class” of bet skipped (not one ticket).
 2026-04-17  Prior report: NEXT picks use the same ledger box as TOP; AVOID section
@@ -3677,8 +3680,8 @@ def _add_matchup_block(doc, game: dict, streaks: dict, starters: dict,
 
         doc.add_paragraph()  # spacer
 
-    # ── Avoid flag ───────────────────────────────────────────────────────
-    if sigs["avoid"]:
+    # ── Avoid flag (only when no picks — avoids duplicate banner when tier=Avoid+winds)
+    if sigs["avoid"] and not sigs.get("picks"):
         p   = doc.add_paragraph()
         run = p.add_run(f"⛔  AVOID: {sigs['avoid_reason']}")
         run.bold      = True
