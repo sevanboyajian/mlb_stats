@@ -153,13 +153,16 @@ def load_games_for_date(conn, game_date: str, mod) -> list:
         """
         SELECT
             g.game_pk,
-            g.game_date,
+            g.game_date_et AS game_date,
+            g.season,
+            g.venue_id,
             g.game_start_utc,
             v.name          AS venue_name,
             g.temp_f,
             g.wind_mph,
             g.wind_direction,
             g.sky_condition,
+            COALESCE(g.wind_source, 'actual') AS wind_source,
             v.wind_effect,
             v.wind_note,
             v.roof_type,
@@ -194,7 +197,7 @@ def load_games_for_date(conn, game_date: str, mod) -> list:
                                          AND tot.market_type = 'total'
         LEFT JOIN v_closing_game_odds rl  ON rl.game_pk  = g.game_pk
                                          AND rl.market_type = 'runline'
-        WHERE  g.game_date = ?
+        WHERE  g.game_date_et = ?
           AND  g.status    = 'Final'
           AND  g.game_type = 'R'
         ORDER  BY g.game_start_utc
@@ -667,7 +670,7 @@ def run_backtest(conn, mod, date_from: str, date_to: str,
         for game in games:
             if game.get("home_ml") is None:
                 continue   # no odds — skip this game
-            sigs = mod.evaluate_signals(game, streaks, "primary")
+            sigs = mod.evaluate_signals(conn, game, streaks, "primary")
             if not sigs["picks"]:
                 continue
             for pick in sigs["picks"]:

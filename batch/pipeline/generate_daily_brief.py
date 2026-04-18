@@ -1838,12 +1838,15 @@ def load_games(conn: sqlite3.Connection, game_date: str, verbose: bool,
         SELECT
             g.game_pk,
             g.game_date_et AS game_date,
+            g.season,
+            g.venue_id,
             g.game_start_utc,
             v.name          AS venue_name,
             g.temp_f,
             g.wind_mph,
             g.wind_direction,
             g.sky_condition,
+            COALESCE(g.wind_source, 'actual') AS wind_source,
 
             -- Venue intelligence (populated by add_stadium_data.py)
             v.wind_effect,
@@ -2062,404 +2065,38 @@ def enrich_game_with_starters(game: dict, starters: dict) -> None:
     game["home_rolling_ops"]   = home_s.get("rolling_ops")
     game["home_ops_window"]    = home_s.get("ops_window") or 0
 
-def evaluate_signals(game: dict, streaks: dict, session: str) -> dict:
+def evaluate_signals(
+    conn: sqlite3.Connection,
+    game: dict,
+    streaks: dict,
+    session: str,
+) -> dict:
     """
     Evaluate all model signals for a single game.
     Returns a dict describing which signals fired and what they recommend.
+
+    Implementation lives in ``batch.pipeline.score_game`` (``score_game`` /
+    ``evaluate_signals_scored``); this wrapper dresses the brief row and maps
+    back to the legacy dict shape.
     """
-    result = {
-        "signals":      [],
-        "picks":        [],   # list of {bet, market, odds_str, reason}
-        "avoid":        False,
-        "avoid_reason": None,
-        "watch":        False,
-        "watch_reason": None,
-        "data_flags":   [],   # non-fatal missing/stale data notes
-    }
+    from batch.pipeline.score_game import evaluate_signals_scored, scored_game_to_eval_dict
 
-    home_ml   = game.get("home_ml")
-    away_ml   = game.get("away_ml")
-    total     = game.get("total_line")
-    wind_mph     = game.get("wind_mph") or 0
-    wind_dir     = wind_direction_label(game.get("wind_direction") or "")
-    wind_effect  = (game.get("wind_effect") or "HIGH").upper()
-    wind_note_v  = game.get("wind_note") or ""
-    roof_type    = (game.get("roof_type") or "Open")
+    if conn is None:
+        raise TypeError("evaluate_signals requires a sqlite3.Connection (conn)")
 
-    # Signal suppression tiers derived from venues.wind_effect:
-    #   SUPPRESSED — never fire wind signals (Oracle, Tropicana, loanDepot)
-    #   LOW        — retractable roof; note roof status, signals degraded
-    #   MODERATE   — open air but sheltered; signals fire with reduced confidence
-    #   HIGH       — full wind signal eligibility
-    suppress_wind  = (wind_effect == "SUPPRESSED")
-    is_retractable = (wind_effect == "LOW")
-    wind_eligible  = (wind_effect == "HIGH")
-
-    home_id   = game.get("home_team_id")
-    away_id   = game.get("away_team_id")
-    home_abbr = game.get("home_abbr", "HOME")
-    away_abbr = game.get("away_abbr", "AWAY")
-
-    # ── Implied probabilities ────────────────────────────────────────────
-    home_impl = american_to_implied(home_ml) if home_ml else None
-    away_impl = american_to_implied(away_ml) if away_ml else None
-
-    if home_ml is None or away_ml is None:
-        result["data_flags"].append("ML odds missing — signal evaluation limited")
-
-    # ── Venue wind context ───────────────────────────────────────────────
-    if suppress_wind:
-        result["data_flags"].append(
-            f"Wind signals suppressed at this venue ({wind_note_v[:80] if wind_note_v else roof_type})"
-        )
-    elif is_retractable:
-        result["data_flags"].append(
-            "Retractable roof venue — verify roof status before acting on wind signals"
-        )
-
-    # ── Home team streak ─────────────────────────────────────────────────
-    home_streak = streaks.get(home_id, 0)
-    away_streak = streaks.get(away_id, 0)
-
-    streak_label = ""
-    if home_streak >= STREAK_THRESHOLD:
-        streak_label = f"W{home_streak}"
-    elif home_streak <= -STREAK_THRESHOLD:
-        streak_label = f"L{abs(home_streak)}"
-
-    # ── Signal 4: S1 + H2 stack (highest priority combo) ────────────────
-    # Requires W5+ (STREAK_THRESHOLD) AND home priced in the -130/-160 fade zone.
-    # Stack fires at W5+ — the H2 price screen adds the second qualification.
-    s1_h2_fired = False
-    if (home_streak >= STREAK_THRESHOLD
-            and home_ml is not None
-            and HOME_FAV_MV_F_HIGH <= home_ml <= HOME_FAV_MV_F_LOW):
-        s1_h2_fired = True
-        result["signals"].append("S1+H2")
-        result["picks"].append({
-            "bet":    f"{away_abbr} ML",
-            "market": "ML",
-            "odds":   fmt_odds(away_ml),
-            "reason": (f"S1+H2 STACK — Home team {home_abbr} on W{home_streak} streak "
-                       f"AND priced {fmt_odds(home_ml)} (overpricing zone). "
-                       f"Two signals simultaneously — highest-priority fade."),
-            "priority": 1,
-        })
-
-    # ── Signal 1: MV-F (wind-in + home fav overpriced) ──────────────────
-    if (wind_eligible
-            and wind_dir == "IN"
-            and wind_mph >= WIND_IN_MIN_MPH
-            and home_ml is not None
-            and HOME_FAV_MV_F_HIGH <= home_ml <= HOME_FAV_MV_F_LOW
-            and not s1_h2_fired):
-        result["signals"].append("MV-F")
-        result["picks"].append({
-            "bet":    f"{away_abbr} ML",
-            "market": "ML",
-            "odds":   fmt_odds(away_ml),
-            "reason": (f"MV-F — Wind IN {wind_mph} mph. "
-                       f"Home fav {fmt_odds(home_ml)} in fade zone (−130/−160). "
-                       f"Wind-in suppresses scoring; overpriced home fav. "
-                       f"CLV gate: only bet if away ML implied prob is ≥{MV_F_CLV_GATE}pp "
-                       f"below morning open (CLV≥+{MV_F_CLV_GATE}pp). "
-                       f"CLV≥+0.5pp fires: SBRO +24.0% ROI, OW +10.6% ROI. "
-                       f"CLV<+0.5pp fires: SBRO −9.4% ROI. "
-                       f"Compare current away ML to opening line at bet time."),
-            "priority": 2,
-        })
-
-    # ── Signal 2: S1 standalone (win streak — tighter filters applied) ───
-    # Fix 1: price band -105 to -170 only — outside this range the market
-    #        has not loaded (too cheap) or the odds risk is too large (too dear).
-    # Fix 2: threshold raised to W6+ (S1_STANDALONE_MIN) for standalone fires;
-    #        W5+ is reserved for the S1+H2 stack where the price screen adds
-    #        a second qualification.
-    # Priority swap (Mar 2026): S1 standalone moved from priority 3 → 5.
-    #   MV-B is now priority 4, NF4 priority 3. 3-year data: MV-B ROI +18.9%
-    #   (13 fires, positive all 3 years) vs S1 standalone ROI -5.3% (26 fires,
-    #   negative in 2 of 3 years). On days both fire, MV-B is the better pick.
-    s1_price_ok = (
-        home_ml is not None
-        and S1_PRICE_HIGH <= home_ml <= S1_PRICE_LOW   # -170 to -105
-    )
-    if (home_streak >= S1_STANDALONE_MIN    # W6+
-            and not s1_h2_fired
-            and s1_price_ok):
-        result["signals"].append("S1")
-        result["picks"].append({
-            "bet":    f"{away_abbr} ML",
-            "market": "ML",
-            "odds":   fmt_odds(away_ml),
-            "reason": (f"S1 — Home team {home_abbr} entering on W{home_streak} win streak "
-                       f"priced {fmt_odds(home_ml)} (streak-premium zone −105/−170). "
-                       f"Fade away ML. ROI: +7.50% SBRO / +8.99% OW (stronger at W7+). "
-                       f"Filtered: W6+ only, price band −105/−170."),
-            "priority": 5,   # Swapped: was 3, now below NF4 and MV-B
-        })
-
-    # Determine calendar month for month-gated signals (NF4, H3b, July OVER)
     try:
-        game_month = int((game.get("game_date") or "")[:10].split("-")[1])
-    except (ValueError, IndexError):
-        game_month = 0
-
-    # ── Signal NF4: Home Fav vs Strong LHP (monitoring) ────────────────
-    # Finding 4 + Finding 5 (2025 full-season regression, enriched dataset):
-    # Gate: home imp 60–67% (heavy fav ~-150 to -200 ML). The 55–60% band
-    # shows only 5.5pp edge (not significant) — validated by Finding 5.
-    # High-OPS home teams (rolling OPS ≥ 0.736) priced 60–67% implied
-    # against a strong LHP (rolling 5-start ERA ≤ 3.04) win only 35.3%.
-    # Edge = +27.6pp, z = −3.33, p<.01, n=34. Market anchors on season OPS
-    # built largely vs RHP and fails to adjust for LHP platoon disadvantage.
-    # Independent of MV-F — wind-in and strong LHP co-occur too rarely to stack.
-    # Monitoring: half-stake until N ≥ 50 live fires. Sep excluded.
-    # Data requirements: starter throws and home team rolling_ops
-    # must both be available — graceful skip if either is missing.
-    nf4_fired = False
-    if (home_impl is not None
-            and NF4_HOME_IMP_LOW <= home_impl <= NF4_HOME_IMP_HIGH
-            and game_month in NF4_MONTHS_OK
-            and not s1_h2_fired):
-        # Get away starter handedness and home team rolling OPS from starters dict
-        # starters is not passed to evaluate_signals — pull from game dict extensions
-        away_throw = game.get("away_starter_throw")   # set by caller — see Change 4
-        home_ops   = game.get("home_rolling_ops")     # set by caller — see Change 4
-        ops_window = game.get("home_ops_window", 0)
-
-        if away_throw == "L":
-            # Check SP ERA gate — use rolling ERA from pitcher_metrics if available,
-            # fall back to era_season. era_season is less precise but acceptable.
-            away_era = game.get("away_starter_era")   # set by caller — see Change 4
-            era_ok   = (away_era is not None and away_era <= NF4_SP_ERA_MAX)
-
-            # Check home team rolling OPS gate
-            ops_ok = (home_ops is not None
-                      and ops_window >= 5
-                      and home_ops >= NF4_OPS_MIN)
-
-            if era_ok and ops_ok:
-                nf4_fired = True
-                result["signals"].append("NF4")
-                result["picks"].append({
-                    "bet":    f"{away_abbr} ML",
-                    "market": "ML",
-                    "odds":   fmt_odds(away_ml),
-                    "reason": (
-                        f"NF4 — Home fav {home_abbr} at {home_impl:.0%} implied "
-                        f"({fmt_odds(home_ml)}) vs strong LHP "
-                        f"{game.get('away_starter_name', away_abbr)} "
-                        f"(rolling ERA {away_era:.2f}, hand L). "
-                        f"Home OPS {home_ops:.3f} (≥{NF4_OPS_MIN}, high-OPS gate). "
-                        f"Finding 4+5 (2025, n=34): high-OPS home favs in 60–67% "
-                        f"imp band win 35.3% vs 62.9% implied (z=−3.33, p<.01, +27.6pp). "
-                        f"55–60% band validated as not significant (Finding 5) — "
-                        f"signal is heavy-fav specific (~−150 to −200 ML). "
-                        f"Independent of MV-F (wind+LHP co-occur too rarely). "
-                        f"MONITORING: half-stake until N≥50 live fires. Sep excluded."
-                    ),
-                    "priority": 3,
-                })
-            elif away_throw == "L" and not era_ok:
-                result["data_flags"].append(
-                    f"NF4 check: away SP is LHP but ERA gate not met "
-                    f"(era={away_era:.2f} > {NF4_SP_ERA_MAX} or missing)"
-                    if away_era is not None else
-                    f"NF4 check: away SP is LHP but rolling ERA unavailable — "
-                    f"signal requires era_season ≤ {NF4_SP_ERA_MAX}"
-                )
-            elif away_throw == "L" and not ops_ok:
-                result["data_flags"].append(
-                    f"NF4 check: LHP ERA gate met but home team rolling OPS "
-                    f"{'missing' if home_ops is None else f'{home_ops:.3f} < {NF4_OPS_MIN}'} "
-                    f"(window={ops_window} games)"
-                )
-
-    # ── Signal 3: MV-B (wind-out + home dog implied 35–42%) ─────────────
-    # Fix 3: wind floor raised to WIND_OUT_MVB_MPH (15 mph) for MV-B.
-    #        H3b uses the lower WIND_OUT_MIN_MPH (10 mph) independently.
-    # Priority swap (Mar 2026): MV-B moved from priority 4 → 4, above S1
-    #   standalone (now priority 5). 3-year data: MV-B +18.9% ROI, positive all 3 years.
-    #
-    # Mar 2026 CLV timing study refinements (non-Oracle population, n=45):
-    #   Change A — Implied band tightened to ≤42% (was ≤45%).
-    #     42.5-45.0% bucket: -24.1% ROI on 18 games. Near-even dogs are
-    #     efficiently priced; wind-out edge does not clear vig there.
-    #     ≤42% bucket: +18.5% ROI on 26 games. Combined with CLV gate: +22.9%.
-    #   Change B — CLV gate added for live betting.
-    #     CLV>0 (market confirms pick): +12.2% ROI. CLV≤0: -18.1% ROI.
-    #     In the brief, CLV is noted as a live filter. The signal fires
-    #     pre-game; the CLV gate is applied at time of actual bet placement
-    #     by comparing the current line to the morning opening line.
-    #     Note: Oracle Park (wind_effect=SUPPRESSED) never reaches this block.
-    #     The true eligible population is non-Oracle open-air venues only.
-    if (wind_eligible
-            and wind_dir == "OUT"
-            and wind_mph >= WIND_OUT_MVB_MPH           # 15 mph floor
-            and home_impl is not None
-            and DOG_IMPL_LOW <= home_impl <= DOG_IMPL_HIGH   # 35-42% (tightened)
-            and total is not None):
-        result["signals"].append("MV-B")
-        result["picks"].append({
-            "bet":    f"OVER {total}",
-            "market": "TOTAL",
-            "odds":   fmt_odds(game.get("over_odds")) or "-110",
-            "reason": (f"MV-B — Wind OUT {wind_mph} mph (≥15 mph threshold). "
-                       f"Home dog {home_abbr} at {home_impl:.0%} implied ({fmt_odds(home_ml)}). "
-                       f"Wind-out + dog bucket: 58.7% SBRO / 62.3% OW over rate. "
-                       f"Impl band tightened to 35-42% (Mar 2026): near-even dogs 42-45% "
-                       f"show -24.1% ROI on 18 games and are excluded. "
-                       f"CLV gate: only bet if line has moved toward OVER since open "
-                       f"(CLV>0). CLV>0 fires: +12.2% ROI. CLV≤0: -18.1% ROI."),
-            "priority": 4,   # Swapped: was 4, now above S1 standalone (5)
-        })
-
-    # ── Signal 5: H3b — independent wind-out OVER signal ────────────────
-    # Fires as a standalone pick (priority 5) at whitelisted parks with
-    # park factor ≥ H3B_MIN_PARK_FACTOR. Adding the PF gate ensures the
-    # wind-out effect is not diluted at pitcher-friendly parks where the
-    # run environment is already suppressed (2024-2025 data: effect
-    # strongest at PF ≥ 98, weakest at PF < 95).
-    venue_name   = game.get("venue_name") or ""
-    park_factor  = game.get("park_factor_runs") or 100   # default neutral if missing
-    h3b_park_ok  = venue_name in H3B_PARK_WHITELIST
-    h3b_pf_ok    = park_factor >= H3B_MIN_PARK_FACTOR
-    if (wind_eligible
-            and wind_dir == "OUT"
-            and wind_mph >= WIND_OUT_MIN_MPH
-            and total is not None
-            and h3b_park_ok
-            and h3b_pf_ok):
-        if "MV-B" in result["signals"]:
-            result["signals"].append("H3b")
-            for p in result["picks"]:
-                if p["market"] == "TOTAL":
-                    p["reason"] += (f" H3b confirms (wind-out {wind_mph} mph, "
-                                    f"PF {park_factor}, z=2.99 p=0.003).")
-                    break
-        else:
-            result["signals"].append("H3b")
-            result["picks"].append({
-                "bet":    f"OVER {total}",
-                "market": "TOTAL",
-                "odds":   fmt_odds(game.get("over_odds")) or "-110",
-                "reason": (f"H3b — Wind OUT {wind_mph} mph at {venue_name} "
-                           f"(whitelisted, PF {park_factor}). "
-                           f"OVER edge: 52.2% over rate on 4,625 games "
-                           f"(z=2.99, p=0.003 SBRO). Market under-adjusts for wind-out."),
-                "priority": 5,
-            })
-        # Late-season performance flag — Aug/Sep over rate is historically weaker.
-        # 2024 Aug: 22.2% over rate (n=9). 2024 Sep: 37.5% (n=8). Apr-Jul normal (50-54%).
-        # Signal still fires — flag informs the user to size down (use --late-season-stake).
-        if game_month in H3B_LATE_SEASON_MONTHS:
-            result["data_flags"].append(
-                f"H3b late-season caution ({venue_name}): "
-                f"Aug/Sep wind-out OVER rate was 22–38% in 2024 vs 50–54% Apr–Jul. "
-                f"Run environment suppression likely. "
-                f"Signal valid but consider reduced stake (--late-season-stake)."
-            )
-    elif (wind_eligible
-            and wind_dir == "OUT"
-            and wind_mph >= WIND_OUT_MIN_MPH
-            and total is not None):
-        if not h3b_park_ok:
-            result["data_flags"].append(
-                f"Wind OUT {wind_mph} mph but {venue_name or 'this venue'} is not on the "
-                f"H3b whitelist — wind reading may not reflect in-play conditions."
-            )
-        elif not h3b_pf_ok:
-            result["data_flags"].append(
-                f"Wind OUT {wind_mph} mph at {venue_name} but PF {park_factor} < {H3B_MIN_PARK_FACTOR} "
-                f"— pitcher-friendly park offsets wind-out OVER edge."
-            )
-
-    # ── Signal 6: July OVER — seasonal line-setting lag (REINFORCER ONLY) ──
-    # 3-year backtesting (2023-2025, n=74) shows JulyOVER as a standalone
-    # Top Pick is consistently unprofitable: ROI -25.5% (2023), -8.2% (2024),
-    # -5.8% (2025). The seasonal finding from the CSV data is real (52.3%
-    # OVER rate, p=0.0006) but the signal fires on any qualifying game
-    # including ones where the market has already priced the edge.
-    # DECISION (Mar 2026): JulyOVER no longer generates standalone picks.
-    # It only reinforces existing H3b or MV-B OVER picks with seasonal context.
-    # Removing it as a standalone pick improves modelled 3-year ROI from
-    # +2.27% to +7.28% — the single highest-impact change available.
-
-    if (game_month in JULY_OVER_MONTHS
-            and total is not None
-            and JULY_OVER_MIN_TOTAL <= total <= JULY_OVER_MAX_TOTAL
-            and park_factor >= JULY_OVER_MIN_PF
-            and not suppress_wind):
-        # Reinforce existing OVER picks only — never generate a standalone pick
-        if "H3b" in result["signals"] or "MV-B" in result["signals"]:
-            result["signals"].append("JulyOVER")
-            for p in result["picks"]:
-                if p["market"] == "TOTAL":
-                    p["reason"] += f" JulyOVER seasonal edge confirms (52.3% rate, p=0.0006)."
-                    break
-        # If no OVER signal exists: note in data_flags for the brief consumer
-        # but do NOT place a bet on the July seasonal edge alone.
-        else:
-            result["data_flags"].append(
-                f"July seasonal OVER edge present (PF {park_factor}, total {total}) "
-                f"but no wind/dog signal to stack it with — no bet placed. "
-                f"JulyOVER is a reinforcer only, not a standalone signal."
-            )
-
-    # ── AVOID flags ──────────────────────────────────────────────────────
-    avoid_reasons = []
-
-    # Wind-in + over is a classic trap (HIGH wind venues only — suppressed handled separately)
-    if (wind_eligible
-            and wind_dir == "IN"
-            and wind_mph >= WIND_IN_MIN_MPH
-            and total is not None):
-        avoid_reasons.append(
-            f"Wind IN {wind_mph} mph at this venue — DO NOT bet OVER {total}. "
-            f"Wind-in suppresses scoring even with strong lineups."
-        )
-
-    # Home fav on a 4-game (or worse) losing streak
-    if home_streak <= -4 and home_ml is not None and home_ml < 0:
-        avoid_reasons.append(
-            f"{home_abbr} (home fav {fmt_odds(home_ml)}) on L{abs(home_streak)} streak. "
-            f"Avoid home ML — back losing team at a price premium."
-        )
-
-    # Suppressed venue with no signal — note for consumer
-    if suppress_wind and not result["signals"]:
-        venue_name = game.get("venue_name", "this venue")
-        avoid_reasons.append(
-            f"Wind signals suppressed at {venue_name}. "
-            f"Market is typically efficient here — no weather edge. "
-            f"{wind_note_v[:100] if wind_note_v else ''}"
-        )
-
-    if avoid_reasons:
-        result["avoid"]        = True
-        result["avoid_reason"] = "; ".join(avoid_reasons)
-
-    # ── WATCH flags (morning session) ────────────────────────────────────
-    if session == "morning":
-        if (wind_eligible
-                and wind_dir in ("OUT", "IN")
-                and wind_mph >= WIND_OUT_MIN_MPH):
-            result["watch"]        = True
-            result["watch_reason"] = (
-                f"Wind {wind_dir} {wind_mph} mph — monitor for signal at Primary Brief. "
-                f"Do not bet on opening lines alone."
-            )
-        if home_streak >= S1_STANDALONE_MIN or home_streak <= -4:
-            result["watch"]        = True
-            existing               = result["watch_reason"] or ""
-            result["watch_reason"] = (
-                existing
-                + (" | " if existing else "")
-                + f"Home team streak situation: {streak_label}. "
-                  f"Track lineup and odds movement through Primary Brief."
-            )
-
-    return result
+        scored = evaluate_signals_scored(conn, game, streaks, session)
+        return scored_game_to_eval_dict(scored, session)
+    except Exception as e:
+        return {
+            "signals": [],
+            "picks": [],
+            "avoid": False,
+            "avoid_reason": None,
+            "watch": False,
+            "watch_reason": None,
+            "data_flags": [f"Signal evaluation failed (dress/score): {e}"],
+        }
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -2653,8 +2290,12 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
     cur = conn.execute("""
         SELECT
             g.game_pk,
+            g.game_date_et AS game_date,
+            g.season,
+            g.venue_id,
             g.home_score, g.away_score,
             g.wind_mph, g.wind_direction, g.temp_f, g.sky_condition,
+            COALESCE(g.wind_source, 'actual') AS wind_source,
             g.game_start_utc,
             th.team_id   AS home_team_id,
             ta.team_id   AS away_team_id,
@@ -2664,7 +2305,7 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
             ta.name         AS away_name,
             v.name          AS venue_name,
             v.wind_effect, v.wind_note, v.roof_type,
-            v.park_factor_runs, v.orientation_hp,
+            v.park_factor_runs, v.park_factor_hr, v.orientation_hp,
             go_ml.home_ml,   go_ml.away_ml,
             go_tot.total_line, go_tot.over_odds, go_tot.under_odds
         FROM   games g
@@ -2721,7 +2362,7 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
     evaluated = []
     for g in games:
         enrich_game_with_starters(g, starters)
-        sigs = evaluate_signals(g, streaks, "primary")
+        sigs = evaluate_signals(conn, g, streaks, "primary")
         hs   = g["home_score"]; as_  = g["away_score"]
         tot  = g["total_line"]; hml  = g["home_ml"]; aml = g["away_ml"]
         runs = (hs + as_) if (hs is not None and as_ is not None) else None
@@ -3071,7 +2712,7 @@ def build_morning_brief(games, streaks, starters, game_date,
 
     for game in games:
         enrich_game_with_starters(game, starters)
-        sigs = evaluate_signals(game, streaks, "morning")
+        sigs = evaluate_signals(conn, game, streaks, "morning")
         entry = {
             "game":   game,
             "sigs":   sigs,
@@ -3174,7 +2815,7 @@ def build_primary_brief(games, streaks, starters, game_date,
 
     for game in games:
         enrich_game_with_starters(game, starters)
-        sigs = evaluate_signals(game, streaks, "primary")
+        sigs = evaluate_signals(conn, game, streaks, "primary")
         entry = {
             "game":    game,
             "sigs":    sigs,
@@ -3354,7 +2995,7 @@ def build_closing_brief(games, streaks, starters, movement, game_date,
 
     for game in games:
         enrich_game_with_starters(game, starters)
-        sigs = evaluate_signals(game, streaks, "closing")
+        sigs = evaluate_signals(conn, game, streaks, "closing")
         g    = game
         lines.append(f"\n  {matchup_line(g)}")
         lines.append(f"  {weather_line(g)}")
@@ -3712,9 +3353,15 @@ def _new_brief_doc(session: str, game_date: str) -> "Document":
     return doc
 
 
-def build_docx_brief(session: str, game_date: str,
-                     games: list, streaks: dict, starters: dict,
-                     movement: dict = None) -> "Document":
+def build_docx_brief(
+    conn: sqlite3.Connection,
+    session: str,
+    game_date: str,
+    games: list,
+    streaks: dict,
+    starters: dict,
+    movement: dict = None,
+) -> "Document":
     """
     Build a Word Document for any session type.
     Returns a python-docx Document ready to save.
@@ -3754,7 +3401,7 @@ def build_docx_brief(session: str, game_date: str,
     entries = []
     for game in games:
         enrich_game_with_starters(game, starters)
-        sigs = evaluate_signals(game, streaks, session)
+        sigs = evaluate_signals(conn, game, streaks, session)
         entries.append({"game": game, "sigs": sigs})
 
     # ── MORNING layout ────────────────────────────────────────────────────
@@ -3859,7 +3506,7 @@ def build_docx_brief(session: str, game_date: str,
         evaluated = []
         for g in games:
             enrich_game_with_starters(g, starters)
-            sigs = evaluate_signals(g, streaks, "primary")
+            sigs = evaluate_signals(conn, g, streaks, "primary")
             hs   = g.get("home_score"); as_ = g.get("away_score")
             tot  = g.get("total_line"); hml = g.get("home_ml"); aml = g.get("away_ml")
             runs = (hs + as_) if (hs is not None and as_ is not None) else None
@@ -4512,7 +4159,7 @@ def main():
     # ── S6 pitcher streak check (monitoring signal) ───────────────────────
     # Runs after streaks are loaded so we can pass S1-active game_pks.
     # S6 needs DB access for rolling streak computation — runs here, not
-    # inside evaluate_signals() which is stateless.
+    # outside evaluate_signals() (dress + score use DB via conn).
     s6_fires = {}
     if S6_AVAILABLE and session in ("early", "afternoon", "primary"):
         try:
@@ -4597,7 +4244,7 @@ def main():
             all_avoid = []
             for g in games:
                 enrich_game_with_starters(g, starters)
-                sigs = evaluate_signals(g, streaks, session)
+                sigs = evaluate_signals(conn, g, streaks, session)
                 if sigs["picks"]:
                     all_sig.append({"game": g, "sigs": sigs})
                 elif sigs.get("avoid"):
@@ -4609,7 +4256,7 @@ def main():
         picks_count = 0
         for g in games:
             enrich_game_with_starters(g, starters)
-            picks_count += len(evaluate_signals(g, streaks, session)["picks"])
+            picks_count += len(evaluate_signals(conn, g, streaks, session)["picks"])
         log_brief(conn, today, session, len(games), picks_count,
                   output_file, pick_entries=pick_entries_for_log, avoid_entries=avoid_entries_for_log, now=now)
         if args.verbose:

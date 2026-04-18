@@ -167,12 +167,15 @@ def load_games_for_date(con, game_date: str) -> list:
         SELECT
             g.game_pk,
             g.game_date_et AS game_date,
+            g.season,
+            g.venue_id,
             g.game_start_utc,
             v.name          AS venue_name,
             g.temp_f,
             g.wind_mph,
             g.wind_direction,
             g.sky_condition,
+            COALESCE(g.wind_source, 'actual') AS wind_source,
             v.wind_effect,
             v.wind_note,
             v.roof_type,
@@ -312,7 +315,7 @@ def classify_game(game: dict, streaks: dict, mod) -> str:
 
     # Evaluate signals (mirrors backtest_top_pick.py)
     try:
-        sigs = mod.evaluate_signals(game, streaks, "primary")
+        sigs = mod.evaluate_signals(conn, game, streaks, "primary")
         picks = sigs.get("picks", [])
     except Exception:
         picks = []

@@ -36,7 +36,6 @@ SIGNAL_STRENGTH: dict[str, str] = {
     "H3b": "moderate",
     "LHP_FADE": "moderate",
     "S1": "weak",
-    "NF4": "weak",
 }
 
 _BOOK_PRIORITY = ("draftkings", "fanduel", "betmgm", "pinnacle", "caesars")
@@ -167,6 +166,11 @@ class FullyDressedGame:
     output_tier: str | None = None
     tier_basis: str | None = None
     stake_multiplier: float = 1.0
+    # Brief / signal bridge (not part of DB dress; set by score_game pipeline)
+    brief_session: str = "primary"
+    home_streak: int = 0
+    away_streak: int = 0
+    venue_wind_note: str | None = None
 
 
 def _optional_tables_present(con: sqlite3.Connection) -> frozenset[str]:
@@ -913,4 +917,8 @@ def fully_dressed_to_json(obj: FullyDressedGame) -> dict[str, Any]:
         "output_tier": obj.output_tier,
         "tier_basis": obj.tier_basis,
         "stake_multiplier": obj.stake_multiplier,
+        "brief_session": obj.brief_session,
+        "home_streak": obj.home_streak,
+        "away_streak": obj.away_streak,
+        "venue_wind_note": obj.venue_wind_note,
     }
