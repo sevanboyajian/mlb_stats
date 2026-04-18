@@ -2385,7 +2385,7 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
     team_ids = list({g["home_team_id"] for g in games} | {g["away_team_id"] for g in games})
     streaks  = load_streaks(conn, game_date, team_ids, verbose)
 
-    # Starters (for enrich_game_with_starters / starter_line). Falls back gracefully if missing.
+    # Starters (for enrich_game / starter_line). Falls back gracefully if missing.
     starters = load_starters(conn, game_date, verbose)
 
     # ── Grading helpers ───────────────────────────────────────────────────
