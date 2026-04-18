@@ -6,6 +6,15 @@ Reads from mlb_stats.db and outputs the formatted betting brief.
 
 CHANGE LOG (latest first)
 ──────────────────────────
+2026-04-17  Scoring function implemented. score_game() replaces evaluate_signals().
+            All signal logic consolidated into per-signal evaluator functions in
+            batch/pipeline/score_game.py. Three-dimension tier decision: signal_strength
+            × env_ceiling × data_completeness. LHP_FADE signal added (replaces NF4 as
+            primary formulation; NF4 retained as backward-compat alias). Hostile
+            environment detection added. Avoid evaluation separated from signal evaluation.
+            ScoredGame output dataclass added. enrich_game(conn, game, starters) is the
+            integration point (starter inject + dress); evaluate_signals maps ScoredGame
+            to the legacy dict and attaches output_tier / tier_basis / stake_multiplier.
 2026-04-17  Ops: --sync-bet-ledger-only (no brief) + run_pipeline job_type bet_ledger_sync
             for recurring T−30 bet_ledger materialization without re-running briefs.
 2026-04-17  Research: persist AVOID calls into brief_picks (pick_rank=0, signal='AVOID')
@@ -2047,8 +2056,8 @@ def load_line_movement(conn: sqlite3.Connection, game_date: str, verbose: bool) 
 def enrich_game_with_starters(game: dict, starters: dict) -> None:
     """
     Inject away starter handedness, ERA, name, and home team rolling OPS
-    into the game dict so evaluate_signals() can access them without
-    needing a separate starters parameter.
+    into the game dict. Used by ``enrich_game()`` before dressing; may also be
+    called alone when only the raw dict needs starter fields.
     Modifies game in place. Safe to call even if starters is empty.
     """
     gpk     = game.get("game_pk")
@@ -2065,28 +2074,68 @@ def enrich_game_with_starters(game: dict, starters: dict) -> None:
     game["home_rolling_ops"]   = home_s.get("rolling_ops")
     game["home_ops_window"]    = home_s.get("ops_window") or 0
 
+
+def enrich_game(conn: sqlite3.Connection, game: dict, starters: dict):
+    """
+    Starter-enrich the brief row dict and dress it for scoring.
+
+    Returns ``FullyDressedGame`` (see ``batch.pipeline.score_game.dress_game_for_brief``).
+    """
+    enrich_game_with_starters(game, starters)
+    from batch.pipeline.score_game import dress_game_for_brief
+
+    return dress_game_for_brief(conn, game)
+
+
 def evaluate_signals(
     conn: sqlite3.Connection,
     game: dict,
     streaks: dict,
     session: str,
+    starters: dict | None = None,
+    *,
+    verbose: bool = False,
 ) -> dict:
     """
     Evaluate all model signals for a single game.
     Returns a dict describing which signals fired and what they recommend.
 
-    Implementation lives in ``batch.pipeline.score_game`` (``score_game`` /
-    ``evaluate_signals_scored``); this wrapper dresses the brief row and maps
-    back to the legacy dict shape.
+    Flow: ``enrich_game`` → ``score_game`` → ``scored_game_to_eval_dict``. Extra keys:
+    ``output_tier``, ``tier_basis``, ``stake_multiplier`` (from ``ScoredGame``).
+    When ``verbose`` is True, prints tier_basis per game to stdout.
     """
-    from batch.pipeline.score_game import evaluate_signals_scored, scored_game_to_eval_dict
+    from batch.pipeline.score_game import score_game, scored_game_to_eval_dict
 
     if conn is None:
         raise TypeError("evaluate_signals requires a sqlite3.Connection (conn)")
 
+    starters = starters if starters is not None else {}
+
     try:
-        scored = evaluate_signals_scored(conn, game, streaks, session)
-        return scored_game_to_eval_dict(scored, session)
+        fdg = enrich_game(conn, game, starters)
+        hid = int(game["home_team_id"])
+        aid = int(game["away_team_id"])
+        home_streak = int(streaks.get(hid, 0))
+        away_streak = int(streaks.get(aid, 0))
+        from dataclasses import replace as _dc_replace
+
+        fdg = _dc_replace(
+            fdg,
+            brief_session=session,
+            home_streak=home_streak,
+            away_streak=away_streak,
+        )
+        gd = fdg.identifiers.game_date_et
+        game_month = int(gd[5:7]) if len(gd) >= 7 else 0
+        scored = score_game(fdg, home_streak, game_month)
+        out = scored_game_to_eval_dict(scored, session)
+        out["output_tier"] = scored.output_tier
+        out["tier_basis"] = scored.tier_basis
+        out["stake_multiplier"] = scored.stake_multiplier
+        if verbose and scored.tier_basis:
+            ab = f"{fdg.identifiers.away_team_abbr}@{fdg.identifiers.home_team_abbr}"
+            print(f"  [verbose] score {ab}: tier={scored.output_tier!r} | {scored.tier_basis}")
+        return out
     except Exception as e:
         return {
             "signals": [],
@@ -2096,6 +2145,9 @@ def evaluate_signals(
             "watch": False,
             "watch_reason": None,
             "data_flags": [f"Signal evaluation failed (dress/score): {e}"],
+            "output_tier": None,
+            "tier_basis": "",
+            "stake_multiplier": 0.0,
         }
 
 
@@ -2361,8 +2413,7 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
     # ── Retroactive signal evaluation + grading ───────────────────────────
     evaluated = []
     for g in games:
-        enrich_game_with_starters(g, starters)
-        sigs = evaluate_signals(conn, g, streaks, "primary")
+        sigs = evaluate_signals(conn, g, streaks, "primary", starters, verbose=verbose)
         hs   = g["home_score"]; as_  = g["away_score"]
         tot  = g["total_line"]; hml  = g["home_ml"]; aml = g["away_ml"]
         runs = (hs + as_) if (hs is not None and as_ is not None) else None
@@ -2689,7 +2740,8 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
 
 def build_morning_brief(games, streaks, starters, game_date,
                         conn=None, session=None,
-                        now: datetime.datetime | None = None):
+                        now: datetime.datetime | None = None,
+                        verbose: bool = False):
     lines = []
     if now is None:
         now = _now_et()
@@ -2711,8 +2763,7 @@ def build_morning_brief(games, streaks, starters, game_date,
     avoid_entries     = []
 
     for game in games:
-        enrich_game_with_starters(game, starters)
-        sigs = evaluate_signals(conn, game, streaks, "morning")
+        sigs = evaluate_signals(conn, game, streaks, "morning", starters, verbose=verbose)
         entry = {
             "game":   game,
             "sigs":   sigs,
@@ -2788,7 +2839,8 @@ def build_morning_brief(games, streaks, starters, game_date,
 
 def build_primary_brief(games, streaks, starters, game_date,
                         session_label="PRIMARY", s6_fires=None,
-                        conn=None, session=None, now: datetime.datetime | None = None):
+                        conn=None, session=None, now: datetime.datetime | None = None,
+                        verbose: bool = False):
     if s6_fires is None:
         s6_fires = {}
     _action = {
@@ -2814,8 +2866,7 @@ def build_primary_brief(games, streaks, starters, game_date,
     no_signal   = []
 
     for game in games:
-        enrich_game_with_starters(game, starters)
-        sigs = evaluate_signals(conn, game, streaks, "primary")
+        sigs = evaluate_signals(conn, game, streaks, "primary", starters, verbose=verbose)
         entry = {
             "game":    game,
             "sigs":    sigs,
@@ -2976,7 +3027,8 @@ def build_primary_brief(games, streaks, starters, game_date,
 
 def build_closing_brief(games, streaks, starters, movement, game_date,
                         conn=None, session=None,
-                        now: datetime.datetime | None = None):
+                        now: datetime.datetime | None = None,
+                        verbose: bool = False):
     lines = []
     if now is None:
         now = _now_et()
@@ -2994,8 +3046,7 @@ def build_closing_brief(games, streaks, starters, movement, game_date,
     avoid_entries     = []
 
     for game in games:
-        enrich_game_with_starters(game, starters)
-        sigs = evaluate_signals(conn, game, streaks, "closing")
+        sigs = evaluate_signals(conn, game, streaks, "closing", starters, verbose=verbose)
         g    = game
         lines.append(f"\n  {matchup_line(g)}")
         lines.append(f"  {weather_line(g)}")
@@ -3361,6 +3412,7 @@ def build_docx_brief(
     streaks: dict,
     starters: dict,
     movement: dict = None,
+    verbose: bool = False,
 ) -> "Document":
     """
     Build a Word Document for any session type.
@@ -3400,8 +3452,7 @@ def build_docx_brief(
     # ── Evaluate signals for all games ───────────────────────────────────
     entries = []
     for game in games:
-        enrich_game_with_starters(game, starters)
-        sigs = evaluate_signals(conn, game, streaks, session)
+        sigs = evaluate_signals(conn, game, streaks, session, starters, verbose=verbose)
         entries.append({"game": game, "sigs": sigs})
 
     # ── MORNING layout ────────────────────────────────────────────────────
@@ -3505,8 +3556,7 @@ def build_docx_brief(
         # Build evaluated list
         evaluated = []
         for g in games:
-            enrich_game_with_starters(g, starters)
-            sigs = evaluate_signals(conn, g, streaks, "primary")
+            sigs = evaluate_signals(conn, g, streaks, "primary", starters, verbose=verbose)
             hs   = g.get("home_score"); as_ = g.get("away_score")
             tot  = g.get("total_line"); hml = g.get("home_ml"); aml = g.get("away_ml")
             runs = (hs + as_) if (hs is not None and as_ is not None) else None
@@ -4159,7 +4209,7 @@ def main():
     # ── S6 pitcher streak check (monitoring signal) ───────────────────────
     # Runs after streaks are loaded so we can pass S1-active game_pks.
     # S6 needs DB access for rolling streak computation — runs here, not
-    # outside evaluate_signals() (dress + score use DB via conn).
+    # outside evaluate_signals() (dress + score live in enrich_game / score_game).
     s6_fires = {}
     if S6_AVAILABLE and session in ("early", "afternoon", "primary"):
         try:
@@ -4191,16 +4241,19 @@ def main():
     # ── Generate brief ───────────────────────────────────────────────────
     if session == "morning":
         brief_text = build_morning_brief(games, streaks, starters, today,
-                                         conn=conn, session=session, now=now)
+                                         conn=conn, session=session, now=now,
+                                         verbose=args.verbose)
     elif session in ("early", "afternoon", "primary", "late"):
         label = {"early": "EARLY GAMES", "afternoon": "AFTERNOON",
                  "primary": "PRIMARY", "late": "LATE GAMES"}.get(session, "PRIMARY")
         brief_text = build_primary_brief(games, streaks, starters, today,
                                          session_label=label, s6_fires=s6_fires,
-                                         conn=conn, session=session, now=now)
+                                         conn=conn, session=session, now=now,
+                                         verbose=args.verbose)
     else:
         brief_text = build_closing_brief(games, streaks, starters, movement, today,
-                                         conn=conn, session=session, now=now)
+                                         conn=conn, session=session, now=now,
+                                         verbose=args.verbose)
 
     # ── Output ───────────────────────────────────────────────────────────
     print(brief_text)
@@ -4243,8 +4296,7 @@ def main():
             all_sig = []
             all_avoid = []
             for g in games:
-                enrich_game_with_starters(g, starters)
-                sigs = evaluate_signals(conn, g, streaks, session)
+                sigs = evaluate_signals(conn, g, streaks, session, starters, verbose=args.verbose)
                 if sigs["picks"]:
                     all_sig.append({"game": g, "sigs": sigs})
                 elif sigs.get("avoid"):
@@ -4255,8 +4307,9 @@ def main():
             avoid_entries_for_log = all_avoid
         picks_count = 0
         for g in games:
-            enrich_game_with_starters(g, starters)
-            picks_count += len(evaluate_signals(conn, g, streaks, session)["picks"])
+            picks_count += len(
+                evaluate_signals(conn, g, streaks, session, starters, verbose=args.verbose)["picks"]
+            )
         log_brief(conn, today, session, len(games), picks_count,
                   output_file, pick_entries=pick_entries_for_log, avoid_entries=avoid_entries_for_log, now=now)
         if args.verbose:

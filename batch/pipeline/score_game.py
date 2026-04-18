@@ -2,8 +2,8 @@
 Central signal scoring — all model signal if/else logic lives here.
 
 ``score_game(FullyDressedGame, home_streak: int, game_month: int) -> ScoredGame``;
-``generate_daily_brief.evaluate_signals`` dresses the brief row and maps back
-to the legacy dict via ``scored_game_to_eval_dict``.
+``generate_daily_brief.enrich_game`` + ``evaluate_signals`` dress the row and map
+``ScoredGame`` back to the legacy dict via ``scored_game_to_eval_dict``.
 """
 
 from __future__ import annotations
@@ -643,14 +643,26 @@ def _game_row_for_dress(game: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
+def dress_game_for_brief(conn: sqlite3.Connection, game: dict[str, Any]) -> FullyDressedGame:
+    """
+    Dress a brief ``game`` row to ``FullyDressedGame`` (DB bundle).
+    Caller must inject starters into ``game`` first (``enrich_game_with_starters`` / ``enrich_game``).
+    """
+    row = _game_row_for_dress(game)
+    fdg = dress_full_game_row(conn, row)
+    return replace(
+        fdg,
+        venue_wind_note=str(game.get("wind_note") or "") or None,
+    )
+
+
 def fully_dressed_from_game_dict(
     conn: sqlite3.Connection,
     game: dict[str, Any],
     streaks: dict[int, int],
     session: str,
 ) -> FullyDressedGame:
-    row = _game_row_for_dress(game)
-    fdg = dress_full_game_row(conn, row)
+    fdg = dress_game_for_brief(conn, game)
     hid = int(game["home_team_id"])
     aid = int(game["away_team_id"])
     return replace(
@@ -658,7 +670,6 @@ def fully_dressed_from_game_dict(
         brief_session=session,
         home_streak=int(streaks.get(hid, 0)),
         away_streak=int(streaks.get(aid, 0)),
-        venue_wind_note=str(game.get("wind_note") or "") or None,
     )
 
 
@@ -774,7 +785,20 @@ def evaluate_signals_scored(
     game: dict[str, Any],
     streaks: dict[int, int],
     session: str,
+    starters: dict[str, Any] | None = None,
 ) -> ScoredGame:
-    fdg = fully_dressed_from_game_dict(conn, game, streaks, session)
-    month = _game_month(fdg.identifiers.game_date_et)
-    return score_game(fdg, fdg.home_streak, month)
+    """Dress + score (same path as ``generate_daily_brief.evaluate_signals``)."""
+    import batch.pipeline.generate_daily_brief as gdb
+
+    fdg = gdb.enrich_game(conn, game, starters or {})
+    hid = int(game["home_team_id"])
+    aid = int(game["away_team_id"])
+    fdg = replace(
+        fdg,
+        brief_session=session,
+        home_streak=int(streaks.get(hid, 0)),
+        away_streak=int(streaks.get(aid, 0)),
+    )
+    gd = fdg.identifiers.game_date_et
+    game_month = int(gd[5:7]) if len(gd) >= 7 else 0
+    return score_game(fdg, fdg.home_streak, game_month)
