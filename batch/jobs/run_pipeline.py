@@ -8,6 +8,7 @@ Polls pipeline_jobs and runs due jobs (single-threaded) in scheduled_time order.
 
 CHANGE LOG (latest first)
 ────────────────────────
+2026-04-17  job_type bet_ledger_sync → generate_daily_brief.py --sync-bet-ledger-only (deps: load_today).
 2026-04-16  schedule_next_day_globals → schedule_pipeline_day.py --globals-only --date-et
             (next calendar day after job_date_et); day_setup → --groups-only --date-et.
             Helpers _next_calendar_date_et, _default_tomorrow_date_et.
@@ -395,6 +396,12 @@ def _build_command(job: dict) -> str:
         "weather": "python batch/ingestion/load_weather.py",
         # Group brief generation (time-windowing is embedded in generate_daily_brief session logic)
         "group_brief": f"python batch/pipeline/generate_daily_brief.py --session primary --date {job_date}" if job_date else "python batch/pipeline/generate_daily_brief.py --session primary",
+        # Materialize bet_ledger inside T−30 pregame window; schedule every N minutes on game days if needed.
+        "bet_ledger_sync": (
+            f"python batch/pipeline/generate_daily_brief.py --sync-bet-ledger-only --date {job_date}"
+            if job_date
+            else "python batch/pipeline/generate_daily_brief.py --sync-bet-ledger-only"
+        ),
         "ledger_snapshot": "python batch/pipeline/daily_results_report.py",
         "schedule_next_day_globals": (
             f"python batch/jobs/schedule_pipeline_day.py --globals-only --date-et {_next_calendar_date_et(job_date)}"
@@ -422,6 +429,7 @@ def _dependency_rules() -> dict[str, list[str]]:
         "weather": ["load_today"],
         # odds pulls must complete before brief generation
         "group_brief": ["load_today", "odds_pull"],
+        "bet_ledger_sync": ["load_today"],
         "ledger_snapshot": ["load_today", "odds_pull"],
     }
 
