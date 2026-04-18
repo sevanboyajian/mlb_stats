@@ -6,6 +6,8 @@ Reads from mlb_stats.db and outputs the formatted betting brief.
 
 CHANGE LOG (latest first)
 ──────────────────────────
+2026-04-17  Ops: --sync-bet-ledger-only (no brief) + run_pipeline job_type bet_ledger_sync
+            for recurring T−30 bet_ledger materialization without re-running briefs.
 2026-04-17  Research: persist AVOID calls into brief_picks (pick_rank=0, signal='AVOID')
             so they can be tracked/grated later without generating bets.
 2026-04-17  Fix starters column name: players.throws (was throw_hand). Update
@@ -4219,12 +4221,21 @@ def parse_args():
 
             Run with prereq check (recommended for scheduled runs):
               python generate_daily_brief.py --session primary --check-prereqs
+
+            Sync bet_ledger from signal_state only (pregame T−30 window; no brief output):
+              python generate_daily_brief.py --sync-bet-ledger-only --date YYYY-MM-DD
         """),
     )
     p.add_argument(
-        "--session", required=True,
+        "--sync-bet-ledger-only", action="store_true",
+        help="Only run generate_bets_from_signal_state for --date (default today). "
+             "No brief file, no brief_log duplicate check. Implies writes unless --dry-run.",
+    )
+    p.add_argument(
+        "--session", required=False, default=None,
         choices=["prior", "morning", "early", "afternoon", "primary", "closing", "late"],
-        help="Which brief to generate: prior | morning | early | afternoon | primary | closing | late",
+        help="Which brief to generate: prior | morning | early | afternoon | primary | closing | late "
+             "(required unless --sync-bet-ledger-only).",
     )
     p.add_argument(
         "--date", default=None,
@@ -4299,6 +4310,40 @@ def main():
         datetime.date.fromisoformat(today)
     except ValueError:
         print(f"✗  Invalid --date value: '{today}'. Use YYYY-MM-DD.")
+        sys.exit(1)
+
+    if args.sync_bet_ledger_only:
+        if session is not None and args.verbose:
+            print("  [verbose] --session ignored when using --sync-bet-ledger-only")
+        print(f"\n{'═'*72}")
+        print(f"  MLB Betting Model · bet_ledger sync (signal_state) · {today}")
+        print(f"{'═'*72}")
+        conn = open_db(DB_PATH)
+        try:
+            if args.dry_run:
+                print("\n  (dry-run: no DB writes; bet_ledger sync skipped.)\n")
+            else:
+                n_bets = generate_bets_from_signal_state(conn, today, now=now)
+                if n_bets:
+                    print(f"\n  ✓ bet_ledger: inserted {n_bets} row(s) from signal_state (pregame window).\n")
+                else:
+                    msg = (
+                        "no new rows (outside 30m window, duplicate game_pk+market_type, "
+                        "or no qualifying top/next signals)."
+                    )
+                    if args.verbose:
+                        print(f"\n  [verbose] bet_ledger: {msg}\n")
+                    else:
+                        print(f"\n  bet_ledger: {msg}\n")
+        except Exception as e:
+            print(f"\n  ⚠  bet_ledger sync failed: {e}\n")
+            sys.exit(1)
+        finally:
+            conn.close()
+        return
+
+    if session is None:
+        print("✗  --session is required unless using --sync-bet-ledger-only.")
         sys.exit(1)
 
     print(f"\n{'═'*72}")
