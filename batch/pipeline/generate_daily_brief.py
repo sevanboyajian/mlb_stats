@@ -6,6 +6,8 @@ Reads from mlb_stats.db and outputs the formatted betting brief.
 
 CHANGE LOG (latest first)
 ──────────────────────────
+2026-04-17  Prior report: removed duplicate FURTHER SIGNALS block (ranks #7+ only in
+            RETROACTIVE); ENV/venue avoids spell out “class” of bet skipped (not one ticket).
 2026-04-17  Prior report: NEXT picks use the same ledger box as TOP; AVOID section
             spells out bet-to-skip + counterfactual verdict; bet_ledger unique key
             includes signal_at_time so AVOID rows (stake 0) materialize from
@@ -862,7 +864,17 @@ def save_signal_state(conn: sqlite3.Connection, game_date: str, session: str,
         bet_text = None
 
         # Heuristics based on existing avoid_reason text patterns.
-        if "AVOID HOME ML" in reason_u and home:
+        if (
+            "WIND SIGNALS SUPPRESSED" in reason_u
+            or ("SUPPRESSED" in reason_u and "WEATHER" in reason_u)
+            or "NO WEATHER EDGE" in reason_u
+        ):
+            market_type = "environment"
+            bet_text = "Weather-signal class (no single ticket) — see brief reason"
+        elif "RETRACTABLE ROOF" in reason_u or "ROOF STATUS" in reason_u:
+            market_type = "environment"
+            bet_text = "Wind plays pending roof status — class warning, not one ticket"
+        elif "AVOID HOME ML" in reason_u and home:
             market_type = "moneyline"
             bet_text = f"Avoid {home} ML"
         elif "AVOID AWAY ML" in reason_u and away:
@@ -880,10 +892,12 @@ def save_signal_state(conn: sqlite3.Connection, game_date: str, session: str,
         elif "UNDER" in reason_u and "DO NOT BET" in reason_u and total_line is not None:
             market_type = "total"
             bet_text = f"Avoid UNDER {total_line}"
-        elif "ML" in reason_u:
+        elif bet_text is None and "ML" in reason_u:
             market_type = "moneyline"
             bet_text = f"Avoid {home} ML" if home else "Avoid ML"
-        elif "TOTAL" in reason_u or "O/U" in reason_u or "OVER" in reason_u or "UNDER" in reason_u:
+        elif bet_text is None and (
+            "TOTAL" in reason_u or "O/U" in reason_u or "OVER" in reason_u or "UNDER" in reason_u
+        ):
             market_type = "total"
             bet_text = f"Avoid total" if total_line is None else f"Avoid total ({total_line})"
 
@@ -1210,28 +1224,48 @@ def avoid_entry_bet_fields(entry: dict) -> tuple[str, str, float | None]:
     home = (g.get("home_abbr") or "").strip()
     away = (g.get("away_abbr") or "").strip()
     total_line = g.get("total_line")
+    venue = (g.get("venue_name") or "").strip()
 
     market = "OTHER"
     bet_text = None
 
-    if "AVOID HOME ML" in reason_u and home:
-        market = "ML"
-        bet_text = f"Avoid {home} ML"
-    elif "AVOID AWAY ML" in reason_u and away:
-        market = "ML"
-        bet_text = f"Avoid {away} ML"
-    elif ("DO NOT BET OVER" in reason_u or ("OVER" in reason_u and "DO NOT BET" in reason_u)) and total_line is not None:
-        market = "TOTAL"
-        bet_text = f"Avoid OVER {total_line}"
-    elif ("DO NOT BET UNDER" in reason_u or ("UNDER" in reason_u and "DO NOT BET" in reason_u)) and total_line is not None:
-        market = "TOTAL"
-        bet_text = f"Avoid UNDER {total_line}"
-    elif "ML" in reason_u:
-        market = "ML"
-        bet_text = f"Avoid {home} ML" if home else "Avoid ML"
-    elif "TOTAL" in reason_u or "O/U" in reason_u or "OVER" in reason_u or "UNDER" in reason_u:
-        market = "TOTAL"
-        bet_text = f"Avoid total" if total_line is None else f"Avoid total ({total_line})"
+    # Venue / environment — not a single ML or O/U ticket (wind-edge class warning).
+    if (
+        "WIND SIGNALS SUPPRESSED" in reason_u
+        or ("SUPPRESSED" in reason_u and "WEATHER" in reason_u)
+        or "NO WEATHER EDGE" in reason_u
+    ):
+        market = "ENV"
+        where = f" ({venue})" if venue else ""
+        bet_text = (
+            f"Weather-driven model plays only (wind/MV-B/H3b-style edges) — "
+            f"no single numbered bet{where}; venue treated as non-actionable for weather signals"
+        )
+    elif "RETRACTABLE ROOF" in reason_u or "ROOF STATUS" in reason_u:
+        market = "ENV"
+        bet_text = (
+            "Wind-based model plays until roof status is known — not one fixed ML/total ticket"
+        )
+
+    if bet_text is None:
+        if "AVOID HOME ML" in reason_u and home:
+            market = "ML"
+            bet_text = f"Avoid {home} ML"
+        elif "AVOID AWAY ML" in reason_u and away:
+            market = "ML"
+            bet_text = f"Avoid {away} ML"
+        elif ("DO NOT BET OVER" in reason_u or ("OVER" in reason_u and "DO NOT BET" in reason_u)) and total_line is not None:
+            market = "TOTAL"
+            bet_text = f"Avoid OVER {total_line}"
+        elif ("DO NOT BET UNDER" in reason_u or ("UNDER" in reason_u and "DO NOT BET" in reason_u)) and total_line is not None:
+            market = "TOTAL"
+            bet_text = f"Avoid UNDER {total_line}"
+        elif "ML" in reason_u:
+            market = "ML"
+            bet_text = f"Avoid {home} ML" if home else "Avoid ML"
+        elif "TOTAL" in reason_u or "O/U" in reason_u or "OVER" in reason_u or "UNDER" in reason_u:
+            market = "TOTAL"
+            bet_text = f"Avoid total" if total_line is None else f"Avoid total ({total_line})"
 
     if not bet_text:
         bet_text = ("Avoid: " + reason) if reason else "Avoid"
@@ -1249,6 +1283,13 @@ def prior_avoid_outcome_lines(entry: dict) -> tuple[str, str, str] | None:
     if hs is None or as_ is None:
         return None
     market, bet_label, _tl = avoid_entry_bet_fields(entry)
+    if market == "ENV":
+        return (
+            f"  BET TO SKIP: {bet_label}",
+            "  Counterfactual: N/A — this flags a class of weather-driven model plays, "
+            "not one specific ML or O/U ticket at the closing line.",
+            "  Verdict: N/A — informational; see model detail for the venue / roof context.",
+        )
     equiv = strip_avoid_bet_label(bet_label)
     home_abbr = (g.get("home_abbr") or "").strip().upper()
     away_abbr = (g.get("away_abbr") or "").strip().upper()
@@ -2886,17 +2927,8 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
             lines.append(f"  └─────────────────────────────────────────────────────────┘")
             lines.append("")
 
-    # Further signals beyond top 6
-    if rest_picks:
-        lines.append(section(f"📋  FURTHER SIGNALS  ({len(rest_picks)})"))
-        for e in rest_picks:
-            g = e["game"]; p = e["graded"][0]
-            lines.append(f"\n  {matchup_line(g)}")
-            if g["home_score"] is not None:
-                lines.append(game_score_line(e))
-            lines.append(f"  BET: {p['bet']}  SIGNAL: {', '.join(e['sigs']['signals'])}"
-                         f"  →  {p['result']}  ({pnl_str(p['pnl'])})")
-            lines.append("")
+    # Ranks #7+ from the same post-game re-run appear only under RETROACTIVE SIGNALS
+    # (not a second “next five” — avoids duplicating ADDITIONAL MODEL SELECTIONS).
 
     # ════════════════════════════════════════════════════════════════════
     # BETS TO AVOID
@@ -2906,9 +2938,9 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
         lines.append("\n  No avoid flags were active yesterday.\n")
     else:
         lines.append(
-            "\n  Each flag names the concrete bet to skip, then a counterfactual: if you had\n"
-            "  placed that bet at the closing line, would it have won? Good avoid = you\n"
-            "  dodged a loser; poor avoid = you skipped a winner. (Stake 0u — informational.)\n"
+            "\n  Ticket-style avoids name a side (ML / Over / Under) when possible.\n"
+            "  Environment flags discourage a class of plays (e.g. wind-only edges) — no\n"
+            "  single counterfactual bet; see BET TO SKIP lines below. (Stake 0u — info.)\n"
         )
         avoid_by_gpk = {
             r["game_pk"]: r
@@ -2950,6 +2982,11 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
         lines.append("\n  All games had a model signal or avoid flag yesterday.\n")
     else:
         lines.append("")
+        if rest_picks:
+            lines.append(
+                "  ℹ  “No signal” means no qualifying pick/avoid in the forward model here.\n"
+                "     Slate ranks #7+ from the post-game re-run are under RETROACTIVE only.\n"
+            )
         for e in nosig_entries:
             g = e["game"]
             lines.append(f"  {matchup_line(g)}  |  {weather_line(g)}")
@@ -3050,13 +3087,14 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
 
     if has_new_retro:
         lines.append(section(
-            "🔍  RETROACTIVE SIGNALS  —  Model with actual post-game wind"
+            "🔍  RETROACTIVE SIGNALS  —  Post-hoc model (incl. ranks #7+)"
         ))
         lines.append(
-            "\n  ℹ  These signals fired using ACTUAL wind data recorded after games\n"
-            "     finished. They were NOT shown in yesterday's forward-looking briefs\n"
-            "     (wind is unavailable at brief time). Shown for model tracking only.\n"
-            "     Paper account and confirmed P&L are based on briefs above only.\n"
+            "\n  ℹ  Re-evaluation with final stats / recorded wind. Includes any slate\n"
+            "     priority below your TOP + five NEXT ledger slots (#7, #8, …) when\n"
+            "     those games were not in bet_ledger — not “extra” brief picks, only\n"
+            "     what the model would flag after the fact. Forward briefs did not show\n"
+            "     these as bet cards. Paper P&L = ledger sections above only.\n"
         )
         if not retro_picks:
             lines.append("  No retroactive signals found either.\n")
