@@ -8,6 +8,10 @@ Polls pipeline_jobs and runs due jobs (single-threaded) in scheduled_time order.
 
 CHANGE LOG (latest first)
 ────────────────────────
+2026-04-19  After ``_MAX_FAILURE_RETRIES``, terminal status is ``skipped`` (not ``failed``);
+            ``pipeline_job_runs`` records ``skipped``; dependency checks treat ``skipped`` like
+            ``complete`` so downstream jobs are not blocked. SQLite CHECK + optional table rebuild
+            adds ``skipped``. ``--status`` lists skipped jobs separately.
 2026-04-19  Dependency check: treat ``job_date_et`` match OR (NULL/blank ``job_date_et`` on the
             dep row with ``scheduled_time_et`` starting with the slate YYYY-MM-DD). Fixes false
             ``SKIP — deps`` when globals completed but legacy rows lacked ``job_date_et``.
@@ -65,7 +69,7 @@ Rules:
   pending ``scheduled_time_et`` (table-driven wake). Overlapping game groups still interleave
   by ``scheduled_time_et`` order; merged odds blocks keep a single ``odds_pull`` on the rep
   ``game_group_id``—do not batch strictly by group without respecting that ordering.
-- Marks jobs: pending -> running -> complete/failed/timeout
+- Marks jobs: pending -> running -> complete / skipped (max retries) / failed / timeout
 - Does not modify job definitions
 - Does not run jobs in parallel
 - Command lines for day_setup and schedule_next_day_globals are built in _build_command();
@@ -190,7 +194,13 @@ def _print_failure_alert(*, payload: dict[str, Any]) -> None:
     """
     try:
         print("\n" + "!" * 76)
-        print("! PIPELINE ALERT: JOB FAILED (terminal)")
+        kind = str(payload.get("terminal_kind") or "failed")
+        title = (
+            "! PIPELINE ALERT: JOB SKIPPED (terminal — max retries; deps unblocked)"
+            if kind == "skipped"
+            else "! PIPELINE ALERT: JOB FAILED (terminal)"
+        )
+        print(title)
         print("!" * 76)
         print(f"  time_utc:     {payload.get('time_utc', '')}")
         print(f"  job_id:       {payload.get('job_id', '')}")
@@ -221,8 +231,10 @@ def _append_alert_log(*, payload: dict[str, Any]) -> None:
         p.parent.mkdir(parents=True, exist_ok=True)
         # One line per alert (easy to tail/grep)
         err_one_line = str(payload.get("error_message", "") or "").replace("\n", " ")[:2000]
+        kind = str(payload.get("terminal_kind") or "failed")
+        tag = "SKIPPED" if kind == "skipped" else "FAILED"
         line = (
-            f"{payload.get('time_utc','')}\tFAILED\t"
+            f"{payload.get('time_utc','')}\t{tag}\t"
             f"job_id={payload.get('job_id','')}\t"
             f"type={payload.get('job_type','')}\t"
             f"date_et={payload.get('job_date_et','')}\t"
@@ -256,15 +268,23 @@ def _send_smtp_email_alert(*, payload: dict[str, Any]) -> None:
         from email.message import EmailMessage
 
         msg = EmailMessage()
+        tk = str(payload.get("terminal_kind") or "failed")
+        subj = "SKIPPED" if tk == "skipped" else "FAILED"
         msg["Subject"] = (
-            f"[mlb_stats] PIPELINE FAILED job_id={payload.get('job_id','')} "
+            f"[mlb_stats] PIPELINE {subj} job_id={payload.get('job_id','')} "
             f"type={payload.get('job_type','')}"
         )
         msg["From"] = mail_from
         msg["To"] = mail_to
+        tk2 = str(payload.get("terminal_kind") or "failed")
+        head = (
+            "PIPELINE ALERT: JOB SKIPPED (terminal — max retries)"
+            if tk2 == "skipped"
+            else "PIPELINE ALERT: JOB FAILED (terminal)"
+        )
         body = "\n".join(
             [
-                "PIPELINE ALERT: JOB FAILED (terminal)",
+                head,
                 f"time_utc:     {payload.get('time_utc','')}",
                 f"job_id:       {payload.get('job_id','')}",
                 f"job_type:     {payload.get('job_type','')}",
@@ -300,9 +320,10 @@ def _alert_job_failed_terminal(
     started_at_utc: str,
     finished_at_utc: str,
     error_message: str,
+    terminal_kind: str = "failed",
 ) -> None:
     """
-    Non-blocking, non-fatal alert fanout for terminal failures.
+    Non-blocking, non-fatal alert fanout for terminal outcomes (failed or skipped).
     """
     payload: dict[str, Any] = {
         "time_utc": _utc_now_iso_z(),
@@ -312,6 +333,7 @@ def _alert_job_failed_terminal(
         "started_at_utc": str(started_at_utc),
         "finished_at_utc": str(finished_at_utc),
         "error_message": str(error_message or ""),
+        "terminal_kind": str(terminal_kind or "failed"),
     }
     _print_failure_alert(payload=payload)
     _append_alert_log(payload=payload)
@@ -600,7 +622,7 @@ def _job_group_context(job: dict) -> str:
 def _dependency_rules() -> dict[str, list[str]]:
     """
     Hardcoded dependencies (simple + readable, no new tables).
-    If a job_type has dependencies, it should not run until those job_types are complete.
+    If a job_type has dependencies, it should not run until those job_types are complete or skipped.
     """
     return {
         # load_today must complete before any game-based jobs
@@ -625,7 +647,10 @@ def _dependency_complete_for_slate(
     job_date_et: str,
 ) -> bool:
     """
-    True if some pipeline_jobs row shows ``dep_job_type`` completed for this slate date.
+    True if some pipeline_jobs row shows ``dep_job_type`` satisfied for this slate date.
+
+    ``complete`` or ``skipped`` counts: skipped means max retries exhausted — runner treats
+    upstream as resolved so downstream jobs are not blocked forever (assume manual follow-up).
 
     Matches ``job_date_et`` when set. Rows with NULL/blank ``job_date_et`` (legacy) still
     count if ``scheduled_time_et`` begins with YYYY-MM-DD (first 10 chars), so morning globals
@@ -638,7 +663,7 @@ def _dependency_complete_for_slate(
             SELECT COUNT(*) AS n
             FROM pipeline_jobs
             WHERE job_type = ?
-              AND status = 'complete'
+              AND status IN ('complete', 'skipped')
             """,
             (str(dep_job_type),),
         )
@@ -649,7 +674,7 @@ def _dependency_complete_for_slate(
         SELECT COUNT(*) AS n
         FROM pipeline_jobs
         WHERE job_type = ?
-          AND status = 'complete'
+          AND status IN ('complete', 'skipped')
           AND (
             TRIM(COALESCE(job_date_et, '')) = ?
             OR (
@@ -995,7 +1020,65 @@ def _ensure_pipeline_jobs_extras(con: sqlite3.Connection, cols: set[str]) -> set
         except Exception:
             pass
         cols = _table_columns(con, "pipeline_jobs")
+    _migrate_pipeline_jobs_allow_skipped_status(con)
     return cols
+
+
+def _migrate_pipeline_jobs_allow_skipped_status(con: sqlite3.Connection) -> None:
+    """
+    SQLite CHECK on ``pipeline_jobs.status`` may omit ``skipped`` (older DBs).
+    If a test insert with status=skipped fails, rebuild the table via rename/copy.
+    """
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        con.execute(
+            """
+            INSERT INTO pipeline_jobs (job_type, job_date_et, scheduled_time_et, status, game_group_id)
+            VALUES ('__skip_chk', '2099-01-01', '2099-01-01 12:00 ET', 'skipped', 0)
+            """
+        )
+        con.execute("DELETE FROM pipeline_jobs WHERE job_type = '__skip_chk'")
+        con.commit()
+        return
+    except Exception:
+        try:
+            con.rollback()
+        except Exception:
+            pass
+
+    try:
+        from core.utils.game_start_grouping import ensure_pipeline_jobs_table
+    except ImportError:
+        return
+
+    try:
+        con.execute("ALTER TABLE pipeline_jobs RENAME TO pipeline_jobs_old")
+    except Exception:
+        return
+
+    try:
+        ensure_pipeline_jobs_table(con)
+        old_info = con.execute("PRAGMA table_info(pipeline_jobs_old)").fetchall()
+        new_info = con.execute("PRAGMA table_info(pipeline_jobs)").fetchall()
+        old_cols = {r[1] for r in old_info}
+        new_cols = {r[1] for r in new_info}
+        shared = sorted(old_cols & new_cols)
+        if shared:
+            cs = ", ".join(shared)
+            con.execute(f"INSERT INTO pipeline_jobs ({cs}) SELECT {cs} FROM pipeline_jobs_old")
+        con.execute("DROP TABLE pipeline_jobs_old")
+        con.commit()
+        print("[run_pipeline] migrated pipeline_jobs: CHECK now allows status='skipped'")
+    except Exception:
+        try:
+            con.rollback()
+        except Exception:
+            pass
+        try:
+            con.execute("ALTER TABLE pipeline_jobs_old RENAME TO pipeline_jobs")
+            con.commit()
+        except Exception:
+            pass
 
 
 def _handle_job_failure(
@@ -1014,24 +1097,24 @@ def _handle_job_failure(
     """
     On failure: record run (source of truth), then sync pipeline_jobs.
     If retry_count_before < _MAX_FAILURE_RETRIES, re-queue job as pending (next poll loop).
-    Otherwise set status failed and alert (runner continues with other jobs).
+    Otherwise set status ``skipped`` (or ``failed`` if no retry_count column) and alert;
+    downstream deps treat ``skipped`` like ``complete`` for scheduling purposes.
     """
-    _insert_pipeline_job_run_full(
-        con,
-        run_cols,
-        job_id=job_id,
-        job_type=job_type,
-        job_date_et=job_date_et,
-        started_at_utc=started_iso,
-        finished_at_utc=completed_ts,
-        run_status="failed",
-        error_message=error_message,
-    )
-
     rc_col = "retry_count" in cols
     next_count = int(retry_count_before) + 1
 
     if int(retry_count_before) < _MAX_FAILURE_RETRIES and rc_col:
+        _insert_pipeline_job_run_full(
+            con,
+            run_cols,
+            job_id=job_id,
+            job_type=job_type,
+            job_date_et=job_date_et,
+            started_at_utc=started_iso,
+            finished_at_utc=completed_ts,
+            run_status="failed",
+            error_message=error_message,
+        )
         _sync_pipeline_jobs_from_run(
             con,
             cols,
@@ -1048,25 +1131,49 @@ def _handle_job_failure(
         )
         return
 
+    term_msg = (
+        f"{error_message} | terminal=skipped after {_MAX_FAILURE_RETRIES} attempts "
+        f"(deps unblocked — assume manual follow-up)"
+    )
+    terminal = "skipped" if rc_col else "failed"
+    run_st = "skipped" if rc_col else "failed"
+    job_st = "skipped" if rc_col else "failed"
+
+    _insert_pipeline_job_run_full(
+        con,
+        run_cols,
+        job_id=job_id,
+        job_type=job_type,
+        job_date_et=job_date_et,
+        started_at_utc=started_iso,
+        finished_at_utc=completed_ts,
+        run_status=run_st,
+        error_message=term_msg if rc_col else error_message,
+    )
     _sync_pipeline_jobs_from_run(
         con,
         cols,
         job_id=job_id,
-        job_status="failed",
+        job_status=job_st,
         started_at_utc=started_iso,
         finished_at_utc=completed_ts,
-        job_error_message=error_message,
+        job_error_message=term_msg if rc_col else error_message,
         retry_count_value=next_count if rc_col else None,
     )
 
-    # Alert only on terminal failure (not when re-queued for retry).
+    if job_st == "skipped":
+        print(
+            f"[job] SKIPPED (terminal, max retries) job_id={job_id} type={job_type!s} "
+            f"— status=skipped; downstream deps will proceed"
+        )
     _alert_job_failed_terminal(
         job_id=job_id,
         job_type=job_type,
         job_date_et=job_date_et,
         started_at_utc=started_iso,
         finished_at_utc=completed_ts,
-        error_message=error_message,
+        error_message=term_msg if rc_col else error_message,
+        terminal_kind=terminal,
     )
 
 
@@ -1615,6 +1722,7 @@ def print_pipeline_status(db_path: str) -> None:
 
     _print_job_block("Pending jobs", "status = 'pending'")
     _print_job_block("Running jobs", "status = 'running'")
+    _print_job_block("Skipped jobs (max retries — deps unblocked)", "status = 'skipped'")
     _print_job_block("Failed & timeout jobs", "status IN ('failed','timeout')")
 
     # Last 10 runs

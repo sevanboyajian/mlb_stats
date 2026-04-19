@@ -937,7 +937,7 @@ CREATE TABLE IF NOT EXISTS pipeline_jobs (
     window_start_et TEXT,               -- optional: start of intended execution window (ET)
     window_end_et   TEXT,               -- optional: end of intended execution window (ET)
     status          TEXT    NOT NULL DEFAULT 'pending'
-                        CHECK (status IN ('pending','running','complete','failed','timeout')),
+                        CHECK (status IN ('pending','running','complete','failed','timeout','skipped')),
     game_group_id   INTEGER,            -- cluster id from game start grouping
     started_at      DATETIME,           -- latest job execution start (UTC)
     completed_at    DATETIME,           -- latest job execution end (UTC)
