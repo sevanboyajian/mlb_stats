@@ -6,6 +6,11 @@ Reads from mlb_stats.db and outputs the formatted betting brief.
 
 CHANGE LOG (latest first)
 ──────────────────────────
+2026-04-19  Fix: closing brief now skips games already past ``game_start_utc``.
+            Active signal display and CLV confirmation only shown for unplayed games.
+2026-04-19  Fix: removed H3b cross-reference from MV-B reason string.
+            H3b is monitor-only and should not appear in other signals'
+            reason text. MV-B reason now self-contained (``score_game._eval_mv_b``).
 2026-04-17  brief_picks: skip inserts after game start (vs ``now``); cross-session
             dedupe on (game_date, game_pk, signal, market); ``model_version``
             column (default ``legacy``); ``ensure_brief_picks`` before save.
@@ -209,6 +214,24 @@ def _game_start_utc_dt(g: dict) -> datetime.datetime | None:
         return datetime.datetime.fromisoformat(raw.rstrip("Z"))
     except ValueError:
         return None
+
+
+def _game_started_or_in_progress_for_closing(game: dict, now: datetime.datetime) -> bool:
+    """
+    True if first pitch time is known and ``now`` is at or after start (UTC).
+    Closing brief skips these games so active-signal lines are not shown for
+    games already underway.
+    """
+    gst = _game_start_utc_dt(game)
+    if gst is None:
+        return False
+    gst_utc = (
+        gst.replace(tzinfo=datetime.timezone.utc)
+        if gst.tzinfo is None
+        else gst.astimezone(datetime.timezone.utc)
+    )
+    now_utc = now.astimezone(datetime.timezone.utc)
+    return now_utc >= gst_utc
 
 
 def _game_already_started_for_brief_picks(game: dict, now: datetime.datetime) -> bool:
@@ -3600,6 +3623,8 @@ def build_closing_brief(games, streaks, starters, movement, game_date,
     avoid_entries     = []
 
     for game in games:
+        if _game_started_or_in_progress_for_closing(game, now):
+            continue
         sigs = evaluate_signals(
             conn, game, streaks, "closing", starters,
             verbose=verbose, debug_wind=debug_wind,

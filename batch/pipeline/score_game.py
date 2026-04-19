@@ -264,14 +264,17 @@ def _eval_mv_b(g: FullyDressedGame, game_month: int) -> SignalFinding:
     )
     # Aug/Sep: informational flag only (see score_game data_flags), not a fire gate.
     hi = mkt.home_impl
+    venue_name = g.identifiers.venue_name or ""
+    wind_effect = (env.wind_effect or "").strip() or "?"
+    home_impl_s = f"{hi:.0%}" if hi is not None else "N/A"
+    home_ml_s = _fmt_odds(mkt.home_ml_current)
     if fires:
-        dog_note = ""
-        if hi is not None and gdb.DOG_IMPL_LOW <= hi <= gdb.DOG_IMPL_HIGH:
-            dog_note = f" Home implied {hi:.0%} in historical MV-B dog band (35–42%)."
         reason = (
-            f"MV-B — Wind OUT {mph:.0f} mph at whitelisted venue (h3b_eligible), "
-            f"PF {pf:.0f} ≥ {gdb.H3B_MIN_PARK_FACTOR}.{dog_note} "
-            f"CLV gate: only bet if line has moved toward OVER since open (CLV>0)."
+            f"MV-B — Wind OUT {mph:.0f} mph at {venue_name} "
+            f"(wind_effect={wind_effect}, PF {pf:.0f}). "
+            f"Home dog implied {home_impl_s} ({home_ml_s}). "
+            f"CLV gate: only bet if line has moved toward OVER since open (CLV>0). "
+            f"CLV>0 fires: +12.2% ROI. CLV≤0: -18.1% ROI."
         )
     else:
         reason = (
@@ -353,7 +356,8 @@ def _eval_h3b(g: FullyDressedGame, mvb_fires: bool) -> SignalFinding:
 
     if mvb_fires and would:
         confirm = (
-            f"H3b confirms MV-B (wind-out {mph:.0f} mph, PF {pf:.0f}, z=2.99 p=0.003)."
+            f"H3b monitor-only: wind/total gates align (wind-out {mph:.0f} mph, PF {pf:.0f}); "
+            f"no duplicate OVER pick when a higher-priority wind OVER already applies."
         )
         return SignalFinding(
             signal_id="H3b",
@@ -486,8 +490,6 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
 
     mvb = _eval_mv_b(g, game_month)
     h3b = _eval_h3b(g, mvb.fires)
-    if mvb.fires and (not h3b.fires) and h3b.edge_basis.startswith("H3b confirms"):
-        mvb.edge_basis += " " + h3b.edge_basis
 
     all_findings = [
         s1h2,
