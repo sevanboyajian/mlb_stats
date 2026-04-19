@@ -8,6 +8,12 @@ Polls pipeline_jobs and runs due jobs (single-threaded) in scheduled_time order.
 
 CHANGE LOG (latest first)
 ────────────────────────
+2026-04-17  Dependency satisfaction: ``failed`` and ``timeout`` upstream rows count as resolved
+            (with ``complete``/``skipped``) so terminal failures do not block the whole day; only
+            ``pending``/``running`` block. Missing rows for a job_type still block.
+2026-04-17  ``--explain-deps YYYY-MM-DD``: read-only diagnostic listing upstream job_types for
+            the slate (counts by status, which rows satisfy ``complete``/``skipped``) and each
+            job row's dependency result — distinguishes ``SKIP — deps`` from terminal ``skipped``.
 2026-04-19  After ``_MAX_FAILURE_RETRIES``, terminal status is ``skipped`` (not ``failed``);
             ``pipeline_job_runs`` records ``skipped``; dependency checks treat ``skipped`` like
             ``complete`` so downstream jobs are not blocked. SQLite CHECK + optional table rebuild
@@ -99,6 +105,16 @@ from core.db.connection import connect as db_connect, get_db_path
 
 # Max automatic re-runs after a failed attempt (retry_count 0…N−1 re-queue; at N terminal fail).
 _MAX_FAILURE_RETRIES = 5
+
+# Upstream rows in these statuses count as "resolved" for dependency checks so one stuck or
+# failed job does not block the entire slate. ``failed``/``timeout`` are terminal (not pending);
+# downstream may run with degraded/missing upstream data — use alerts and --explain-deps.
+_DEPS_UPSTREAM_RESOLVED_STATUSES: tuple[str, ...] = (
+    "complete",
+    "skipped",
+    "failed",
+    "timeout",
+)
 
 
 def _utc_now_iso_z() -> str:
@@ -622,7 +638,8 @@ def _job_group_context(job: dict) -> str:
 def _dependency_rules() -> dict[str, list[str]]:
     """
     Hardcoded dependencies (simple + readable, no new tables).
-    If a job_type has dependencies, it should not run until those job_types are complete or skipped.
+    If a job_type has dependencies, it should not run until those job_types are resolved
+    (see ``_DEPS_UPSTREAM_RESOLVED_STATUSES``).
     """
     return {
         # load_today must complete before any game-based jobs
@@ -649,32 +666,33 @@ def _dependency_complete_for_slate(
     """
     True if some pipeline_jobs row shows ``dep_job_type`` satisfied for this slate date.
 
-    ``complete`` or ``skipped`` counts: skipped means max retries exhausted — runner treats
-    upstream as resolved so downstream jobs are not blocked forever (assume manual follow-up).
+    Resolved statuses include ``complete``, ``skipped``, ``failed``, and ``timeout`` so a
+    terminal upstream failure does not deadlock the slate; only ``pending``/``running`` wait.
 
     Matches ``job_date_et`` when set. Rows with NULL/blank ``job_date_et`` (legacy) still
     count if ``scheduled_time_et`` begins with YYYY-MM-DD (first 10 chars), so morning globals
     satisfy deps for same-calendar-day group jobs.
     """
+    st_in = ", ".join(f"'{s}'" for s in _DEPS_UPSTREAM_RESOLVED_STATUSES)
     jd = str(job_date_et or "").strip()
     if not jd:
         cur = con.execute(
-            """
+            f"""
             SELECT COUNT(*) AS n
             FROM pipeline_jobs
             WHERE job_type = ?
-              AND status IN ('complete', 'skipped')
+              AND status IN ({st_in})
             """,
             (str(dep_job_type),),
         )
         return int(cur.fetchone()[0] or 0) > 0
 
     cur = con.execute(
-        """
+        f"""
         SELECT COUNT(*) AS n
         FROM pipeline_jobs
         WHERE job_type = ?
-          AND status IN ('complete', 'skipped')
+          AND status IN ({st_in})
           AND (
             TRIM(COALESCE(job_date_et, '')) = ?
             OR (
@@ -709,6 +727,183 @@ def _deps_complete(con: sqlite3.Connection, job: dict) -> tuple[bool, str]:
         scope = f"job_date_et={job_date}" if job_date else "all dates"
         return False, f"deps not complete ({scope}): {', '.join(missing)}"
     return True, ""
+
+
+def _dep_rows_for_slate(
+    con: sqlite3.Connection,
+    *,
+    dep_job_type: str,
+    job_date_et: str,
+) -> list[dict[str, Any]]:
+    """
+    Rows matching the same slate filter as ``_dependency_complete_for_slate`` (for diagnostics).
+    """
+    jd = str(job_date_et or "").strip()
+    if not jd:
+        cur = con.execute(
+            """
+            SELECT job_id, job_type, game_group_id, status, retry_count,
+                   substr(COALESCE(error_message,''),1,160) AS err_tail
+            FROM pipeline_jobs
+            WHERE job_type = ?
+            ORDER BY job_id
+            """,
+            (str(dep_job_type),),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+    cur = con.execute(
+        """
+        SELECT job_id, job_type, game_group_id, status, retry_count,
+               substr(COALESCE(error_message,''),1,160) AS err_tail
+        FROM pipeline_jobs
+        WHERE job_type = ?
+          AND (
+            TRIM(COALESCE(job_date_et, '')) = ?
+            OR (
+              TRIM(COALESCE(job_date_et, '')) = ''
+              AND LENGTH(?) = 10
+              AND SUBSTR(TRIM(COALESCE(scheduled_time_et, '')), 1, 10) = ?
+            )
+          )
+        ORDER BY job_id
+        """,
+        (str(dep_job_type), jd, jd, jd),
+    )
+    return [dict(r) for r in cur.fetchall()]
+
+
+def _format_dep_slate_explain(rows: list[dict[str, Any]], *, dep_job_type: str) -> tuple[bool, str]:
+    """Return (satisfied, one-line explanation). Satisfied if any row is in resolved-status set."""
+    if not rows:
+        return False, f"{dep_job_type}: no pipeline_jobs rows match this slate (insert schedule or fix job_date_et)"
+    ok_ids: list[str] = []
+    terminal_ids: list[str] = []
+    by_st: dict[str, int] = {}
+    blockers: list[str] = []
+    for r in rows:
+        st = str(r.get("status") or "")
+        by_st[st] = by_st.get(st, 0) + 1
+        jid = int(r.get("job_id") or 0)
+        gid = r.get("game_group_id")
+        if st in ("complete", "skipped"):
+            ok_ids.append(f"{jid}(gid={gid})")
+        elif st in ("failed", "timeout"):
+            terminal_ids.append(f"{jid}(gid={gid})")
+        elif st == "pending":
+            blockers.append(f"job_id={jid} gid={gid} status=pending")
+        elif st == "running":
+            blockers.append(f"job_id={jid} gid={gid} status=running")
+
+    satisfied = bool(ok_ids or terminal_ids)
+    parts = [f"{dep_job_type}: {len(rows)} row(s) on slate"]
+    if ok_ids:
+        parts.append(f"OK <- {', '.join(ok_ids)}")
+    if terminal_ids:
+        parts.append(
+            f"resolved (terminal failure unblocks deps) <- {', '.join(terminal_ids)}"
+        )
+    if not satisfied:
+        summary = ", ".join(f"{k}={v}" for k, v in sorted(by_st.items()))
+        parts.append(
+            "blocked - need a row in resolved status "
+            f"({', '.join(_DEPS_UPSTREAM_RESOLVED_STATUSES)}); counts: {summary}"
+        )
+        if blockers[:5]:
+            parts.append("examples: " + "; ".join(blockers[:5]))
+    return satisfied, " | ".join(parts)
+
+
+def print_pipeline_jobs_explain_deps(db_path: str, job_date_et: str) -> None:
+    """
+    Read-only: for one Eastern ``job_date_et``, show slate-wide dependency satisfaction and each job.
+    """
+    jd = str(job_date_et or "").strip()
+    if len(jd) != 10:
+        print(f"Error: --explain-deps expects YYYY-MM-DD, got {job_date_et!r}", file=sys.stderr)
+        sys.exit(1)
+
+    p = Path(db_path)
+    if not p.is_file():
+        print(f"Error: database not found:\n  {p.resolve()}", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        con = db_connect(db_path, timeout=30)
+    except sqlite3.OperationalError as exc:
+        print(f"Error: could not open database:\n  {db_path}\n  {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    con.row_factory = sqlite3.Row
+    print()
+    print("=" * 76)
+    print(f"  PIPELINE DEPS EXPLAIN  job_date_et={jd}")
+    print("=" * 76)
+    print(f"  Database: {db_path}")
+    print()
+    print(
+        "  Rules: each dependency is satisfied if at least one matching row has a resolved "
+        "status: complete, skipped, failed, or timeout. Only pending/running block. "
+        "Matching is slate-wide (no game_group_id filter): one rep odds_pull can cover a block."
+    )
+    print()
+
+    dep_types: set[str] = set()
+    for deps in _dependency_rules().values():
+        dep_types.update(deps)
+
+    print("-- Upstream job_types for this slate " + "-" * 36)
+    for dep in sorted(dep_types):
+        rows = _dep_rows_for_slate(con, dep_job_type=dep, job_date_et=jd)
+        ok, line = _format_dep_slate_explain(rows, dep_job_type=dep)
+        tag = "OK" if ok else "NO"
+        print(f"  [{tag}] {line}")
+    print()
+
+    try:
+        cur = con.execute(
+            """
+            SELECT job_id, job_type, job_date_et, game_group_id, status, scheduled_time_et, retry_count,
+                   substr(COALESCE(error_message,''),1,120) AS err_tail
+            FROM pipeline_jobs
+            WHERE TRIM(COALESCE(job_date_et, '')) = ?
+            ORDER BY game_group_id, scheduled_time_et, job_id
+            """,
+            (jd,),
+        )
+        jobs = [dict(r) for r in cur.fetchall()]
+    except Exception as exc:
+        print(f"  Error listing jobs: {exc}")
+        con.close()
+        return
+
+    print(f"-- Each job on slate ({len(jobs)} row(s)) " + "-" * max(0, 40 - len(str(len(jobs)))))
+    hdr = ["job_id", "type", "gid", "status", "deps_ok", "detail"]
+    w = [7, 22, 4, 9, 8, 72]
+    print(_fmt_row(w, hdr))
+    print(_rule_line_for_widths(w))
+    for job in jobs:
+        ok, msg = _deps_complete(con, job)
+        jt = str(job.get("job_type") or "")
+        st = str(job.get("status") or "")
+        deps_cell = "yes" if ok else "no"
+        detail = (msg or "-") if not ok else "ready (deps)"
+        if st == "skipped" and ok:
+            detail = "deps OK - status=skipped means terminal max retries on this row"
+        d = detail if len(detail) <= 72 else (detail[:69] + "...")
+        line = [
+            str(job.get("job_id", "")),
+            jt[:22],
+            str(job.get("game_group_id", "")),
+            st[:9],
+            deps_cell,
+            d,
+        ]
+        print(_fmt_row(w, line))
+    print()
+    print("=" * 76)
+    print()
+    con.close()
 
 
 def _duration_seconds_utc(started_at_utc: str, finished_at_utc: str) -> float | None:
@@ -1788,6 +1983,12 @@ def print_pipeline_status(db_path: str) -> None:
 def main() -> None:
     p = argparse.ArgumentParser(description="Run due pipeline_jobs in scheduled order (single-threaded).")
     p.add_argument(
+        "--explain-deps",
+        metavar="YYYY-MM-DD",
+        default=None,
+        help="Read-only: show slate-wide dependency satisfaction and per-job deps for this job_date_et",
+    )
+    p.add_argument(
         "--status",
         action="store_true",
         help="Print pending/running/failed jobs and last 10 runs, then exit (read-only)",
@@ -1795,7 +1996,7 @@ def main() -> None:
     p.add_argument(
         "--db",
         default=None,
-        help="Path to mlb_stats.db (defaults to core.db.connection.get_db_path()); must exist for --status",
+        help="Path to mlb_stats.db (defaults to core.db.connection.get_db_path()); must exist for --status / --explain-deps",
     )
     p.add_argument("--once", action="store_true", help="Run one polling pass then exit")
     p.add_argument("--ghost", action="store_true", help="Print what would run; do not execute or update DB")
@@ -1841,6 +2042,9 @@ def main() -> None:
     args = p.parse_args()
 
     db_path = str(Path(args.db).resolve()) if args.db else str(Path(get_db_path()).resolve())
+    if args.explain_deps:
+        print_pipeline_jobs_explain_deps(db_path, str(args.explain_deps).strip())
+        return
     if args.status:
         print_pipeline_status(db_path)
         return
