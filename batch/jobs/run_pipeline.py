@@ -8,6 +8,9 @@ Polls pipeline_jobs and runs due jobs (single-threaded) in scheduled_time order.
 
 CHANGE LOG (latest first)
 ────────────────────────
+2026-04-19  Dependency check: treat ``job_date_et`` match OR (NULL/blank ``job_date_et`` on the
+            dep row with ``scheduled_time_et`` starting with the slate YYYY-MM-DD). Fixes false
+            ``SKIP — deps`` when globals completed but legacy rows lacked ``job_date_et``.
 2026-04-19  Stale-running reset now uses ``_handle_job_failure`` (increments ``retry_count``,
             respects ``_MAX_FAILURE_RETRIES``). Previously reset-to-pending left ``retry_count``
             unchanged, so stuck ``running`` jobs could retry without bound.
@@ -615,6 +618,52 @@ def _dependency_rules() -> dict[str, list[str]]:
     }
 
 
+def _dependency_complete_for_slate(
+    con: sqlite3.Connection,
+    *,
+    dep_job_type: str,
+    job_date_et: str,
+) -> bool:
+    """
+    True if some pipeline_jobs row shows ``dep_job_type`` completed for this slate date.
+
+    Matches ``job_date_et`` when set. Rows with NULL/blank ``job_date_et`` (legacy) still
+    count if ``scheduled_time_et`` begins with YYYY-MM-DD (first 10 chars), so morning globals
+    satisfy deps for same-calendar-day group jobs.
+    """
+    jd = str(job_date_et or "").strip()
+    if not jd:
+        cur = con.execute(
+            """
+            SELECT COUNT(*) AS n
+            FROM pipeline_jobs
+            WHERE job_type = ?
+              AND status = 'complete'
+            """,
+            (str(dep_job_type),),
+        )
+        return int(cur.fetchone()[0] or 0) > 0
+
+    cur = con.execute(
+        """
+        SELECT COUNT(*) AS n
+        FROM pipeline_jobs
+        WHERE job_type = ?
+          AND status = 'complete'
+          AND (
+            TRIM(COALESCE(job_date_et, '')) = ?
+            OR (
+              TRIM(COALESCE(job_date_et, '')) = ''
+              AND LENGTH(?) = 10
+              AND SUBSTR(TRIM(COALESCE(scheduled_time_et, '')), 1, 10) = ?
+            )
+          )
+        """,
+        (str(dep_job_type), jd, jd, jd),
+    )
+    return int(cur.fetchone()[0] or 0) > 0
+
+
 def _deps_complete(con: sqlite3.Connection, job: dict) -> tuple[bool, str]:
     """
     Return (ok, message). If dependencies are not met, ok=False and message explains why.
@@ -626,26 +675,9 @@ def _deps_complete(con: sqlite3.Connection, job: dict) -> tuple[bool, str]:
     if not deps:
         return True, ""
 
-    date_clause = ""
-    params: list[object] = []
-    if job_date:
-        date_clause = " AND job_date_et = ?"
-        params.append(job_date)
-
     missing: list[str] = []
     for dep in deps:
-        cur = con.execute(
-            f"""
-            SELECT COUNT(*) AS n
-            FROM pipeline_jobs
-            WHERE job_type = ?
-              AND status = 'complete'
-              {date_clause}
-            """,
-            (dep, *params),
-        )
-        n = int(cur.fetchone()[0] or 0)
-        if n <= 0:
+        if not _dependency_complete_for_slate(con, dep_job_type=dep, job_date_et=job_date):
             missing.append(dep)
 
     if missing:
