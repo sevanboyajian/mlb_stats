@@ -335,6 +335,31 @@ def _print_job_counts(con: sqlite3.Connection, game_date_et: str) -> None:
         print(f"    {d.get('job_type'):<15} {d.get('n')}")
 
 
+def _window_offsets_for_odds_weather(
+    job_type: str,
+    *,
+    odds_threshold_min: int,
+    weather_min: int,
+    brief_min: int,
+    ledger_min: int,
+) -> tuple[int | None, int | None]:
+    """Return (window_start_offset_min, window_end_offset_min) from first pitch T0, or (None, None)."""
+    th = int(odds_threshold_min)
+    check_off = max(0, th - 5)
+    w = int(weather_min)
+    if job_type == "odds_pull":
+        return th + 5, check_off
+    if job_type == "odds_check":
+        return th + 5, max(0, check_off - 5)
+    if job_type == "weather":
+        return w + 15, max(0, w - 15)
+    if job_type == "group_brief":
+        return int(brief_min), int(ledger_min)
+    if job_type == "ledger_snapshot":
+        return 30, 0
+    return None, None
+
+
 def _backfill_et_fields_for_existing_rows(
     con: sqlite3.Connection,
     *,
@@ -342,15 +367,20 @@ def _backfill_et_fields_for_existing_rows(
     group_t0_by_id: dict[int, dt.datetime],
     brief_min: int,
     ledger_min: int,
+    odds_threshold_min: int = 90,
+    weather_min: int = 45,
 ) -> int:
     """
-    Backfill ET fields/windows for legacy rows that were inserted before ET columns existed.
+    Backfill ET fields/windows for legacy rows that were inserted before ET columns existed,
+    or fill missing window_start_et / window_end_et on existing rows (INSERT OR IGNORE leaves
+    old NULL windows).
     Targets this date and the core job types (odds_pull, odds_check, weather, group_brief, ledger_snapshot).
     """
     try:
         cur = con.execute(
             """
-            SELECT job_id, job_type, scheduled_time, game_group_id, scheduled_time_et
+            SELECT job_id, job_type, scheduled_time, game_group_id, scheduled_time_et,
+                   window_start_et, window_end_et
             FROM pipeline_jobs
             WHERE job_type IN ('odds_pull','odds_check','weather','group_brief','ledger_snapshot')
               AND (job_date_et IS NULL OR job_date_et = ?)
@@ -363,22 +393,12 @@ def _backfill_et_fields_for_existing_rows(
 
     updated = 0
     for r in rows:
-        if r.get("scheduled_time_et"):
-            continue
         jid = r.get("job_id")
-        st_utc = r.get("scheduled_time")
         gid = r.get("game_group_id")
-        if jid is None or not st_utc:
-            continue
-        try:
-            sched_dt = _parse_iso_z(str(st_utc))
-            sched_et = _fmt_et(sched_dt)
-        except Exception:
+        jt = str(r.get("job_type") or "")
+        if jid is None:
             continue
 
-        # Optional windows based on group anchor (T0)
-        win_start = None
-        win_end = None
         try:
             if gid is not None:
                 t0 = group_t0_by_id.get(int(gid))
@@ -387,25 +407,64 @@ def _backfill_et_fields_for_existing_rows(
         except Exception:
             t0 = None
 
-        if t0 is not None and r.get("job_type") == "group_brief":
-            win_start = _fmt_et(t0 - dt.timedelta(minutes=int(brief_min)))
-            win_end = _fmt_et(t0 - dt.timedelta(minutes=int(ledger_min)))
-        elif t0 is not None and r.get("job_type") == "ledger_snapshot":
-            win_start = _fmt_et(t0 - dt.timedelta(minutes=30))
-            win_end = _fmt_et(t0)
+        st_utc = r.get("scheduled_time")
+        sched_et_existing = (r.get("scheduled_time_et") or "").strip()
+
+        # Derive scheduled_time_et + job_date_et from UTC if missing
+        sched_et = sched_et_existing
+        if not sched_et and st_utc:
+            try:
+                sched_dt = _parse_iso_z(str(st_utc))
+                sched_et = _fmt_et(sched_dt)
+            except Exception:
+                sched_et = ""
+
+        if not sched_et:
+            continue
+
+        # Skip only when nothing to do: full ET row with both windows already set
+        if sched_et_existing and r.get("window_start_et") and r.get("window_end_et"):
+            continue
+
+        win_start = None
+        win_end = None
+        if t0 is not None and jt in (
+            "odds_pull",
+            "odds_check",
+            "weather",
+            "group_brief",
+            "ledger_snapshot",
+        ):
+            ws, we = _window_offsets_for_odds_weather(
+                jt,
+                odds_threshold_min=odds_threshold_min,
+                weather_min=weather_min,
+                brief_min=brief_min,
+                ledger_min=ledger_min,
+            )
+            if ws is not None and we is not None:
+                win_start = _fmt_et(t0 - dt.timedelta(minutes=int(ws)))
+                win_end = _fmt_et(t0 - dt.timedelta(minutes=int(we)))
 
         try:
             con.execute(
                 """
                 UPDATE pipeline_jobs
-                SET job_date_et = ?,
-                    scheduled_time_et = ?,
+                SET job_date_et = COALESCE(NULLIF(job_date_et, ''), ?),
+                    scheduled_time_et = COALESCE(NULLIF(scheduled_time_et, ''), ?),
                     scheduled_time_utc = COALESCE(scheduled_time_utc, ?),
                     window_start_et = COALESCE(window_start_et, ?),
                     window_end_et = COALESCE(window_end_et, ?)
                 WHERE job_id = ?
                 """,
-                (game_date_et, sched_et, str(st_utc), win_start, win_end, int(jid)),
+                (
+                    game_date_et,
+                    sched_et,
+                    str(st_utc) if st_utc else None,
+                    win_start,
+                    win_end,
+                    int(jid),
+                ),
             )
             updated += 1
         except Exception:
