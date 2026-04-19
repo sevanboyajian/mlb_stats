@@ -8,6 +8,10 @@ Polls pipeline_jobs and runs due jobs (single-threaded) in scheduled_time order.
 
 CHANGE LOG (latest first)
 ────────────────────────
+2026-04-19  Fix: do not append ``# group_id=…`` to subprocess command strings. On Windows
+            ``cmd.exe`` (``shell=True``) ``#`` is not a comment, so Python received ``#`` as an
+            argv token (e.g. ``load_odds --markets game # …`` → invalid ``--markets`` choice).
+            Group context is logged separately.
 2026-04-19  job_type ``load_weather`` → ``load_weather.py --date`` (morning global: wind +
             probable starters after ``load_today``). Deps: ``day_setup`` / ``prior_report`` /
             ``early_peek`` / ``group_brief`` wait on ``load_weather`` where applicable.
@@ -527,9 +531,6 @@ def _build_command(job: dict) -> str:
     """
     job_type = str(job.get("job_type") or "").strip()
     job_date = str(job.get("job_date_et") or "").strip()
-    group_id = job.get("game_group_id")
-    win_start = str(job.get("window_start_et") or "").strip()
-    win_end = str(job.get("window_end_et") or "").strip()
 
     # Note: commands intentionally simple; no parallelism.
     # If a job requires additional parameters later, extend this mapping only.
@@ -552,7 +553,11 @@ def _build_command(job: dict) -> str:
         # Group jobs (windows are informational; scripts should filter by unplayed games / session rules)
         "odds_pull": "python batch/ingestion/load_odds.py --markets game",
         "odds_check": "python diagnostics/check_odds_ready.py",
-        "weather": "python batch/ingestion/load_weather.py",
+        "weather": (
+            f"python batch/ingestion/load_weather.py --date {job_date}"
+            if job_date
+            else "python batch/ingestion/load_weather.py"
+        ),
         # Group brief generation (time-windowing is embedded in generate_daily_brief session logic)
         "group_brief": f"python batch/pipeline/generate_daily_brief.py --session primary --date {job_date}" if job_date else "python batch/pipeline/generate_daily_brief.py --session primary",
         # Materialize bet_ledger inside T−30 pregame window; schedule every N minutes on game days if needed.
@@ -569,11 +574,19 @@ def _build_command(job: dict) -> str:
         ),
     }
 
-    cmd = mapping.get(job_type, "")
-    if cmd and group_id not in (None, "", 0):
-        # Emit context only; do not assume scripts accept group_id flags.
-        cmd = f"{cmd}  # group_id={group_id} window=[{win_start or '?'} -> {win_end or '?'}]"
-    return cmd
+    # Never append ``# …`` for human context: Windows cmd.exe (shell=True) does not treat
+    # ``#`` as a comment, so the rest of the line becomes argv and breaks argparse.
+    return mapping.get(job_type, "")
+
+
+def _job_group_context(job: dict) -> str:
+    """Non-executable annotation for logs (pipeline_jobs row)."""
+    group_id = job.get("game_group_id")
+    if group_id in (None, "", 0):
+        return ""
+    ws = str(job.get("window_start_et") or "").strip()
+    we = str(job.get("window_end_et") or "").strip()
+    return f"group_id={group_id} window=[{ws or '?'} -> {we or '?'}]"
 
 
 def _dependency_rules() -> dict[str, list[str]]:
@@ -1327,6 +1340,9 @@ def run_loop(
                 )
                 print(f"[job] start={start_iso}")
                 print(f"[job] command={command!r}")
+                ctx = _job_group_context(job)
+                if ctx:
+                    print(f"[job] context: {ctx}")
     
                 ok, dep_msg = _deps_complete(con, job)
                 if not ok:
