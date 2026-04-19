@@ -8,6 +8,10 @@ Polls pipeline_jobs and runs due jobs (single-threaded) in scheduled_time order.
 
 CHANGE LOG (latest first)
 ────────────────────────
+2026-04-19  --sleep-until-due: when idle (or all due rows skipped on deps), sleep until the
+            next pending ``scheduled_time_et`` instead of fixed polling; optional ``--job-date-et``
+            scopes next-wake MIN query; ``--exit-when-no-pending`` exits when nothing pending.
+            Fixes busy-spin when every due job hits SKIP deps. Logs include ``game_group_id``.
 2026-04-17  Fix: due-job execution body was outside the ``for job in due`` loop, so only the
             last due row ran per poll; indent so every pending due job runs in order.
 2026-04-17  job_type bet_ledger_sync → generate_daily_brief.py --sync-bet-ledger-only (deps: load_today).
@@ -42,6 +46,10 @@ CHANGE LOG (latest first)
 
 Rules:
 - Only runs jobs with status='pending' and scheduled_time <= now
+- Optional ``--sleep-until-due``: no fixed poll interval when idle; sleep until the next
+  pending ``scheduled_time_et`` (table-driven wake). Overlapping game groups still interleave
+  by ``scheduled_time_et`` order; merged odds blocks keep a single ``odds_pull`` on the rep
+  ``game_group_id``—do not batch strictly by group without respecting that ordering.
 - Marks jobs: pending -> running -> complete/failed/timeout
 - Does not modify job definitions
 - Does not run jobs in parallel
@@ -354,6 +362,146 @@ def _et_now_str() -> str:
         # Fallback: assume ET; good enough for local usage.
         now_et = dt.datetime.now()
     return now_et.replace(second=0, microsecond=0).strftime("%Y-%m-%d %H:%M ET")
+
+
+def _et_now_dt() -> dt.datetime:
+    """Current instant in America/New_York (minute-truncated), for sleep-until-due."""
+    try:
+        from zoneinfo import ZoneInfo
+
+        et = ZoneInfo("America/New_York")
+        return dt.datetime.now(tz=et).replace(second=0, microsecond=0)
+    except Exception:
+        return dt.datetime.now().replace(second=0, microsecond=0)
+
+
+def _parse_scheduled_time_et(raw: str | None) -> dt.datetime | None:
+    """Parse pipeline_jobs.scheduled_time_et values like '2026-04-19 14:05 ET'."""
+    if not raw or not isinstance(raw, str):
+        return None
+    s = raw.strip()
+    if not s.endswith("ET"):
+        return None
+    base = s[:-2].strip()
+    try:
+        from zoneinfo import ZoneInfo
+
+        zi = ZoneInfo("America/New_York")
+        naive = dt.datetime.strptime(base, "%Y-%m-%d %H:%M")
+        return naive.replace(tzinfo=zi)
+    except Exception:
+        return None
+
+
+def _count_pending_jobs(con: sqlite3.Connection, *, job_date_et: str | None) -> int:
+    try:
+        if job_date_et:
+            row = con.execute(
+                "SELECT COUNT(*) AS n FROM pipeline_jobs WHERE status = 'pending' AND job_date_et = ?",
+                (str(job_date_et).strip(),),
+            ).fetchone()
+        else:
+            row = con.execute(
+                "SELECT COUNT(*) AS n FROM pipeline_jobs WHERE status = 'pending'"
+            ).fetchone()
+        return int(row[0] or 0) if row else 0
+    except Exception:
+        return 0
+
+
+def _next_pending_scheduled_time_et(
+    con: sqlite3.Connection,
+    cols: set[str],
+    *,
+    job_date_et: str | None,
+) -> str | None:
+    if "scheduled_time_et" not in cols:
+        return None
+    try:
+        if job_date_et and "job_date_et" in cols:
+            row = con.execute(
+                """
+                SELECT MIN(scheduled_time_et) AS m
+                FROM pipeline_jobs
+                WHERE status = 'pending'
+                  AND scheduled_time_et IS NOT NULL
+                  AND TRIM(scheduled_time_et) != ''
+                  AND job_date_et = ?
+                """,
+                (str(job_date_et).strip(),),
+            ).fetchone()
+        else:
+            row = con.execute(
+                """
+                SELECT MIN(scheduled_time_et) AS m
+                FROM pipeline_jobs
+                WHERE status = 'pending'
+                  AND scheduled_time_et IS NOT NULL
+                  AND TRIM(scheduled_time_et) != ''
+                """
+            ).fetchone()
+        m = row[0] if row else None
+        return str(m).strip() if m else None
+    except Exception:
+        return None
+
+
+def _sleep_until_next_pending_or_poll(
+    *,
+    con: sqlite3.Connection,
+    cols: set[str],
+    sleep_until_due: bool,
+    job_date_et: str | None,
+    poll_seconds: int,
+    exit_when_no_pending: bool,
+    max_sleep_seconds: int,
+) -> bool:
+    """
+    Idle wait between waves. Returns True if the outer run loop should exit.
+    """
+    pending_n = _count_pending_jobs(con, job_date_et=job_date_et)
+    if pending_n == 0:
+        if exit_when_no_pending:
+            print("[run_pipeline] no pending pipeline_jobs; exiting (--exit-when-no-pending).")
+            return True
+        if not sleep_until_due:
+            time.sleep(max(1, int(poll_seconds)))
+            return False
+        print(f"[run_pipeline] sleep-until-due: no pending jobs{f' for {job_date_et}' if job_date_et else ''}; sleeping {poll_seconds}s")
+        time.sleep(max(1, int(poll_seconds)))
+        return False
+
+    if not sleep_until_due:
+        time.sleep(max(1, int(poll_seconds)))
+        return False
+
+    now_et = _et_now_dt()
+    nxt = _next_pending_scheduled_time_et(con, cols, job_date_et=job_date_et)
+    if not nxt:
+        time.sleep(max(1, int(poll_seconds)))
+        return False
+
+    wake = _parse_scheduled_time_et(nxt)
+    if wake is None:
+        time.sleep(max(1, int(poll_seconds)))
+        return False
+
+    delta = (wake - now_et).total_seconds()
+    if delta > float(max_sleep_seconds):
+        print(
+            f"[run_pipeline] sleep-until-due: next {nxt} is {delta:.0f}s away (> cap {max_sleep_seconds}s); "
+            f"sleeping {max_sleep_seconds}s then recomputing."
+        )
+        time.sleep(float(max_sleep_seconds))
+        return False
+
+    if delta <= 0:
+        time.sleep(0.25)
+        return False
+
+    print(f"[run_pipeline] sleep-until-due: next pending at {nxt} (~{delta:.0f}s)")
+    time.sleep(delta)
+    return False
 
 
 def _table_columns(con: sqlite3.Connection, table: str) -> set[str]:
@@ -1095,6 +1243,10 @@ def run_loop(
     ghost: bool,
     stale_minutes: int,
     timeout_minutes: int,
+    sleep_until_due: bool = False,
+    scope_job_date_et: str | None = None,
+    exit_when_no_pending: bool = False,
+    max_sleep_seconds: int = 86400,
 ) -> None:
     con = db_connect(db_path, timeout=30)
     con.row_factory = sqlite3.Row
@@ -1115,7 +1267,9 @@ def run_loop(
         print(f"[run_pipeline] db={db_path}")
         print(
             f"[run_pipeline] mode={'once' if once else 'loop'} poll_seconds={poll_seconds} "
-            f"ghost={ghost} stale_minutes={stale_minutes} timeout_minutes={timeout_minutes}"
+            f"ghost={ghost} stale_minutes={stale_minutes} timeout_minutes={timeout_minutes} "
+            f"sleep_until_due={sleep_until_due} scope_job_date_et={scope_job_date_et!r} "
+            f"exit_when_no_pending={exit_when_no_pending}"
         )
 
         while True:
@@ -1129,18 +1283,35 @@ def run_loop(
                 if once:
                     print(f"[run_pipeline] {now_iso} no due jobs; exiting (--once).")
                     break
-                time.sleep(max(1, int(poll_seconds)))
+                if exit_when_no_pending and _count_pending_jobs(con, job_date_et=scope_job_date_et) == 0:
+                    print("[run_pipeline] no pending pipeline_jobs; exiting (--exit-when-no-pending).")
+                    break
+                if _sleep_until_next_pending_or_poll(
+                    con=con,
+                    cols=cols,
+                    sleep_until_due=sleep_until_due,
+                    job_date_et=scope_job_date_et,
+                    poll_seconds=poll_seconds,
+                    exit_when_no_pending=exit_when_no_pending,
+                    max_sleep_seconds=max_sleep_seconds,
+                ):
+                    break
                 continue
 
+            progressed = False
             for job in due:
                 job_id = int(job["job_id"])
                 job_type = str(job.get("job_type") or "")
                 scheduled_time = str(job.get("scheduled_time_et") or job.get("scheduled_time") or "")
                 retry_count_before = int(job.get("retry_count") or 0)
                 command = _build_command(job).strip()
+                gid = job.get("game_group_id")
 
                 start_iso = _utc_now_iso_z()
-                print(f"\n[job] id={job_id} type={job_type} scheduled_time={scheduled_time}")
+                print(
+                    f"\n[job] id={job_id} type={job_type} job_date_et={job.get('job_date_et')!s} "
+                    f"game_group_id={gid!s} scheduled_time={scheduled_time}"
+                )
                 print(f"[job] start={start_iso}")
                 print(f"[job] command={command!r}")
     
@@ -1150,6 +1321,7 @@ def run_loop(
                     continue
     
                 if ghost:
+                    progressed = True
                     print("[job] GHOST MODE — would set status=running, execute command, then set complete/failed")
                     continue
     
@@ -1158,7 +1330,8 @@ def run_loop(
                     print(f"[job] SKIP — job_id={job_id} not pending (already claimed or state changed)")
                     continue
     
-                job_date_et = str(job.get("job_date_et") or "")
+                progressed = True
+                jd_et = str(job.get("job_date_et") or "")
     
                 if not command:
                     end_iso = _utc_now_iso_z()
@@ -1169,7 +1342,7 @@ def run_loop(
                         cols,
                         job_id=job_id,
                         job_type=job_type,
-                        job_date_et=job_date_et,
+                        job_date_et=jd_et,
                         retry_count_before=retry_count_before,
                         error_message=msg,
                         completed_ts=end_iso,
@@ -1192,7 +1365,7 @@ def run_loop(
                         cols,
                         job_id=job_id,
                         job_type=job_type,
-                        job_date_et=job_date_et,
+                        job_date_et=jd_et,
                         retry_count_before=retry_count_before,
                         error_message=msg,
                         completed_ts=end_iso,
@@ -1210,7 +1383,7 @@ def run_loop(
                         run_cols,
                         job_id=job_id,
                         job_type=job_type,
-                        job_date_et=job_date_et,
+                        job_date_et=jd_et,
                         started_at_utc=start_iso,
                         finished_at_utc=end_iso,
                         run_status="complete",
@@ -1242,7 +1415,7 @@ def run_loop(
                         cols,
                         job_id=job_id,
                         job_type=job_type,
-                        job_date_et=job_date_et,
+                        job_date_et=jd_et,
                         retry_count_before=retry_count_before,
                         error_message=msg,
                         completed_ts=end_iso,
@@ -1254,6 +1427,22 @@ def run_loop(
             if once:
                 print(f"\n[run_pipeline] {now_iso} processed due jobs; exiting (--once).")
                 break
+
+            if not progressed:
+                print(
+                    "[run_pipeline] no job progressed this wave (all SKIP deps or empty); "
+                    "backing off to avoid a busy loop."
+                )
+                if _sleep_until_next_pending_or_poll(
+                    con=con,
+                    cols=cols,
+                    sleep_until_due=sleep_until_due,
+                    job_date_et=scope_job_date_et,
+                    poll_seconds=max(15, int(poll_seconds)),
+                    exit_when_no_pending=exit_when_no_pending,
+                    max_sleep_seconds=max_sleep_seconds,
+                ):
+                    break
     finally:
         if lock_acquired:
             _release_runner_lock(con)
@@ -1434,6 +1623,32 @@ def main() -> None:
     p.add_argument("--ghost", action="store_true", help="Print what would run; do not execute or update DB")
     p.add_argument("--poll-seconds", type=int, default=60, help="Polling interval when looping (default 60)")
     p.add_argument(
+        "--sleep-until-due",
+        action="store_true",
+        help="When looping with no due jobs (or all due rows skipped on deps), sleep until the "
+        "earliest pending scheduled_time_et instead of polling every --poll-seconds. "
+        "Optional --job-date-et scopes the next-wake query to one slate day.",
+    )
+    p.add_argument(
+        "--job-date-et",
+        default=None,
+        metavar="YYYY-MM-DD",
+        help="Eastern slate date: limit sleep-until-due / exit-when-no-pending to this job_date_et.",
+    )
+    p.add_argument(
+        "--exit-when-no-pending",
+        action="store_true",
+        help="Exit the loop when there are zero pending rows (after optional --job-date-et filter). "
+        "Checked whenever there are no due jobs; works with or without --sleep-until-due.",
+    )
+    p.add_argument(
+        "--max-sleep-hours",
+        type=float,
+        default=24.0,
+        metavar="H",
+        help="Cap each sleep-until-due wait (default 24 hours) before recomputing MIN(scheduled_time_et).",
+    )
+    p.add_argument(
         "--stale-minutes",
         type=int,
         default=30,
@@ -1452,6 +1667,8 @@ def main() -> None:
         print_pipeline_status(db_path)
         return
 
+    max_sleep = max(60.0, float(args.max_sleep_hours) * 3600.0)
+
     run_loop(
         db_path=db_path,
         once=bool(args.once),
@@ -1459,6 +1676,10 @@ def main() -> None:
         ghost=bool(args.ghost),
         stale_minutes=max(0, int(args.stale_minutes)),
         timeout_minutes=max(0, int(args.timeout_minutes)),
+        sleep_until_due=bool(args.sleep_until_due),
+        scope_job_date_et=(str(args.job_date_et).strip() if args.job_date_et else None),
+        exit_when_no_pending=bool(args.exit_when_no_pending),
+        max_sleep_seconds=int(max_sleep),
     )
 
 
