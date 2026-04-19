@@ -9,6 +9,9 @@ Console output is intentionally verbose so you can see exactly what it is doing.
 
 CHANGE LOG (latest first)
 ────────────────────────
+2026-04-19  Slate/group report: matchups (away @ home), first pitch ET per game, anchor ET per
+            group; optional ``--group-report PATH`` writes UTF-8 file. ``_fetch_games_for_date``
+            joins ``teams`` for abbreviations.
 2026-04-19  Intraday ``weather`` jobs use the same ``odds_blocks`` / ``rep_groups`` as
             ``odds_pull`` / ``odds_check`` (one refresh per merged block, not per raw group);
             stale ``weather`` rows for non-representative groups are deleted like ``odds_pull``.
@@ -144,29 +147,102 @@ def _et_to_utc_iso_z(et_str: str) -> str:
 def _fetch_games_for_date(con: sqlite3.Connection, game_date_et: str) -> List[Dict[str, Any]]:
     cur = con.execute(
         """
-        SELECT game_pk, game_start_utc
-        FROM games
-        WHERE game_date_et = ?
-          AND game_type = 'R'
-        ORDER BY game_start_utc, game_pk
+        SELECT
+            g.game_pk,
+            g.game_start_utc,
+            ta.abbreviation AS away_abbr,
+            th.abbreviation AS home_abbr
+        FROM games g
+        LEFT JOIN teams ta ON ta.team_id = g.away_team_id
+        LEFT JOIN teams th ON th.team_id = g.home_team_id
+        WHERE g.game_date_et = ?
+          AND g.game_type = 'R'
+        ORDER BY g.game_start_utc, g.game_pk
         """,
         (game_date_et,),
     )
     return [dict(r) for r in cur.fetchall()]
 
 
-def _print_groups(groups: List[Dict[str, Any]], max_groups: int = 50) -> None:
-    if not groups:
-        print("  [groups] none")
-        return
-    print(f"  [groups] {len(groups)} group(s):")
-    for g in groups[:max_groups]:
-        print(
-            f"    - group_id={g['group_id']:02d}  start_time_utc={g['start_time']}  "
-            f"n_games={len(g.get('game_pks') or [])}  game_pks={g.get('game_pks')}"
+def _game_first_pitch_et(game: Dict[str, Any]) -> str:
+    raw = str(game.get("game_start_utc") or "").strip()
+    if "T" not in raw:
+        return "?"
+    try:
+        return _fmt_et(dt.datetime.fromisoformat(raw.rstrip("Z")))
+    except Exception:
+        return "?"
+
+
+def _format_group_slate_report(
+    groups: List[Dict[str, Any]],
+    games: List[Dict[str, Any]],
+    *,
+    game_date_et: str,
+    group_window_min: int,
+) -> str:
+    """Human-readable slate: groups, anchor times (ET), each game matchup + first pitch ET."""
+    pk_map: Dict[int, Dict[str, Any]] = {}
+    for g in games:
+        try:
+            pk_map[int(g["game_pk"])] = g
+        except Exception:
+            continue
+
+    lines: list[str] = []
+    lines.append(f"game_date_et={game_date_et}  group_window_min={group_window_min}")
+    lines.append(f"games_on_slate={len(games)}  n_groups={len(groups)}")
+    lines.append("")
+
+    for grp in groups:
+        gid = grp.get("group_id")
+        try:
+            anchor_et = _fmt_et(_parse_iso_z(str(grp["start_time"])))
+        except Exception:
+            anchor_et = "?"
+        lines.append(
+            f"Group {int(gid):02d}  anchor_first_pitch={anchor_et} ET  (UTC {grp.get('start_time', '')})"
         )
-    if len(groups) > max_groups:
-        print(f"    ... ({len(groups) - max_groups} more)")
+        for pk in grp.get("game_pks") or []:
+            row = pk_map.get(int(pk))
+            if not row:
+                lines.append(f"    game_pk={pk}  (not found in slate query)")
+                continue
+            away = row.get("away_abbr") or "?"
+            home = row.get("home_abbr") or "?"
+            gfp = _game_first_pitch_et(row)
+            lines.append(f"    {away} @ {home}   first_pitch={gfp} ET   game_pk={pk}")
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _emit_group_slate_report(
+    groups: List[Dict[str, Any]],
+    games: List[Dict[str, Any]],
+    *,
+    game_date_et: str,
+    group_window_min: int,
+    report_file: str | None,
+) -> None:
+    text = _format_group_slate_report(
+        groups,
+        games,
+        game_date_et=game_date_et,
+        group_window_min=group_window_min,
+    )
+    print("\n" + "═" * 72)
+    print("  SLATE / GROUP REPORT  (matchups + first pitch ET)")
+    print("═" * 72)
+    print(text, end="")
+    if report_file:
+        p = Path(report_file)
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(text, encoding="utf-8")
+            print(f"[report] wrote {p.resolve()}")
+        except Exception as e:
+            print(f"[report] failed to write {report_file!r}: {e}", file=sys.stderr)
 
 
 def _schedule_job_type(
@@ -591,6 +667,12 @@ def main() -> None:
         "Use 'none' to disable. Each must be <= 30; duplicates vs --brief-min are skipped.",
     )
     p.add_argument("--dry-run", action="store_true", help="Compute + print, but do not write pipeline_jobs")
+    p.add_argument(
+        "--group-report",
+        metavar="PATH",
+        default=None,
+        help="Write the slate/group report (matchups + first pitch ET) to this UTF-8 file; also printed to stdout.",
+    )
     args = p.parse_args()
 
     bm = int(args.brief_min)
@@ -652,7 +734,13 @@ def main() -> None:
         return
 
     groups = group_games_by_start_time(games, window_minutes=int(args.group_window_min))
-    _print_groups(groups)
+    _emit_group_slate_report(
+        groups,
+        games,
+        game_date_et=game_date_et,
+        group_window_min=int(args.group_window_min),
+        report_file=str(args.group_report) if args.group_report else None,
+    )
 
     if args.dry_run:
         print("\n[dry-run] not writing to pipeline_jobs.")
