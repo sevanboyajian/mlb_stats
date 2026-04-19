@@ -9,6 +9,9 @@ Console output is intentionally verbose so you can see exactly what it is doing.
 
 CHANGE LOG (latest first)
 ────────────────────────
+2026-04-19  schedule_next_day_globals: insert after per-group jobs for --groups-only too
+            (day_setup had been skipping the evening hook). Shared helper
+            _insert_schedule_next_day_globals_job; --groups-only help text updated.
 2026-04-16  Split scheduling: --globals-only (evening pre-seed next calendar day),
             --groups-only (morning intraday groups/jobs), default = full slate +
             schedule_next_day_globals hook. Shared helper _insert_global_daily_setup_jobs.
@@ -21,9 +24,10 @@ Design:
   Modes:
   - --globals-only --date-et TARGET: insert only group-0 daily globals for TARGET (evening
     pre-seed for the next calendar day). No games required.
-  - --groups-only: insert only per-group jobs (odds/weather/brief/ledger) for --date-et;
-    use after globals were pre-seeded (e.g. morning day_setup).
-  - default (neither flag): full day — globals + schedule_next_day_globals + per-group jobs.
+  - --groups-only: per-group jobs (odds/weather/brief/ledger) + schedule_next_day_globals for
+    --date-et; use after globals were pre-seeded (e.g. morning day_setup). Does not insert the
+    five morning globals.
+  - default (neither flag): full day — globals + per-group jobs + schedule_next_day_globals.
 
   Invocation (run_pipeline.py):
   - job_type schedule_next_day_globals → --globals-only --date-et (job_date_et + 1 day)
@@ -257,6 +261,33 @@ def _insert_global_daily_setup_jobs(con: sqlite3.Connection, *, job_date_et: str
     return int(g_ins)
 
 
+def _insert_schedule_next_day_globals_job(
+    con: sqlite3.Connection, *, job_date_et: str, groups: List[Dict[str, Any]]
+) -> tuple[int, str]:
+    """
+    One row at last group T0 + 5 min ET. Runner runs --globals-only for the *next* calendar day.
+    Needed after both full-day scheduling and --groups-only (day_setup) so the evening hook
+    is never omitted when globals were not inserted in the same run.
+    """
+    if not groups:
+        return 0, ""
+    try:
+        group_t0_by_id = {int(g["group_id"]): _parse_iso_z(str(g["start_time"])) for g in groups}
+        last_t0_utc = max(group_t0_by_id.values())
+        last_t0_et = last_t0_utc.replace(tzinfo=dt.timezone.utc).astimezone(_ET)
+        sched_next_et = last_t0_et + dt.timedelta(minutes=5)
+        sched_next_et_str = sched_next_et.strftime("%Y-%m-%d %H:%M ET")
+        n = _insert_global_job(
+            con,
+            job_date_et=job_date_et,
+            job_type="schedule_next_day_globals",
+            scheduled_time_et=sched_next_et_str,
+        )
+        return int(n), sched_next_et_str
+    except Exception:
+        return 0, ""
+
+
 def _print_jobs_for_date(con: sqlite3.Connection, game_date_et: str, limit: int = 200) -> None:
     cur = con.execute(
         """
@@ -399,7 +430,7 @@ def main() -> None:
     mode.add_argument(
         "--groups-only",
         action="store_true",
-        help="Insert only per-group jobs for --date-et; skip globals and schedule_next_day_globals.",
+        help="Insert only per-group jobs for --date-et; skip morning globals (still inserts schedule_next_day_globals).",
     )
     p.add_argument("--group-window-min", type=int, default=30, help="Start-time grouping window (minutes, default 30)")
     p.add_argument("--odds-threshold-min", type=int, default=90, help="Odds pull threshold (minutes before group start, default 90)")
@@ -472,25 +503,8 @@ def main() -> None:
         g_ins = _insert_global_daily_setup_jobs(con, job_date_et=game_date_et)
         print(f"[schedule] inserted global jobs: {g_ins}")
         _normalize_and_dedupe_globals(con, job_date_et=game_date_et)
-
-        # Insert a single "schedule_next_day_globals" job near the end of the last game group.
-        # Runner invokes --globals-only --date-et <next calendar day>.
-        try:
-            last_t0_utc = max(group_t0_by_id.values())
-            last_t0_et = last_t0_utc.replace(tzinfo=dt.timezone.utc).astimezone(_ET)
-            sched_next_et = last_t0_et + dt.timedelta(minutes=5)
-            sched_next_et_str = sched_next_et.strftime("%Y-%m-%d %H:%M ET")
-            inserted_next = _insert_global_job(
-                con,
-                job_date_et=game_date_et,
-                job_type="schedule_next_day_globals",
-                scheduled_time_et=sched_next_et_str,
-            )
-            print(f"[schedule] inserted schedule_next_day_globals: {inserted_next} at {sched_next_et_str}")
-        except Exception as exc:
-            print(f"[schedule] failed to insert schedule_next_day_globals: {exc}")
     else:
-        print("\n[schedule] groups-only: skipping global daily jobs and schedule_next_day_globals")
+        print("\n[schedule] groups-only: skipping global daily jobs (stats_pull … early_peek)")
 
     # Build odds blocks (merge adjacent groups within args.odds_block_min minutes)
     sorted_groups = sorted(groups, key=lambda g: (_parse_iso_z(str(g["start_time"])), int(g["group_id"])))
@@ -587,6 +601,18 @@ def main() -> None:
         window_end_offset_min=0,
     )
     print(f"[schedule] inserted ledger_snapshot: {inserted_ledger}")
+
+    # Pre-seed next calendar day's group-0 globals (evening). Same row whether we came from full day or --groups-only.
+    try:
+        inserted_next, sched_next_et_str = _insert_schedule_next_day_globals_job(
+            con, job_date_et=game_date_et, groups=groups
+        )
+        print(
+            f"[schedule] inserted schedule_next_day_globals: {inserted_next}"
+            + (f" at {sched_next_et_str}" if sched_next_et_str else "")
+        )
+    except Exception as exc:
+        print(f"[schedule] failed to insert schedule_next_day_globals: {exc}")
 
     total_inserted = (
         int(g_ins)

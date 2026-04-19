@@ -8,6 +8,8 @@ Polls pipeline_jobs and runs due jobs (single-threaded) in scheduled_time order.
 
 CHANGE LOG (latest first)
 ────────────────────────
+2026-04-17  Fix: due-job execution body was outside the ``for job in due`` loop, so only the
+            last due row ran per poll; indent so every pending due job runs in order.
 2026-04-17  job_type bet_ledger_sync → generate_daily_brief.py --sync-bet-ledger-only (deps: load_today).
 2026-04-16  schedule_next_day_globals → schedule_pipeline_day.py --globals-only --date-et
             (next calendar day after job_date_et); day_setup → --groups-only --date-et.
@@ -1137,117 +1139,117 @@ def run_loop(
                 retry_count_before = int(job.get("retry_count") or 0)
                 command = _build_command(job).strip()
 
-            start_iso = _utc_now_iso_z()
-            print(f"\n[job] id={job_id} type={job_type} scheduled_time={scheduled_time}")
-            print(f"[job] start={start_iso}")
-            print(f"[job] command={command!r}")
-
-            ok, dep_msg = _deps_complete(con, job)
-            if not ok:
-                print(f"[job] SKIP — {dep_msg}")
-                continue
-
-            if ghost:
-                print("[job] GHOST MODE — would set status=running, execute command, then set complete/failed")
-                continue
-
-            # Claim job: single UPDATE … AND status='pending' (SQLite-atomic; avoids duplicate execution).
-            if not _claim_pending_job(con, cols, job_id=job_id, started_at=start_iso):
-                print(f"[job] SKIP — job_id={job_id} not pending (already claimed or state changed)")
-                continue
-
-            job_date_et = str(job.get("job_date_et") or "")
-
-            if not command:
+                start_iso = _utc_now_iso_z()
+                print(f"\n[job] id={job_id} type={job_type} scheduled_time={scheduled_time}")
+                print(f"[job] start={start_iso}")
+                print(f"[job] command={command!r}")
+    
+                ok, dep_msg = _deps_complete(con, job)
+                if not ok:
+                    print(f"[job] SKIP — {dep_msg}")
+                    continue
+    
+                if ghost:
+                    print("[job] GHOST MODE — would set status=running, execute command, then set complete/failed")
+                    continue
+    
+                # Claim job: single UPDATE … AND status='pending' (SQLite-atomic; avoids duplicate execution).
+                if not _claim_pending_job(con, cols, job_id=job_id, started_at=start_iso):
+                    print(f"[job] SKIP — job_id={job_id} not pending (already claimed or state changed)")
+                    continue
+    
+                job_date_et = str(job.get("job_date_et") or "")
+    
+                if not command:
+                    end_iso = _utc_now_iso_z()
+                    msg = f"no command mapping for job_type={job_type!r}"
+                    print(f"[job] end={end_iso} failure (no command) — {msg}")
+                    _handle_job_failure(
+                        con,
+                        cols,
+                        job_id=job_id,
+                        job_type=job_type,
+                        job_date_et=job_date_et,
+                        retry_count_before=retry_count_before,
+                        error_message=msg,
+                        completed_ts=end_iso,
+                        run_cols=run_cols,
+                        started_iso=start_iso,
+                    )
+                    continue
+    
+                try:
+                    rc, out, err = _run_command(command)
+                except Exception as exc:
+                    end_iso = _utc_now_iso_z()
+                    tb = traceback.format_exc()
+                    msg = f"exception: {exc!s}\n{tb}"
+                    if len(msg) > 8000:
+                        msg = msg[-8000:]
+                    print(f"[job] end={end_iso} failure exception={exc!r}")
+                    _handle_job_failure(
+                        con,
+                        cols,
+                        job_id=job_id,
+                        job_type=job_type,
+                        job_date_et=job_date_et,
+                        retry_count_before=retry_count_before,
+                        error_message=msg,
+                        completed_ts=end_iso,
+                        run_cols=run_cols,
+                        started_iso=start_iso,
+                    )
+                    continue
+    
                 end_iso = _utc_now_iso_z()
-                msg = f"no command mapping for job_type={job_type!r}"
-                print(f"[job] end={end_iso} failure (no command) — {msg}")
-                _handle_job_failure(
-                    con,
-                    cols,
-                    job_id=job_id,
-                    job_type=job_type,
-                    job_date_et=job_date_et,
-                    retry_count_before=retry_count_before,
-                    error_message=msg,
-                    completed_ts=end_iso,
-                    run_cols=run_cols,
-                    started_iso=start_iso,
-                )
-                continue
-
-            try:
-                rc, out, err = _run_command(command)
-            except Exception as exc:
-                end_iso = _utc_now_iso_z()
-                tb = traceback.format_exc()
-                msg = f"exception: {exc!s}\n{tb}"
-                if len(msg) > 8000:
-                    msg = msg[-8000:]
-                print(f"[job] end={end_iso} failure exception={exc!r}")
-                _handle_job_failure(
-                    con,
-                    cols,
-                    job_id=job_id,
-                    job_type=job_type,
-                    job_date_et=job_date_et,
-                    retry_count_before=retry_count_before,
-                    error_message=msg,
-                    completed_ts=end_iso,
-                    run_cols=run_cols,
-                    started_iso=start_iso,
-                )
-                continue
-
-            end_iso = _utc_now_iso_z()
-
-            if rc == 0:
-                print(f"[job] end={end_iso} status=complete rc=0")
-                _insert_pipeline_job_run_full(
-                    con,
-                    run_cols,
-                    job_id=job_id,
-                    job_type=job_type,
-                    job_date_et=job_date_et,
-                    started_at_utc=start_iso,
-                    finished_at_utc=end_iso,
-                    run_status="complete",
-                    error_message="",
-                )
-                _sync_pipeline_jobs_from_run(
-                    con,
-                    cols,
-                    job_id=job_id,
-                    job_status="complete",
-                    started_at_utc=start_iso,
-                    finished_at_utc=end_iso,
-                    job_error_message="",
-                    retry_count_value=0 if "retry_count" in cols else None,
-                )
-            else:
-                # Capture stderr (preferred) for error_message; fall back to stdout.
-                raw_err = (err or "").strip()
-                raw_out = (out or "").strip()
-                tail = raw_err if raw_err else raw_out
-                if len(tail) > 4000:
-                    tail = tail[-4000:]
-                msg = f"rc={rc} {tail}".strip() if tail else f"rc={rc}"
-                print(f"[job] end={end_iso} failure rc={rc}")
-                if tail:
-                    print(f"[job] error_tail={tail}")
-                _handle_job_failure(
-                    con,
-                    cols,
-                    job_id=job_id,
-                    job_type=job_type,
-                    job_date_et=job_date_et,
-                    retry_count_before=retry_count_before,
-                    error_message=msg,
-                    completed_ts=end_iso,
-                    run_cols=run_cols,
-                    started_iso=start_iso,
-                )
-                # Do NOT stop the pipeline on failure — continue to next job.
+    
+                if rc == 0:
+                    print(f"[job] end={end_iso} status=complete rc=0")
+                    _insert_pipeline_job_run_full(
+                        con,
+                        run_cols,
+                        job_id=job_id,
+                        job_type=job_type,
+                        job_date_et=job_date_et,
+                        started_at_utc=start_iso,
+                        finished_at_utc=end_iso,
+                        run_status="complete",
+                        error_message="",
+                    )
+                    _sync_pipeline_jobs_from_run(
+                        con,
+                        cols,
+                        job_id=job_id,
+                        job_status="complete",
+                        started_at_utc=start_iso,
+                        finished_at_utc=end_iso,
+                        job_error_message="",
+                        retry_count_value=0 if "retry_count" in cols else None,
+                    )
+                else:
+                    # Capture stderr (preferred) for error_message; fall back to stdout.
+                    raw_err = (err or "").strip()
+                    raw_out = (out or "").strip()
+                    tail = raw_err if raw_err else raw_out
+                    if len(tail) > 4000:
+                        tail = tail[-4000:]
+                    msg = f"rc={rc} {tail}".strip() if tail else f"rc={rc}"
+                    print(f"[job] end={end_iso} failure rc={rc}")
+                    if tail:
+                        print(f"[job] error_tail={tail}")
+                    _handle_job_failure(
+                        con,
+                        cols,
+                        job_id=job_id,
+                        job_type=job_type,
+                        job_date_et=job_date_et,
+                        retry_count_before=retry_count_before,
+                        error_message=msg,
+                        completed_ts=end_iso,
+                        run_cols=run_cols,
+                        started_iso=start_iso,
+                    )
+                    # Do NOT stop the pipeline on failure — continue to next job.
 
             if once:
                 print(f"\n[run_pipeline] {now_iso} processed due jobs; exiting (--once).")
