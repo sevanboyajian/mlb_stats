@@ -36,7 +36,9 @@ Design:
 
   Modes:
   - --globals-only --date-et TARGET: insert only group-0 daily globals for TARGET (evening
-    pre-seed for the next calendar day). No games required.
+    pre-seed for the next calendar day). No games required. Safe to re-run on a slate date
+    that already has per-group jobs: uses INSERT OR IGNORE (adds e.g. missing ``load_weather``
+    without deleting odds/weather/brief rows).
   - --groups-only: per-group jobs (odds/weather/brief/ledger) + schedule_next_day_globals for
     --date-et; use after globals were pre-seeded (e.g. morning day_setup). Does not insert the
     morning global jobs (stats_pull … early_peek).

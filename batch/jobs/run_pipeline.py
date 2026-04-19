@@ -8,6 +8,8 @@ Polls pipeline_jobs and runs due jobs (single-threaded) in scheduled_time order.
 
 CHANGE LOG (latest first)
 ────────────────────────
+2026-04-19  Failure retries: ``_MAX_FAILURE_RETRIES`` raised from 2 to 5 — after 5 failed
+            attempts the job is marked ``failed`` and the runner moves on (terminal alert).
 2026-04-19  Fix: do not append ``# group_id=…`` to subprocess command strings. On Windows
             ``cmd.exe`` (``shell=True``) ``#`` is not a comment, so Python received ``#`` as an
             argv token (e.g. ``load_odds --markets game # …`` → invalid ``--markets`` choice).
@@ -37,7 +39,7 @@ CHANGE LOG (latest first)
 2026-04-16  pipeline_job_runs: one row per execution; duration_seconds (REAL) set on finish
             from finished_at_utc - started_at_utc (existing run rows never backfilled).
 2026-04-16  Failure retries: retry_count column (default 0); on failure re-queue pending
-            up to 2 retries (retry_count < 2 before increment); next attempt next poll loop.
+            up to N retries (``retry_count < _MAX_FAILURE_RETRIES``); next attempt next poll loop.
 2026-04-16  Hardened state: commit running+started_at before exec; try/except around
             subprocess; terminal states set completed_at (or ended_at fallback);
             stale running jobs (>N min) reset to pending for retry with retries++.
@@ -85,8 +87,8 @@ if str(_REPO_ROOT) not in sys.path:
 
 from core.db.connection import connect as db_connect, get_db_path
 
-# Max automatic re-runs after a failed attempt (retry_count 0→1→2 then terminal fail).
-_MAX_FAILURE_RETRIES = 2
+# Max automatic re-runs after a failed attempt (retry_count 0…N−1 re-queue; at N terminal fail).
+_MAX_FAILURE_RETRIES = 5
 
 
 def _utc_now_iso_z() -> str:
@@ -977,6 +979,7 @@ def _handle_job_failure(
     """
     On failure: record run (source of truth), then sync pipeline_jobs.
     If retry_count_before < _MAX_FAILURE_RETRIES, re-queue job as pending (next poll loop).
+    Otherwise set status failed and alert (runner continues with other jobs).
     """
     _insert_pipeline_job_run_full(
         con,
@@ -1005,7 +1008,7 @@ def _handle_job_failure(
             retry_count_value=next_count,
         )
         print(
-            f"[job] RETRY — job_id={job_id} retry_count={next_count}/{_MAX_FAILURE_RETRIES} "
+            f"[job] RETRY — job_id={job_id} attempt={next_count}/{_MAX_FAILURE_RETRIES} "
             f"(will run after next poll loop)"
         )
         return
