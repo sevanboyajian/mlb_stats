@@ -9,6 +9,12 @@ Console output is intentionally verbose so you can see exactly what it is doing.
 
 CHANGE LOG (latest first)
 ────────────────────────
+2026-04-19  Intraday ``weather`` jobs use the same ``odds_blocks`` / ``rep_groups`` as
+            ``odds_pull`` / ``odds_check`` (one refresh per merged block, not per raw group);
+            stale ``weather`` rows for non-representative groups are deleted like ``odds_pull``.
+2026-04-19  Global morning job ``load_weather`` (06:07 ET): runs ``load_weather.py`` after
+            ``load_today`` so wind direction + probable starters exist before ``day_setup``
+            and prior/morning briefs.
 2026-04-19  group_brief: default --brief-min 30 / --ledger-min 28 (inside 30m pregame bet-ledger window);
             --brief-extra-minutes default 15,5 for extra primary briefs per group; validate brief_min > ledger_min.
 2026-04-19  pipeline_jobs windows: odds_pull / odds_check / weather now get window_start_et &
@@ -23,7 +29,8 @@ CHANGE LOG (latest first)
 
 Design:
   - game grouping window: 30 minutes (group sessions)
-  - odds pull efficiency threshold: 90 minutes (one pull per group at T0-90m)
+  - odds pull efficiency threshold: 90 minutes (one pull per merged odds block at T0-90m)
+  - weather refresh: same merged blocks as odds (one ``load_weather.py`` per block at T0−N)
   - bet-ledger window: [T0−30m, T0); group_brief default T0−30m (ledger T0−28m); optional extra briefs
     at T0−15m / T0−5m for overlapping slates (see --brief-extra-minutes).
 
@@ -32,7 +39,7 @@ Design:
     pre-seed for the next calendar day). No games required.
   - --groups-only: per-group jobs (odds/weather/brief/ledger) + schedule_next_day_globals for
     --date-et; use after globals were pre-seeded (e.g. morning day_setup). Does not insert the
-    five morning globals.
+    morning global jobs (stats_pull … early_peek).
   - default (neither flag): full day — globals + per-group jobs + schedule_next_day_globals.
 
   Invocation (run_pipeline.py):
@@ -248,7 +255,7 @@ def _normalize_and_dedupe_globals(con: sqlite3.Connection, *, job_date_et: str) 
             WHERE game_group_id IS NULL
               AND scheduled_time_et IS NOT NULL
               AND substr(scheduled_time_et, 1, 10) = ?
-              AND job_type IN ('stats_pull','load_today','day_setup','early_peek','prior_report')
+              AND job_type IN ('stats_pull','load_today','load_weather','day_setup','early_peek','prior_report')
             """,
             (job_date_et,),
         )
@@ -291,6 +298,7 @@ def _insert_global_daily_setup_jobs(con: sqlite3.Connection, *, job_date_et: str
     g_ins = 0
     g_ins += _insert_global_job(con, job_date_et=job_date_et, job_type="stats_pull", scheduled_time_et=f"{job_date_et} 06:00 ET")
     g_ins += _insert_global_job(con, job_date_et=job_date_et, job_type="load_today", scheduled_time_et=f"{job_date_et} 06:05 ET")
+    g_ins += _insert_global_job(con, job_date_et=job_date_et, job_type="load_weather", scheduled_time_et=f"{job_date_et} 06:07 ET")
     g_ins += _insert_global_job(con, job_date_et=job_date_et, job_type="day_setup", scheduled_time_et=f"{job_date_et} 06:10 ET")
     g_ins += _insert_global_job(con, job_date_et=job_date_et, job_type="prior_report", scheduled_time_et=f"{job_date_et} 06:15 ET")
     g_ins += _insert_global_job(con, job_date_et=job_date_et, job_type="early_peek", scheduled_time_et=f"{job_date_et} 06:20 ET")
@@ -694,7 +702,7 @@ def main() -> None:
         gids = [int(x["group_id"]) for x in b]
         print(f"  - rep_group_id={int(rep['group_id'])} covers groups={gids}")
 
-    # Cleanup: remove legacy odds_pull rows for non-representative groups on this date.
+    # Cleanup: remove legacy odds_pull / weather rows for non-representative groups on this date.
     try:
         rep_ids = {int(g["group_id"]) for g in rep_groups}
         rep_ids_sql = ",".join(str(x) for x in sorted(rep_ids)) or "-1"
@@ -702,6 +710,17 @@ def main() -> None:
             f"""
             DELETE FROM pipeline_jobs
             WHERE job_type = 'odds_pull'
+              AND job_date_et = ?
+              AND game_group_id IS NOT NULL
+              AND game_group_id != 0
+              AND game_group_id NOT IN ({rep_ids_sql})
+            """,
+            (game_date_et,),
+        )
+        con.execute(
+            f"""
+            DELETE FROM pipeline_jobs
+            WHERE job_type = 'weather'
               AND job_date_et = ?
               AND game_group_id IS NOT NULL
               AND game_group_id != 0
@@ -741,14 +760,14 @@ def main() -> None:
 
     inserted_weather = _schedule_job_type(
         con,
-        groups,
+        rep_groups,
         job_type="weather",
         offset_minutes=w_weather,
         status="pending",
         window_start_offset_min=w_weather + 15,
         window_end_offset_min=max(0, w_weather - 15),
     )
-    print(f"[schedule] inserted weather: {inserted_weather}")
+    print(f"[schedule] inserted weather (by block): {inserted_weather}")
 
     b_ws, b_we = _group_brief_window_offsets(int(args.brief_min), int(args.ledger_min))
     inserted_brief = _schedule_job_type(

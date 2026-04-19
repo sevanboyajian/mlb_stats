@@ -8,6 +8,9 @@ Polls pipeline_jobs and runs due jobs (single-threaded) in scheduled_time order.
 
 CHANGE LOG (latest first)
 ────────────────────────
+2026-04-19  job_type ``load_weather`` → ``load_weather.py --date`` (morning global: wind +
+            probable starters after ``load_today``). Deps: ``day_setup`` / ``prior_report`` /
+            ``early_peek`` / ``group_brief`` wait on ``load_weather`` where applicable.
 2026-04-19  --sleep-until-due: when idle (or all due rows skipped on deps), sleep until the
             next pending ``scheduled_time_et`` instead of fixed polling; optional ``--job-date-et``
             scopes next-wake MIN query; ``--exit-when-no-pending`` exits when nothing pending.
@@ -517,6 +520,7 @@ def _build_command(job: dict) -> str:
     pipeline_jobs definitions are job_type-driven (no 'command' column).
 
     Scheduling jobs (see batch/jobs/schedule_pipeline_day.py):
+    - load_weather: morning global — Open-Meteo wind + MLB probable starters (after load_today).
     - day_setup: morning pass — only per-group jobs for this slate date (--groups-only).
     - schedule_next_day_globals: evening pass — only next day's group-0 globals
       (--globals-only --date-et job_date_et + 1 calendar day).
@@ -533,6 +537,11 @@ def _build_command(job: dict) -> str:
     mapping: dict[str, str] = {
         "stats_pull": "python batch/ingestion/load_mlb_stats.py",
         "load_today": f"python batch/ingestion/load_today.py --date {job_date}" if job_date else "python batch/ingestion/load_today.py",
+        "load_weather": (
+            f"python batch/ingestion/load_weather.py --date {job_date}"
+            if job_date
+            else "python batch/ingestion/load_weather.py"
+        ),
         "day_setup": (
             f"python batch/jobs/schedule_pipeline_day.py --groups-only --date-et {job_date}"
             if job_date
@@ -574,11 +583,15 @@ def _dependency_rules() -> dict[str, list[str]]:
     """
     return {
         # load_today must complete before any game-based jobs
+        "load_weather": ["load_today"],
+        "day_setup": ["load_weather"],
         "odds_pull": ["load_today"],
         "odds_check": ["load_today", "odds_pull"],
         "weather": ["load_today"],
-        # odds pulls must complete before brief generation
-        "group_brief": ["load_today", "odds_pull"],
+        # odds pulls must complete before brief generation; morning load_weather fills wind + starters
+        "prior_report": ["load_weather"],
+        "early_peek": ["load_weather"],
+        "group_brief": ["load_today", "odds_pull", "load_weather"],
         "bet_ledger_sync": ["load_today"],
         "ledger_snapshot": ["load_today", "odds_pull"],
     }
