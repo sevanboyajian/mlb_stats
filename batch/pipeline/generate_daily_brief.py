@@ -6,6 +6,9 @@ Reads from mlb_stats.db and outputs the formatted betting brief.
 
 CHANGE LOG (latest first)
 ──────────────────────────
+2026-04-19  Default brief filenames: ``brief-{slate_date}_{ET_run_stamp}_ET[ _prior].txt`` (Windows-safe);
+            ``brief_log.output_file`` stores that path; legacy ``{date}_{session}.txt`` names may be archived.
+2026-04-19  ``--as-of-time`` accepts full ``YYYY-MM-DD HH:MM`` (ET) or time-only ``HH:MM`` with ``--date``.
 2026-04-19  Hybrid session CLI: ``--as-of-time HH:MM`` (ET) or full ``--as-of``;
             non-``prior`` sessions resolve from ``SESSION_WINDOWS`` (``SESSION_PULL_WINDOW``
             unchanged). ``--session`` ignored when a clock is supplied unless ``prior``.
@@ -136,7 +139,7 @@ DOCX OUTPUT (DEFAULT)
 --------------------
 This script attempts to write a formatted Word (.docx) brief alongside the .txt
 file by default (no flag required). Requires: pip install python-docx
-File saved under outputs/briefs/YYYY-MM-DD_SESSION.docx.
+File saved under outputs/briefs/ (default name: brief-SLATE-DATE_RUN-STAMP_ET.docx).
 
 SESSION FILTERING MODEL
 -----------------------
@@ -414,6 +417,29 @@ PERSIST_WRITES = True
 # ── Output directory for saved briefs ──────────────────────────────────────
 # Standard location across the repo: <repo root>/outputs/briefs
 OUTPUT_DIR = Path(_REPO_ROOT) / "outputs" / "briefs"
+
+
+def _default_brief_file_stem(
+    game_date: str,
+    now_et: datetime.datetime,
+    *,
+    is_prior: bool,
+) -> str:
+    """
+    Windows-safe default filename stem (no extension).
+    Pattern: brief-{slate_date}_{run_yyyymmdd_hhmmss}_ET[_prior]
+    - slate_date: YYYY-MM-DD the brief is for (``today`` for forward briefs, ``yesterday`` for prior report).
+    - run_*: generation instant in America/New_York (unique across intraday runs).
+    Stored in brief_log.output_file as the full path to the .txt file.
+    """
+    wall = now_et.astimezone(_ET) if now_et.tzinfo else now_et.replace(tzinfo=_ET)
+    wall = wall.replace(microsecond=0)
+    run_stamp = wall.strftime("%Y%m%d_%H%M%S")
+    base = f"brief-{game_date}_{run_stamp}_ET"
+    if is_prior:
+        return f"{base}_prior"
+    return base
+
 
 # ── Signal thresholds ──────────────────────────────────────────────────────
 WIND_OUT_MIN_MPH   = 10     # H3b standalone OVER threshold (unchanged)
@@ -4515,9 +4541,18 @@ def _parse_as_of_arg(value: str) -> datetime.datetime:
     return naive.replace(tzinfo=_ET)
 
 
-def _parse_as_of_time_arg(value: str) -> datetime.time:
-    """Parse HH:MM (24h) ET, combined with --date for hybrid session resolution."""
+def _parse_as_of_time_arg(value: str) -> datetime.datetime | datetime.time:
+    """
+    Parse --as-of-time as either:
+    - full ET instant: YYYY-MM-DD HH:MM (same wall form as --as-of), or
+    - time-only HH:MM[:SS] combined with --date (or today).
+    """
     s = value.strip()
+    try:
+        naive = datetime.datetime.strptime(s, "%Y-%m-%d %H:%M")
+        return naive.replace(tzinfo=_ET)
+    except ValueError:
+        pass
     for fmt in ("%H:%M", "%H:%M:%S"):
         try:
             tt = datetime.datetime.strptime(s, fmt).time()
@@ -4525,7 +4560,7 @@ def _parse_as_of_time_arg(value: str) -> datetime.time:
         except ValueError:
             continue
     raise argparse.ArgumentTypeError(
-        "expected --as-of-time as HH:MM (24h, America/New_York, combined with --date)"
+        "expected --as-of-time as HH:MM or full 'YYYY-MM-DD HH:MM' (America/New_York)"
     )
 
 
@@ -4601,7 +4636,7 @@ def parse_args():
     )
     p.add_argument(
         "--output", default=None,
-        help="Write brief to this file path (appends). Default: outputs/briefs/YYYY-MM-DD_SESSION.txt",
+        help="Write brief to this file path (appends). Default: outputs/briefs/brief-SLATE-DATE_RUN-STAMP_ET.txt",
     )
     p.add_argument(
         "--no-file", action="store_true",
@@ -4639,8 +4674,8 @@ def parse_args():
         default=None,
         metavar="HH:MM",
         type=_parse_as_of_time_arg,
-        help="ET time-of-day (24h HH:MM), combined with --date (or today). Required for non-prior "
-        "sessions unless --as-of is set. Session is derived from SESSION_WINDOWS.",
+        help="ET clock: HH:MM with --date, or full YYYY-MM-DD HH:MM (same as --as-of). "
+        "Required for non-prior sessions unless --as-of is set. Session from SESSION_WINDOWS.",
     )
     return p.parse_args()
 
@@ -4667,8 +4702,12 @@ def main():
     if args.as_of_dt is not None:
         now = _now_et(args.as_of_dt)
     elif getattr(args, "as_of_time", None) is not None:
-        d_str = args.date or datetime.datetime.now(tz=_ET).date().isoformat()
-        now = _et_datetime_from_date_and_time(d_str, args.as_of_time)
+        tot = args.as_of_time
+        if isinstance(tot, datetime.datetime):
+            now = _now_et(tot)
+        else:
+            d_str = args.date or datetime.datetime.now(tz=_ET).date().isoformat()
+            now = _et_datetime_from_date_and_time(d_str, tot)
     else:
         now = _now_et(None)
 
@@ -4758,19 +4797,24 @@ def main():
         check_prereqs(conn, today, session)
 
     # ── Duplicate guard ──────────────────────────────────────────────────
+    # brief_log.game_date matches the slate the brief is for: forward sessions use
+    # ``today``; ``prior`` uses the previous calendar day (same key as log_brief()).
+    key_date = (
+        (datetime.date.fromisoformat(today) - datetime.timedelta(days=1)).isoformat()
+        if session == "prior"
+        else today
+    )
     ensure_brief_log(conn)
     if not args.dry_run and not args.force:
-        if already_ran(conn, today, session):
-            print(f"\n  ⚠  A {session} brief for {today} already exists in brief_log.")
+        if already_ran(conn, key_date, session):
+            print(f"\n  ⚠  A {session} brief for {key_date} already exists in brief_log.")
             print(f"     Use --force to regenerate, or --dry-run to preview.\n")
             sys.exit(0)
 
     # ── Prior day report — uses yesterday, not today ─────────────────────
     if session == "prior":
-        yesterday = (datetime.date.fromisoformat(today)
-                     - datetime.timedelta(days=1)).isoformat()
         brief_text = build_prior_day_report(
-            conn, yesterday, args.verbose, now=now, debug_wind=args.debug_wind,
+            conn, key_date, args.verbose, now=now, debug_wind=args.debug_wind,
         )
         print(brief_text)
 
@@ -4778,7 +4822,8 @@ def main():
         output_file = None
         if not args.no_file and not args.dry_run:
             OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-            output_file = str(OUTPUT_DIR / f"{yesterday}_prior.txt")
+            stem = _default_brief_file_stem(key_date, now, is_prior=True)
+            output_file = str(OUTPUT_DIR / f"{stem}.txt")
             with open(output_file, "w", encoding="utf-8") as fh:
                 fh.write(brief_text)
             print(f"\n  ✓ Prior day report saved to: {output_file}")
@@ -4791,8 +4836,8 @@ def main():
             else:
                 try:
                     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-                    docx_path = str(OUTPUT_DIR / f"{yesterday}_prior.docx")
-                    doc = build_docx_from_text("prior", yesterday, brief_text)
+                    docx_path = str(OUTPUT_DIR / f"{stem}.docx")
+                    doc = build_docx_from_text("prior", key_date, brief_text)
                     doc.save(docx_path)
                     print(f"  ✓ Word brief saved to: {docx_path}")
                 except Exception as e:
@@ -4801,7 +4846,7 @@ def main():
 
         # ── Log ───────────────────────────────────────────────────────────
         if not args.dry_run:
-            log_brief(conn, yesterday, "prior", 0, 0, output_file, now=now)
+            log_brief(conn, key_date, "prior", 0, 0, output_file, now=now)
         conn.close()
         print(f"\n  Done.\n")
         return
@@ -4971,12 +5016,13 @@ def main():
     print(brief_text)
 
     output_file = None
+    default_stem = _default_brief_file_stem(today, now, is_prior=False)
     if not args.no_file and not args.dry_run:
         if args.output:
             output_file = args.output
         else:
             OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-            output_file = str(OUTPUT_DIR / f"{today}_{session}.txt")
+            output_file = str(OUTPUT_DIR / f"{default_stem}.txt")
 
         with open(output_file, "w", encoding="utf-8") as fh:
             fh.write(brief_text)
@@ -4990,7 +5036,11 @@ def main():
         else:
             try:
                 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-                docx_path = str(OUTPUT_DIR / f"{today}_{session}.docx")
+                docx_path = (
+                    str(Path(output_file).with_suffix(".docx"))
+                    if output_file
+                    else str(OUTPUT_DIR / f"{default_stem}.docx")
+                )
                 doc = build_docx_from_text(session, today, brief_text)
                 doc.save(docx_path)
                 print(f"  ✓ Word brief saved to: {docx_path}")
