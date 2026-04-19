@@ -8,6 +8,9 @@ Polls pipeline_jobs and runs due jobs (single-threaded) in scheduled_time order.
 
 CHANGE LOG (latest first)
 ────────────────────────
+2026-04-19  Stale-running reset now uses ``_handle_job_failure`` (increments ``retry_count``,
+            respects ``_MAX_FAILURE_RETRIES``). Previously reset-to-pending left ``retry_count``
+            unchanged, so stuck ``running`` jobs could retry without bound.
 2026-04-19  Failure retries: ``_MAX_FAILURE_RETRIES`` raised from 2 to 5 — after 5 failed
             attempts the job is marked ``failed`` and the runner moves on (terminal alert).
 2026-04-19  Fix: do not append ``# group_id=…`` to subprocess command strings. On Windows
@@ -1038,12 +1041,15 @@ def _handle_job_failure(
 def _reset_stale_running_jobs(
     con: sqlite3.Connection,
     cols: set[str],
+    run_cols: set[str],
     *,
     stale_minutes: int,
 ) -> int:
     """
-    Jobs stuck in 'running' longer than stale_minutes are reset to 'pending'
-    so they can be retried. Increments retries when column exists.
+    Jobs stuck in 'running' longer than stale_minutes are treated like a failed run:
+    ``_handle_job_failure`` records a run row, increments ``retry_count``, and either
+    re-queues as ``pending`` (under cap) or marks ``failed`` (terminal). Without this,
+    reset-to-pending left ``retry_count`` unchanged and the same job could retry without bound.
     """
     if stale_minutes <= 0:
         return 0
@@ -1076,33 +1082,33 @@ def _reset_stale_running_jobs(
         if t is None or t >= cutoff:
             continue
 
-        note = f"stale-running reset after {stale_minutes}m (was running since {st_raw!r})"
         try:
-            set_parts = ["status = 'pending'"]
-            params: list[object] = []
-            if "error_message" in cols:
-                set_parts.append("error_message = ?")
-                params.append(note)
-            if "started_at" in cols:
-                set_parts.append("started_at = NULL")
-            if "completed_at" in cols:
-                set_parts.append("completed_at = NULL")
-            elif "ended_at" in cols:
-                set_parts.append("ended_at = NULL")
-            elif "end_time" in cols:
-                set_parts.append("end_time = NULL")
-
-            if "retries" in cols:
-                set_parts.append("retries = COALESCE(retries, 0) + 1")
-
-            params.append(jid)
-            con.execute(
-                f"UPDATE pipeline_jobs SET {', '.join(set_parts)} WHERE job_id = ?",
-                params,
+            jcur = con.execute("SELECT * FROM pipeline_jobs WHERE job_id = ?", (jid,))
+            job_row = jcur.fetchone()
+            if not job_row:
+                continue
+            job = dict(job_row)
+            retry_before = int(job.get("retry_count") or 0)
+            started_iso = str(job.get("started_at") or job.get("start_time") or "").strip() or _utc_now_iso_z()
+            finished_iso = _utc_now_iso_z()
+            note = (
+                f"stale-running after {stale_minutes}m in status=running "
+                f"(started_at={st_raw!r}; runner reset — counts as failed attempt)"
             )
-            con.commit()
+            print(f"[run_pipeline] STALE running job_id={jid} — applying retry cap via failure handler")
+            _handle_job_failure(
+                con,
+                cols,
+                job_id=jid,
+                job_type=str(job.get("job_type") or ""),
+                job_date_et=str(job.get("job_date_et") or ""),
+                retry_count_before=retry_before,
+                error_message=note,
+                completed_ts=finished_iso,
+                run_cols=run_cols,
+                started_iso=started_iso,
+            )
             reset_n += 1
-            print(f"[run_pipeline] STALE running job_id={jid} reset to pending — {note}")
         except Exception:
             try:
                 con.rollback()
@@ -1303,7 +1309,7 @@ def run_loop(
 
         while True:
             _mark_running_timed_out(con, cols, run_cols, timeout_minutes=timeout_minutes)
-            _reset_stale_running_jobs(con, cols, stale_minutes=stale_minutes)
+            _reset_stale_running_jobs(con, cols, run_cols, stale_minutes=stale_minutes)
 
             now_iso = _utc_now_iso_z()
             due = _fetch_due_jobs(con, now_iso, cols)
