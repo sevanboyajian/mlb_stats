@@ -567,6 +567,22 @@ def _table_columns(con: sqlite3.Connection, table: str) -> set[str]:
     except Exception:
         return set()
 
+def _gdb_as_of_suffix(job: dict) -> str:
+    """
+    Append --as-of for generate_daily_brief hybrid session resolution (scheduled ET instant).
+    Falls back to job_date_et at noon if scheduled_time_et is missing.
+    """
+    ste = str(job.get("scheduled_time_et") or "").strip()
+    jd = str(job.get("job_date_et") or "").strip()
+    if ste.endswith(" ET"):
+        base = ste[:-2].strip()
+        if len(base) >= 10:
+            return f' --as-of "{base}"'
+    if jd:
+        return f' --as-of "{jd} 12:00"'
+    return ""
+
+
 def _build_command(job: dict) -> str:
     """
     Translate a pipeline_jobs row into an executable command string.
@@ -641,7 +657,12 @@ def _build_command(job: dict) -> str:
 
     # Never append ``# …`` for human context: Windows cmd.exe (shell=True) does not treat
     # ``#`` as a comment, so the rest of the line becomes argv and breaks argparse.
-    return mapping.get(job_type, "")
+    base = mapping.get(job_type, "")
+    if not base:
+        return ""
+    if job_type in ("prior_report", "early_peek", "group_brief", "bet_ledger_sync"):
+        return base + _gdb_as_of_suffix(job)
+    return base
 
 
 def _job_group_context(job: dict) -> str:

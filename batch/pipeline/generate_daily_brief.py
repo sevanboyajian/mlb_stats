@@ -6,6 +6,9 @@ Reads from mlb_stats.db and outputs the formatted betting brief.
 
 CHANGE LOG (latest first)
 ──────────────────────────
+2026-04-19  Hybrid session CLI: ``--as-of-time HH:MM`` (ET) or full ``--as-of``;
+            non-``prior`` sessions resolve from ``SESSION_WINDOWS`` (``SESSION_PULL_WINDOW``
+            unchanged). ``--session`` ignored when a clock is supplied unless ``prior``.
 2026-04-19  Fix: closing brief now skips games already past ``game_start_utc``.
             Active signal display and CLV confirmation only shown for unplayed games.
 2026-04-19  Fix: removed H3b cross-reference from MV-B reason string.
@@ -550,6 +553,41 @@ SESSION_PULL_WINDOW = {
     "late":    ("20:00", "23:59"),   # after ~8 PM late-games pull
 }
 
+# ET wall-clock → session for hybrid mode (--as-of-time / full --as-of).
+# Half-open minute ranges [start, end) on a 0–1440 minute-of-day axis. Does not alter
+# SESSION_PULL_WINDOW (used by --check-prereqs). Boundaries align with simulate_day /
+# operator schedule for early/afternoon/primary/closing/late.
+_SESSION_WINDOW_RANGES_ET: tuple[tuple[int, int, str], ...] = (
+    (0, 570, "morning"),       # 00:00–09:30
+    (570, 735, "early"),       # 09:30–12:15
+    (735, 945, "afternoon"),   # 12:15–15:45
+    (945, 1125, "primary"),    # 15:45–18:45 (incl. 17:30 primary pull window)
+    (1125, 1215, "closing"),   # 18:45–20:15
+    (1215, 1440, "late"),      # 20:15–24:00
+)
+SESSION_WINDOWS = tuple(
+    (f"{a // 60:02d}:{a % 60:02d}", f"{b // 60:02d}:{b % 60:02d}", s)
+    for a, b, s in _SESSION_WINDOW_RANGES_ET
+)
+
+
+def _minute_of_day_et(dt: datetime.datetime) -> int:
+    """Minute index 0..1439 in America/New_York."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=_ET)
+    else:
+        dt = dt.astimezone(_ET)
+    return dt.hour * 60 + dt.minute
+
+
+def _session_from_et_datetime(dt: datetime.datetime) -> str:
+    """Map an ET instant to a forward session using SESSION_WINDOWS ranges."""
+    m = _minute_of_day_et(dt)
+    for lo, hi, sess in _SESSION_WINDOW_RANGES_ET:
+        if lo <= m < hi:
+            return sess
+    return "late"
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Utility helpers
@@ -709,8 +747,11 @@ def check_prereqs(conn: sqlite3.Connection, game_date: str, session: str) -> Non
     """
     pull_map = {
         "morning": "pregame",
+        "early": "pregame",
+        "afternoon": "pregame",
         "primary": "pregame",
         "closing": "pregame",
+        "late": "pregame",
     }
     pull_type = pull_map[session]
 
@@ -4474,6 +4515,25 @@ def _parse_as_of_arg(value: str) -> datetime.datetime:
     return naive.replace(tzinfo=_ET)
 
 
+def _parse_as_of_time_arg(value: str) -> datetime.time:
+    """Parse HH:MM (24h) ET, combined with --date for hybrid session resolution."""
+    s = value.strip()
+    for fmt in ("%H:%M", "%H:%M:%S"):
+        try:
+            tt = datetime.datetime.strptime(s, fmt).time()
+            return datetime.time(tt.hour, tt.minute, 0, 0)
+        except ValueError:
+            continue
+    raise argparse.ArgumentTypeError(
+        "expected --as-of-time as HH:MM (24h, America/New_York, combined with --date)"
+    )
+
+
+def _et_datetime_from_date_and_time(game_date: str, t: datetime.time) -> datetime.datetime:
+    d = datetime.date.fromisoformat(game_date)
+    return datetime.datetime.combine(d, t, tzinfo=_ET)
+
+
 def parse_args():
     p = argparse.ArgumentParser(
         description="MLB Betting Model — Daily Brief Generator",
@@ -4493,14 +4553,14 @@ def parse_args():
             Afternoon brief (after 3:30 PM pull — 4 PM starters):
               python generate_daily_brief.py --session afternoon
 
-            Primary brief (after 5 PM odds pull — evening games):
-              python generate_daily_brief.py --session primary
+            Primary brief (after 5 PM odds pull — evening games) — use clock for hybrid session:
+              python generate_daily_brief.py --session primary --date 2026-04-17 --as-of-time 17:30
 
             Closing brief (after 6:30 PM odds pull):
-              python generate_daily_brief.py --session closing
+              python generate_daily_brief.py --session closing --as-of-time 18:50
 
             Rerun yesterday's primary brief (recovery):
-              python generate_daily_brief.py --session primary --date 2026-03-25 --force
+              python generate_daily_brief.py --session primary --date 2026-03-25 --as-of-time 17:30 --force
 
             Dry-run to preview without writing to log:
               python generate_daily_brief.py --session primary --dry-run
@@ -4523,8 +4583,9 @@ def parse_args():
     p.add_argument(
         "--session", required=False, default=None,
         choices=["prior", "morning", "early", "afternoon", "primary", "closing", "late"],
-        help="Which brief to generate: prior | morning | early | afternoon | primary | closing | late "
-             "(required unless --sync-bet-ledger-only).",
+        help="Brief kind hint: prior is explicit; other values are ignored when --as-of-time or "
+             "--as-of supplies a clock (session is derived from SESSION_WINDOWS). "
+             "Required unless --sync-bet-ledger-only.",
     )
     p.add_argument(
         "--date", default=None,
@@ -4570,7 +4631,16 @@ def parse_args():
         default=None,
         metavar="TS",
         type=_parse_as_of_arg,
-        help='Wall clock in America/New_York (format: "YYYY-MM-DD HH:MM"). Default: not set.',
+        help='Full wall clock in America/New_York ("YYYY-MM-DD HH:MM"). Overrides --as-of-time.',
+    )
+    p.add_argument(
+        "--as-of-time",
+        dest="as_of_time",
+        default=None,
+        metavar="HH:MM",
+        type=_parse_as_of_time_arg,
+        help="ET time-of-day (24h HH:MM), combined with --date (or today). Required for non-prior "
+        "sessions unless --as-of is set. Session is derived from SESSION_WINDOWS.",
     )
     return p.parse_args()
 
@@ -4589,10 +4659,20 @@ def main():
     except Exception:
         pass
 
-    args   = parse_args()
-    session = args.session
-    now = _now_et(args.as_of_dt)
-    today   = args.date or now.date().isoformat()
+    args = parse_args()
+    raw_session = args.session
+    has_clock = args.as_of_dt is not None or getattr(args, "as_of_time", None) is not None
+
+    # now: precedence --as-of > --as-of-time + date > wall clock
+    if args.as_of_dt is not None:
+        now = _now_et(args.as_of_dt)
+    elif getattr(args, "as_of_time", None) is not None:
+        d_str = args.date or datetime.datetime.now(tz=_ET).date().isoformat()
+        now = _et_datetime_from_date_and_time(d_str, args.as_of_time)
+    else:
+        now = _now_et(None)
+
+    today = args.date or now.date().isoformat()
 
     # In dry-run, the brief should not write to any DB-backed ledgers.
     global PERSIST_WRITES
@@ -4608,7 +4688,7 @@ def main():
         sys.exit(1)
 
     if args.sync_bet_ledger_only:
-        if session is not None and args.verbose:
+        if raw_session is not None and args.verbose:
             print("  [verbose] --session ignored when using --sync-bet-ledger-only")
         print(f"\n{'═'*72}")
         print(f"  MLB Betting Model · bet_ledger sync (signal_state) · {today}")
@@ -4637,9 +4717,30 @@ def main():
             conn.close()
         return
 
-    if session is None:
+    if raw_session is None:
         print("✗  --session is required unless using --sync-bet-ledger-only.")
         sys.exit(1)
+
+    if raw_session == "prior":
+        session = "prior"
+    else:
+        if not has_clock:
+            print(
+                "✗  Non-prior sessions require --as-of-time HH:MM (ET) or full "
+                "--as-of 'YYYY-MM-DD HH:MM' (ET)."
+            )
+            sys.exit(2)
+        session = _session_from_et_datetime(now)
+        if raw_session != session:
+            print(
+                f"  [hybrid] resolved session={session!r} from clock "
+                f"(ignoring --session {raw_session!r})"
+            )
+
+    # Slate simulation clock for load_games / filtering (full --as-of or hybrid now).
+    as_of_for_slate = (
+        args.as_of_dt if args.as_of_dt is not None else (now if has_clock else None)
+    )
 
     print(f"\n{'═'*72}")
     print(f"  MLB Betting Model · Daily Brief · {session.upper()} · {today}")
@@ -4706,10 +4807,10 @@ def main():
         return
 
     # ── Load data — for all forward-looking sessions ──────────────────────
-    games = load_games(conn, today, args.verbose, as_of_dt=args.as_of_dt)
+    games = load_games(conn, today, args.verbose, as_of_dt=as_of_for_slate)
 
     # Historical --as-of: DB may already mark games Final; keep slate as-of simulated time
-    if args.as_of_dt is not None and games:
+    if as_of_for_slate is not None and games:
         now_utc = now.astimezone(datetime.timezone.utc).replace(tzinfo=None)
         grace = datetime.timedelta(minutes=10)
         games = [
@@ -4729,9 +4830,9 @@ def main():
         print(f"               WHERE game_date='{today}' GROUP BY game_type;")
         print(f"       If type is 'S', re-run load_mlb_stats.py after the MLB API reclassifies (1-2 hrs).")
         print(f"     • Wrong date — check: python check_db.py")
-        if args.as_of_dt is not None:
+        if as_of_for_slate is not None:
             print(
-                "     • With --as-of: no games were still unstarted at that simulated time, "
+                "     • With --as-of / hybrid clock: no games were still unstarted at that simulated time, "
                 "or the slate is empty for this date.\n"
             )
         else:
@@ -4754,7 +4855,7 @@ def main():
     #
     # morning / closing = all games regardless (watch list / confirmation)
 
-    if session in ("early", "afternoon", "primary") and args.as_of_dt is None:
+    if session in ("early", "afternoon", "primary") and as_of_for_slate is None:
         now_utc = now.astimezone(datetime.timezone.utc).replace(tzinfo=None)
 
         # Keep games that:

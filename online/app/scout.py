@@ -23,6 +23,13 @@ import sys
 from datetime import date, datetime, timedelta
 from typing import Optional
 
+try:
+    from zoneinfo import ZoneInfo
+
+    _SCOUT_ET = ZoneInfo("America/New_York")
+except Exception:
+    _SCOUT_ET = None
+
 import pandas as pd
 import streamlit as st
 
@@ -2189,13 +2196,29 @@ def view_operations():
 
             if run_brief:
                 with st.spinner(f"Running {brief_session} brief for {brief_date} ..."):
-                    ok, out = run_script(
-                        "generate_daily_brief.py",
-                        ["--session", brief_session,
-                         "--date", str(brief_date),
-                         "--dry-run",
-                         "--warn-missing"]
-                    )
+                    brief_args = [
+                        "--session",
+                        brief_session,
+                        "--date",
+                        str(brief_date),
+                        "--dry-run",
+                        "--warn-missing",
+                    ]
+                    # Hybrid session mode: non-prior requires a clock (--as-of or --as-of-time).
+                    if brief_session != "prior":
+                        if _SCOUT_ET is not None:
+                            now_et = datetime.now(tz=_SCOUT_ET)
+                        else:
+                            now_et = datetime.now()
+                        d_str = (
+                            brief_date.isoformat()
+                            if hasattr(brief_date, "isoformat")
+                            else str(brief_date)
+                        )
+                        brief_args.extend(
+                            ["--as-of", f"{d_str} {now_et.strftime('%H:%M')}"]
+                        )
+                    ok, out = run_script("generate_daily_brief.py", brief_args)
                 st.markdown(
                     f'<div class="log-block">{"✓ " if ok else "✕ "}{out}</div>',
                     unsafe_allow_html=True
