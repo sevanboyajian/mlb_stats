@@ -47,6 +47,16 @@ from core.db.connection import connect as db_connect, get_db_path
 # ── DB location ──────────────────────────────────────────────────────────────
 DEFAULT_DB = get_db_path()
 
+
+def _reconfigure_stdio_utf8() -> None:
+    """Avoid UnicodeEncodeError on Windows (cp1252) when printing box-drawing / icons."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 # ── Signal thresholds (mirror generate_daily_brief.py exactly) ───────────────
 WIND_OUT_MIN_MPH    = 10
 WIND_IN_MIN_MPH     = 10
@@ -789,6 +799,7 @@ EXAMPLES:
     p.add_argument("--db", default=DEFAULT_DB,
                    help=f"Database path (default: {DEFAULT_DB})")
     args = p.parse_args()
+    _reconfigure_stdio_utf8()
 
     con = get_connection(args.db)
 

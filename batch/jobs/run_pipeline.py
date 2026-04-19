@@ -8,6 +8,9 @@ Polls pipeline_jobs and runs due jobs (single-threaded) in scheduled_time order.
 
 CHANGE LOG (latest first)
 ────────────────────────
+2026-04-17  ``_build_command``: ``odds_pull`` includes ``--pregame`` (required by load_odds.py);
+            ``--date job_date_et`` and ``--force`` when slate date is not local today;
+            ``odds_check`` / ``ledger_snapshot`` pass ``--date`` so jobs match the slate.
 2026-04-17  Dependency satisfaction: ``failed`` and ``timeout`` upstream rows count as resolved
             (with ``complete``/``skipped``) so terminal failures do not block the whole day; only
             ``pending``/``running`` block. Missing rows for a job_type still block.
@@ -577,6 +580,14 @@ def _build_command(job: dict) -> str:
     """
     job_type = str(job.get("job_type") or "").strip()
     job_date = str(job.get("job_date_et") or "").strip()
+    today_iso = dt.date.today().isoformat()
+
+    # load_odds.py requires a mode (--pregame, etc.); pipeline runs pregame pulls for the slate.
+    _odds_pull = "python batch/ingestion/load_odds.py --pregame --markets game"
+    if job_date:
+        _odds_pull += f" --date {job_date}"
+        if job_date != today_iso:
+            _odds_pull += " --force"
 
     # Note: commands intentionally simple; no parallelism.
     # If a job requires additional parameters later, extend this mapping only.
@@ -597,8 +608,12 @@ def _build_command(job: dict) -> str:
         "prior_report": f"python batch/pipeline/generate_daily_brief.py --session prior --date {job_date}" if job_date else "python batch/pipeline/generate_daily_brief.py --session prior",
         "early_peek": f"python batch/pipeline/generate_daily_brief.py --session morning --date {job_date}" if job_date else "python batch/pipeline/generate_daily_brief.py --session morning",
         # Group jobs (windows are informational; scripts should filter by unplayed games / session rules)
-        "odds_pull": "python batch/ingestion/load_odds.py --markets game",
-        "odds_check": "python diagnostics/check_odds_ready.py",
+        "odds_pull": _odds_pull,
+        "odds_check": (
+            f"python diagnostics/check_odds_ready.py --date {job_date}"
+            if job_date
+            else "python diagnostics/check_odds_ready.py"
+        ),
         "weather": (
             f"python batch/ingestion/load_weather.py --date {job_date}"
             if job_date
@@ -612,7 +627,11 @@ def _build_command(job: dict) -> str:
             if job_date
             else "python batch/pipeline/generate_daily_brief.py --sync-bet-ledger-only"
         ),
-        "ledger_snapshot": "python batch/pipeline/daily_results_report.py",
+        "ledger_snapshot": (
+            f"python batch/pipeline/daily_results_report.py --date {job_date}"
+            if job_date
+            else "python batch/pipeline/daily_results_report.py"
+        ),
         "schedule_next_day_globals": (
             f"python batch/jobs/schedule_pipeline_day.py --globals-only --date-et {_next_calendar_date_et(job_date)}"
             if job_date

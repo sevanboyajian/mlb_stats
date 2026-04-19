@@ -52,6 +52,16 @@ from core.db.connection import connect as db_connect, get_db_path
 DEFAULT_DB = get_db_path()
 
 
+def _reconfigure_stdio_utf8() -> None:
+    """Avoid UnicodeEncodeError on Windows (cp1252) for checkmarks / dashes in output."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 def get_connection(db_path: str) -> sqlite3.Connection:
     if not os.path.exists(db_path):
         print(f"\n  ✗  Database not found: {db_path}")
