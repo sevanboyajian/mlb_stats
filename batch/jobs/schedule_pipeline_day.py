@@ -9,6 +9,9 @@ Console output is intentionally verbose so you can see exactly what it is doing.
 
 CHANGE LOG (latest first)
 ────────────────────────
+2026-04-17  ``_insert_global_job``: ET-first DBs have no ``scheduled_time`` column; branch like
+            ``schedule_pipeline_jobs_for_game_groups`` (legacy INSERT vs modern columns). Fixes
+            ``--globals-only`` silently inserting 0 rows (exceptions were swallowed).
 2026-04-19  Slate/group report: matchups (away @ home), first pitch ET per game, anchor ET per
             group; optional ``--group-report PATH`` writes UTF-8 file. ``_fetch_games_for_date``
             joins ``teams`` for abbreviations.
@@ -295,28 +298,52 @@ def _insert_global_job(
 ) -> int:
     ensure_pipeline_jobs_table(con)
     try:
+        cols = {r[1] for r in con.execute("PRAGMA table_info(pipeline_jobs)").fetchall()}
+    except Exception:
+        cols = set()
+    try:
         sched_utc = _et_to_utc_iso_z(str(scheduled_time_et))
-        cur = con.execute(
-            """
-            INSERT OR IGNORE INTO pipeline_jobs
-                (job_type, scheduled_time, job_date_et, scheduled_time_et, scheduled_time_utc,
-                 window_start_et, window_end_et, status, game_group_id)
-            VALUES (?,?,?,?,?,?,?,?,0)
-            """,
-            (
-                str(job_type),
-                sched_utc,
-                str(job_date_et),
-                str(scheduled_time_et),
-                sched_utc,
-                window_start_et,
-                window_end_et,
-                str(status),
-            ),
-        )
+        if "scheduled_time" in cols:
+            cur = con.execute(
+                """
+                INSERT OR IGNORE INTO pipeline_jobs
+                    (job_type, scheduled_time, job_date_et, scheduled_time_et, scheduled_time_utc,
+                     window_start_et, window_end_et, status, game_group_id)
+                VALUES (?,?,?,?,?,?,?,?,0)
+                """,
+                (
+                    str(job_type),
+                    sched_utc,
+                    str(job_date_et),
+                    str(scheduled_time_et),
+                    sched_utc,
+                    window_start_et,
+                    window_end_et,
+                    str(status),
+                ),
+            )
+        else:
+            cur = con.execute(
+                """
+                INSERT OR IGNORE INTO pipeline_jobs
+                    (job_type, job_date_et, scheduled_time_et, scheduled_time_utc,
+                     window_start_et, window_end_et, status, game_group_id)
+                VALUES (?,?,?,?,?,?,?,0)
+                """,
+                (
+                    str(job_type),
+                    str(job_date_et),
+                    str(scheduled_time_et),
+                    sched_utc,
+                    window_start_et,
+                    window_end_et,
+                    str(status),
+                ),
+            )
         con.commit()
         return 1 if getattr(cur, "rowcount", 0) == 1 else 0
-    except Exception:
+    except Exception as exc:
+        print(f"[schedule] WARNING _insert_global_job({job_type!s}): {exc}", file=sys.stderr)
         return 0
 
 
