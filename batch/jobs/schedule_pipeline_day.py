@@ -9,6 +9,8 @@ Console output is intentionally verbose so you can see exactly what it is doing.
 
 CHANGE LOG (latest first)
 ────────────────────────
+2026-04-20  Word brief email delivery moved to ``generate_daily_brief.py`` via ``delivery.email_sender``
+            (env ``BRIEF_EMAIL_TO`` + SMTP); pipeline no longer schedules ``email_job``.
 2026-04-17  ``_insert_global_job``: ET-first DBs have no ``scheduled_time`` column; branch like
             ``schedule_pipeline_jobs_for_game_groups`` (legacy INSERT vs modern columns). Fixes
             ``--globals-only`` silently inserting 0 rows (exceptions were swallowed).
@@ -535,7 +537,8 @@ def _backfill_et_fields_for_existing_rows(
     Backfill ET fields/windows for legacy rows that were inserted before ET columns existed,
     or fill missing window_start_et / window_end_et on existing rows (INSERT OR IGNORE leaves
     old NULL windows).
-    Targets this date and the core job types (odds_pull, odds_check, weather, group_brief, ledger_snapshot).
+    Targets this date and the core job types (odds_pull, odds_check, weather, group_brief,
+    ledger_snapshot).
     """
     try:
         cur = con.execute(

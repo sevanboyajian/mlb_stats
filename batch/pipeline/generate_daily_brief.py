@@ -4723,6 +4723,32 @@ def parse_args():
     return p.parse_args()
 
 
+def _maybe_email_report_docx(*, docx_path: str, slate_date: str, session: str) -> None:
+    """
+    After a Word brief is saved, optionally email it via ``delivery.email_sender``.
+    Non-fatal: never raises; SMTP/import failures are logged only.
+    """
+    try:
+        to_raw = (os.getenv("BRIEF_EMAIL_TO") or os.getenv("REPORT_EMAIL_TO") or "").strip()
+        if not to_raw:
+            return
+        from delivery.email_sender import send_report_email
+
+        subject = f"MLB brief {slate_date} ({session}) — {Path(docx_path).name}"
+        body = (
+            f"Slate date: {slate_date}\n"
+            f"Session: {session}\n"
+            f"Word report: {docx_path}\n"
+        )
+        ok, msg = send_report_email(docx_path, subject, to_raw, body=body)
+        if ok:
+            print(f"  ✓ [email] {msg}")
+        else:
+            print(f"  ⚠  [email] {msg}")
+    except Exception as exc:
+        print(f"  ⚠  [email] notification failed (non-fatal): {exc}")
+
+
 def main():
     # ── Console encoding guard (Windows cp1252) ───────────────────────────
     # Some environments default to cp1252 and crash on unicode glyphs used
@@ -4883,6 +4909,7 @@ def main():
                     doc = build_docx_from_text("prior", key_date, brief_text)
                     doc.save(docx_path)
                     print(f"  ✓ Word brief saved to: {docx_path}")
+                    _maybe_email_report_docx(docx_path=docx_path, slate_date=key_date, session="prior")
                 except Exception as e:
                     print(f"\n  ⚠  Word output failed: {e}")
                     import traceback; traceback.print_exc()
@@ -5087,6 +5114,7 @@ def main():
                 doc = build_docx_from_text(session, today, brief_text)
                 doc.save(docx_path)
                 print(f"  ✓ Word brief saved to: {docx_path}")
+                _maybe_email_report_docx(docx_path=docx_path, slate_date=today, session=session)
             except Exception as e:
                 print(f"\n  ⚠  Word output failed: {e}")
                 import traceback; traceback.print_exc()
