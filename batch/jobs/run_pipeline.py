@@ -660,7 +660,11 @@ def _build_command(job: dict) -> str:
     base = mapping.get(job_type, "")
     if not base:
         return ""
-    if job_type in ("prior_report", "early_peek", "group_brief", "bet_ledger_sync"):
+    # Hybrid session CLI: generate_daily_brief needs a clock for non-prior sessions.
+    # Always append --as-of for scheduled briefs so they never fail rc=2 on Windows/Task Scheduler runs.
+    if job_type in ("early_peek", "group_brief"):
+        return base + _gdb_as_of_suffix(job)
+    if job_type in ("prior_report", "bet_ledger_sync"):
         return base + _gdb_as_of_suffix(job)
     return base
 

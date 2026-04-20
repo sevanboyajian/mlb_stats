@@ -84,6 +84,19 @@ try:
 except ImportError:
     pass
 
+
+def _reconfigure_stdio_utf8() -> None:
+    """Avoid UnicodeEncodeError on Windows (cp1252) for box drawing / symbols in output."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
+_reconfigure_stdio_utf8()
+
 DEFAULT_DB = get_db_path()
 
 # ── Pause between API calls (polite rate limiting) ────────────────────────────

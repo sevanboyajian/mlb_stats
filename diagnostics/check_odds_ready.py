@@ -72,6 +72,10 @@ def get_connection(db_path: str) -> sqlite3.Connection:
     return con
 
 
+# Ensure Windows terminals don't crash on unicode output (✓, box drawing, etc.).
+_reconfigure_stdio_utf8()
+
+
 def _et_time(utc_str) -> str:
     """Return game start in ET (e.g. '7:10 PM ET'), or '' on failure."""
     if not utc_str:
