@@ -88,6 +88,18 @@ except Exception:
     _ET = dt.timezone(dt.timedelta(hours=-4))
 
 
+def _reconfigure_stdio_utf8() -> None:
+    """
+    Avoid UnicodeEncodeError on Windows consoles (cp1252) when printing box-drawing chars.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 def _iso_z(d: dt.datetime) -> str:
     # Store as UTC ISO with Z (consistent with game_start_grouping groups)
     d2 = d.replace(microsecond=0)
@@ -658,6 +670,7 @@ def _backfill_et_fields_for_existing_rows(
 
 
 def main() -> None:
+    _reconfigure_stdio_utf8()
     p = argparse.ArgumentParser(description="Schedule today's pipeline jobs into pipeline_jobs.")
     p.add_argument("--date-et", default=None, help="Eastern date YYYY-MM-DD (default: today)")
     mode = p.add_mutually_exclusive_group()
@@ -886,34 +899,20 @@ def main() -> None:
     )
     print(f"[schedule] inserted weather (by block): {inserted_weather}")
 
-    b_ws, b_we = _group_brief_window_offsets(int(args.brief_min), int(args.ledger_min))
+    # group_brief: EXACTLY one job per group at (anchor_first_pitch - 30 minutes).
+    # window_start_et / window_end_et remain metadata only (not drivers of job creation).
+    PRIMARY_BRIEF_MIN = 30
+    b_ws, b_we = _group_brief_window_offsets(PRIMARY_BRIEF_MIN, int(args.ledger_min))
     inserted_brief = _schedule_job_type(
         con,
         groups,
         job_type="group_brief",
-        offset_minutes=int(args.brief_min),
+        offset_minutes=PRIMARY_BRIEF_MIN,
         status="pending",
         window_start_offset_min=b_ws,
         window_end_offset_min=b_we,
     )
-    print(f"[schedule] inserted group_brief (primary): {inserted_brief}")
-
-    extra_offs = [x for x in _parse_brief_extra_minutes(str(args.brief_extra_minutes)) if x != int(args.brief_min)]
-    inserted_brief_extra = 0
-    for off in extra_offs:
-        ws, we = _group_brief_window_offsets(off, int(args.ledger_min))
-        inserted_brief_extra += _schedule_job_type(
-            con,
-            groups,
-            job_type="group_brief",
-            offset_minutes=int(off),
-            status="pending",
-            window_start_offset_min=ws,
-            window_end_offset_min=we,
-        )
-    if extra_offs:
-        lbl = ", ".join(f"T0-{x}m" for x in extra_offs)
-        print(f"[schedule] inserted group_brief (extra {lbl}): {inserted_brief_extra}")
+    print(f"[schedule] inserted group_brief (T0-{PRIMARY_BRIEF_MIN}m): {inserted_brief}")
 
     inserted_ledger = _schedule_job_type(
         con,
