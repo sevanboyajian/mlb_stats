@@ -943,7 +943,6 @@ def main() -> None:
         + int(inserted_odds_check)
         + int(inserted_weather)
         + int(inserted_brief)
-        + int(inserted_brief_extra)
         + int(inserted_ledger)
     )
     print(f"[schedule] total inserted rows: {total_inserted}")
