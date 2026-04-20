@@ -776,10 +776,25 @@ def scored_game_to_eval_dict(scored: ScoredGame, session: str) -> dict[str, Any]
     hard_avoid = bool(scored.avoids) and (
         scored.output_tier == "Avoid" or not scored.signals_fired
     )
+    avoid_types = [a.avoid_type for a in (scored.avoids or []) if getattr(a, "avoid_type", None)]
+    avoid_bet_types = [a.bet_type for a in (scored.avoids or []) if getattr(a, "bet_type", None)]
+    avoid_scope: str | None = None
+    if avoid_bet_types:
+        # Most avoids are class-based; make the scope explicit in the brief.
+        if "all" in avoid_bet_types:
+            avoid_scope = "ALL BETS (hard avoid)"
+        elif "wind_signals" in avoid_bet_types:
+            avoid_scope = "WIND SIGNALS ONLY (totals/wind edges) — other analysis OK"
+        else:
+            # Fall back to listing bet_type(s) rather than implying everything.
+            avoid_scope = " / ".join(sorted(set(str(x) for x in avoid_bet_types)))
     return {
         "signals": legacy_signals,
         "picks": picks,
         "avoid": hard_avoid,
+        "avoid_scope": avoid_scope,
+        "avoid_types": avoid_types,
+        "avoid_bet_types": avoid_bet_types,
         "avoid_reason": (
             "; ".join(a.reason for a in scored.avoids) if scored.avoids else None
         ),

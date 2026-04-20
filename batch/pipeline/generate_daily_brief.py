@@ -2798,6 +2798,29 @@ def odds_summary_line(game: dict) -> str:
     return f"ML: {home} {hml} / {away} {aml}  |  {tot}{rl_str}{src}"
 
 
+def _avoid_scope_line(game: dict, sigs: dict) -> str | None:
+    """
+    Return a concise, explicit description of WHAT is being avoided.
+    Avoid flags should never read like "avoid the whole game" unless it truly is.
+    """
+    scope = (sigs.get("avoid_scope") or "").strip()
+    if scope:
+        return scope
+
+    # Fallback for older avoids: infer from reason text.
+    reason = (sigs.get("avoid_reason") or "").strip()
+    ru = reason.upper()
+    if "RETRACTABLE ROOF" in ru or "ROOF STATUS" in ru:
+        return "WIND SIGNALS ONLY (totals/wind edges) — other analysis OK"
+    if "WIND" in ru and ("SUPPRESSED" in ru or "NO WEATHER" in ru):
+        return "WIND SIGNALS ONLY (totals/wind edges) — other analysis OK"
+    if "AVOID HOME ML" in ru or "AVOID AWAY ML" in ru or " ML" in ru:
+        return "MONEYLINE ONLY (ML) — other markets OK"
+    if "OVER" in ru or "UNDER" in ru or "TOTAL" in ru or "O/U" in ru:
+        return "TOTALS ONLY (O/U) — other markets OK"
+    return None
+
+
 def starter_line(game: dict, starters: dict) -> str:
     """Return starting pitcher line if available."""
     gpk = game.get("game_pk")
@@ -3455,16 +3478,20 @@ def build_morning_brief(games, streaks, starters, game_date,
                 lines.append(f"  ⚠ {f}")
         lines.append("")
 
-    # ── Dome games ───────────────────────────────────────────────────────
-    lines.append(section(f"⛔  SUPPRESSED / INDOOR VENUES  ({len(dome_games)})"))
-    if not dome_games:
-        lines.append("\n  No suppressed-wind venues today.\n")
-    for e in dome_games:
-        g = e["game"]
-        lines.append(f"\n  {matchup_line(g)}  — No weather signal. Monitor for streak/price edge.")
-        lines.append(f"  {odds_summary_line(g)}")
-        lines.append(f"  {e['streak']}")
-        lines.append("")
+    # ── Suppressed / indoor venues ───────────────────────────────────────
+    # Removed from default output: it is redundant with per-game weather_line()
+    # and reads like an exclusion list. Keep only under --verbose for diagnostics.
+    if verbose:
+        lines.append(section(f"[verbose] SUPPRESSED / INDOOR VENUES  ({len(dome_games)})"))
+        if not dome_games:
+            lines.append("\n  No suppressed-wind venues today.\n")
+        for e in dome_games:
+            g = e["game"]
+            lines.append(f"\n  {matchup_line(g)}")
+            lines.append(f"  {weather_line(g)}")
+            lines.append(f"  {odds_summary_line(g)}")
+            lines.append(f"  {e['streak']}")
+            lines.append("")
 
     # ── Full slate ───────────────────────────────────────────────────────
     lines.append(section(f"📋  FULL SLATE  ({len(games)} games)"))
@@ -3642,6 +3669,9 @@ def build_primary_brief(games, streaks, starters, game_date,
         lines.append(f"  {weather_line(g)}")
         lines.append(f"  {odds_summary_line(g)}")
         lines.append(f"  {entry['streak']}")
+        scope = _avoid_scope_line(g, sigs)
+        if scope:
+            lines.append(f"  BET TO SKIP: {scope}")
         lines.append(f"  ⛔ AVOID: {textwrap.fill(sigs['avoid_reason'], width=64, subsequent_indent='          ')}")
         lines.append("")
 
@@ -3951,6 +3981,17 @@ def _add_matchup_block(doc, game: dict, streaks: dict, starters: dict,
 
     # ── Avoid flag (only when no picks — avoids duplicate banner when tier=Avoid+winds)
     if sigs["avoid"] and not sigs.get("picks"):
+        scope = _avoid_scope_line(game, sigs)
+        if scope:
+            p0 = doc.add_paragraph()
+            run0 = p0.add_run(f"BET TO SKIP: {scope}")
+            run0.bold = True
+            run0.font.size = Pt(9)
+            run0.font.color.rgb = RGBColor(0x6B, 0x72, 0x80)  # slate gray
+            p0.paragraph_format.left_indent = Inches(0.2)
+            p0.paragraph_format.space_before = Pt(2)
+            p0.paragraph_format.space_after = Pt(0)
+
         p   = doc.add_paragraph()
         run = p.add_run(f"⛔  AVOID: {sigs['avoid_reason']}")
         run.bold      = True
@@ -4123,11 +4164,13 @@ def build_docx_brief(
         for e in watch:
             _add_matchup_block(doc, e["game"], streaks, starters, e["sigs"])
 
-        _add_heading(doc, f"Suppressed / Indoor Venues  ({len(domes)})", level=2)
-        if not domes:
-            _add_note(doc, "No suppressed-wind venues today.", color_hex="475569")
-        for e in domes:
-            _add_matchup_block(doc, e["game"], streaks, starters, e["sigs"])
+        # Keep suppressed/indoor list only under --verbose (diagnostic).
+        if verbose:
+            _add_heading(doc, f"[verbose] Suppressed / Indoor Venues  ({len(domes)})", level=2)
+            if not domes:
+                _add_note(doc, "No suppressed-wind venues today.", color_hex="475569")
+            for e in domes:
+                _add_matchup_block(doc, e["game"], streaks, starters, e["sigs"])
 
         _add_full_slate_table(doc, games)
 
