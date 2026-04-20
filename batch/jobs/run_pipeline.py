@@ -194,6 +194,42 @@ def _release_runner_lock(con: sqlite3.Connection) -> None:
             pass
 
 
+def _read_runner_lock_row(con: sqlite3.Connection) -> dict | None:
+    """
+    Return current runner_lock row as dict, or None if unlocked/unavailable.
+    """
+    try:
+        _ensure_runner_lock_table(con)
+        con.row_factory = sqlite3.Row
+        r = con.execute(
+            "SELECT lock_id, acquired_at_utc, pid, host FROM runner_lock WHERE lock_id = 1"
+        ).fetchone()
+        return dict(r) if r else None
+    except Exception:
+        return None
+
+
+def _force_clear_runner_lock(*, con: sqlite3.Connection) -> bool:
+    """
+    Force-clear the runner lock row (best-effort). Returns True if cleared.
+    Safe only when you are sure no other runner is actually active.
+    """
+    try:
+        _ensure_runner_lock_table(con)
+    except Exception:
+        return False
+    try:
+        cur = con.execute("DELETE FROM runner_lock WHERE lock_id = 1")
+        con.commit()
+        return int(getattr(cur, "rowcount", 0) or 0) >= 0
+    except Exception:
+        try:
+            con.rollback()
+        except Exception:
+            pass
+        return False
+
+
 def _repo_root_path() -> Path:
     # Keep consistent with _REPO_ROOT but return as Path.
     try:
@@ -2042,6 +2078,11 @@ def main() -> None:
         default=None,
         help="Path to mlb_stats.db (defaults to core.db.connection.get_db_path()); must exist for --status / --explain-deps",
     )
+    p.add_argument(
+        "--force-unlock",
+        action="store_true",
+        help="Force-clear runner_lock before starting (use only if a previous run crashed and no runner is active).",
+    )
     p.add_argument("--once", action="store_true", help="Run one polling pass then exit")
     p.add_argument("--ghost", action="store_true", help="Print what would run; do not execute or update DB")
     p.add_argument("--poll-seconds", type=int, default=60, help="Polling interval when looping (default 60)")
@@ -2086,6 +2127,26 @@ def main() -> None:
     args = p.parse_args()
 
     db_path = str(Path(args.db).resolve()) if args.db else str(Path(get_db_path()).resolve())
+    if args.force_unlock:
+        try:
+            con = db_connect(db_path, timeout=30)
+            row = _read_runner_lock_row(con)
+            if row:
+                print(
+                    "[run_pipeline] force-unlock: clearing existing runner_lock "
+                    f"(acquired_at_utc={row.get('acquired_at_utc')!s} pid={row.get('pid')!s} host={row.get('host')!s})"
+                )
+            else:
+                print("[run_pipeline] force-unlock: runner_lock not present (nothing to clear)")
+            ok = _force_clear_runner_lock(con=con)
+            if not ok:
+                print("[run_pipeline] force-unlock: failed to clear runner_lock; refusing to start.")
+                return
+        finally:
+            try:
+                con.close()
+            except Exception:
+                pass
     if args.explain_deps:
         print_pipeline_jobs_explain_deps(db_path, str(args.explain_deps).strip())
         return
