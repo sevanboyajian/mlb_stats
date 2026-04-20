@@ -804,7 +804,9 @@ def main() -> None:
     else:
         print("\n[schedule] groups-only: skipping global daily jobs (stats_pull … early_peek)")
 
-    # Build odds blocks (merge adjacent groups within args.odds_block_min minutes)
+    # Prereq job dedupe: merge odds/weather/check jobs whose anchor first pitches are within 30 minutes.
+    # window_start_et / window_end_et remain metadata only (not drivers of job creation).
+    PREREQ_MERGE_MIN = 30
     sorted_groups = sorted(groups, key=lambda g: (_parse_iso_z(str(g["start_time"])), int(g["group_id"])))
     odds_blocks: list[list[dict[str, Any]]] = []
     cur: list[dict[str, Any]] = []
@@ -815,7 +817,7 @@ def main() -> None:
             cur = [g]
             anchor_t0 = t0
             continue
-        if anchor_t0 is not None and (t0 - anchor_t0) <= dt.timedelta(minutes=int(args.odds_block_min)):
+        if anchor_t0 is not None and (t0 - anchor_t0) <= dt.timedelta(minutes=PREREQ_MERGE_MIN):
             cur.append(g)
         else:
             odds_blocks.append(cur)
@@ -825,9 +827,10 @@ def main() -> None:
         odds_blocks.append(cur)
 
     rep_groups: list[dict[str, Any]] = []
-    print(f"[odds_blocks] {len(odds_blocks)} block(s) (threshold={int(args.odds_block_min)}m)")
+    print(f"[odds_blocks] {len(odds_blocks)} block(s) (threshold={int(PREREQ_MERGE_MIN)}m)")
     for b in odds_blocks:
-        rep = b[0]
+        rep = dict(b[0])
+        rep["covered_group_ids"] = ",".join(str(int(x["group_id"])) for x in b)
         rep_groups.append(rep)
         gids = [int(x["group_id"]) for x in b]
         print(f"  - rep_group_id={int(rep['group_id'])} covers groups={gids}")

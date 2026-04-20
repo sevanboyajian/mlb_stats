@@ -167,6 +167,15 @@ def ensure_pipeline_jobs_table(con: Any) -> None:
     except Exception:
         pass
 
+    # Back-compat migration: add covered_group_ids column when missing.
+    try:
+        cols = {r[1] for r in con.execute("PRAGMA table_info(pipeline_jobs)").fetchall()}
+        if "covered_group_ids" not in cols:
+            con.execute("ALTER TABLE pipeline_jobs ADD COLUMN covered_group_ids TEXT")
+            con.commit()
+    except Exception:
+        pass
+
 
 def schedule_pipeline_jobs_for_game_groups(
     con: Any,
@@ -204,46 +213,91 @@ def schedule_pipeline_jobs_for_game_groups(
         if gid is None or not sched_et:
             continue
         try:
+            covered = g.get("covered_group_ids")
+            has_covered = "covered_group_ids" in cols
             # Back-compat: older table versions may still have scheduled_time (UTC) as NOT NULL.
             if "scheduled_time" in cols:
-                cur = con.execute(
-                    """
-                    INSERT OR IGNORE INTO pipeline_jobs
-                        (job_type, scheduled_time, job_date_et, scheduled_time_et, scheduled_time_utc,
-                         window_start_et, window_end_et, status, game_group_id)
-                    VALUES (?,?,?,?,?,?,?,?,?)
-                    """,
-                    (
-                        str(job_type),
-                        str(sched_utc or ""),
-                        str(sched_et)[:10],
-                        str(sched_et),
-                        (str(sched_utc) if sched_utc else None),
-                        g.get("window_start_et"),
-                        g.get("window_end_et"),
-                        str(status),
-                        int(gid),
-                    ),
-                )
+                if has_covered:
+                    cur = con.execute(
+                        """
+                        INSERT OR IGNORE INTO pipeline_jobs
+                            (job_type, scheduled_time, job_date_et, scheduled_time_et, scheduled_time_utc,
+                             window_start_et, window_end_et, covered_group_ids, status, game_group_id)
+                        VALUES (?,?,?,?,?,?,?,?,?,?)
+                        """,
+                        (
+                            str(job_type),
+                            str(sched_utc or ""),
+                            str(sched_et)[:10],
+                            str(sched_et),
+                            (str(sched_utc) if sched_utc else None),
+                            g.get("window_start_et"),
+                            g.get("window_end_et"),
+                            (str(covered) if covered else None),
+                            str(status),
+                            int(gid),
+                        ),
+                    )
+                else:
+                    cur = con.execute(
+                        """
+                        INSERT OR IGNORE INTO pipeline_jobs
+                            (job_type, scheduled_time, job_date_et, scheduled_time_et, scheduled_time_utc,
+                             window_start_et, window_end_et, status, game_group_id)
+                        VALUES (?,?,?,?,?,?,?,?,?)
+                        """,
+                        (
+                            str(job_type),
+                            str(sched_utc or ""),
+                            str(sched_et)[:10],
+                            str(sched_et),
+                            (str(sched_utc) if sched_utc else None),
+                            g.get("window_start_et"),
+                            g.get("window_end_et"),
+                            str(status),
+                            int(gid),
+                        ),
+                    )
             else:
-                cur = con.execute(
-                    """
-                    INSERT OR IGNORE INTO pipeline_jobs
-                        (job_type, job_date_et, scheduled_time_et, scheduled_time_utc,
-                         window_start_et, window_end_et, status, game_group_id)
-                    VALUES (?,?,?,?,?,?,?,?)
-                    """,
-                    (
-                        str(job_type),
-                        str(sched_et)[:10],
-                        str(sched_et),
-                        (str(sched_utc) if sched_utc else None),
-                        g.get("window_start_et"),
-                        g.get("window_end_et"),
-                        str(status),
-                        int(gid),
-                    ),
-                )
+                if has_covered:
+                    cur = con.execute(
+                        """
+                        INSERT OR IGNORE INTO pipeline_jobs
+                            (job_type, job_date_et, scheduled_time_et, scheduled_time_utc,
+                             window_start_et, window_end_et, covered_group_ids, status, game_group_id)
+                        VALUES (?,?,?,?,?,?,?,?,?)
+                        """,
+                        (
+                            str(job_type),
+                            str(sched_et)[:10],
+                            str(sched_et),
+                            (str(sched_utc) if sched_utc else None),
+                            g.get("window_start_et"),
+                            g.get("window_end_et"),
+                            (str(covered) if covered else None),
+                            str(status),
+                            int(gid),
+                        ),
+                    )
+                else:
+                    cur = con.execute(
+                        """
+                        INSERT OR IGNORE INTO pipeline_jobs
+                            (job_type, job_date_et, scheduled_time_et, scheduled_time_utc,
+                             window_start_et, window_end_et, status, game_group_id)
+                        VALUES (?,?,?,?,?,?,?,?)
+                        """,
+                        (
+                            str(job_type),
+                            str(sched_et)[:10],
+                            str(sched_et),
+                            (str(sched_utc) if sched_utc else None),
+                            g.get("window_start_et"),
+                            g.get("window_end_et"),
+                            str(status),
+                            int(gid),
+                        ),
+                    )
             if getattr(cur, "rowcount", 0) == 1:
                 inserted += 1
         except Exception:

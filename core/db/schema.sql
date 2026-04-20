@@ -936,6 +936,7 @@ CREATE TABLE IF NOT EXISTS pipeline_jobs (
     scheduled_time_utc DATETIME,        -- optional: UTC timestamp/ISO for machine scheduling
     window_start_et TEXT,               -- optional: start of intended execution window (ET)
     window_end_et   TEXT,               -- optional: end of intended execution window (ET)
+    covered_group_ids TEXT,             -- optional: comma-separated group ids covered by this job (merge metadata)
     status          TEXT    NOT NULL DEFAULT 'pending'
                         CHECK (status IN ('pending','running','complete','failed','timeout','skipped')),
     game_group_id   INTEGER,            -- cluster id from game start grouping
