@@ -6,6 +6,11 @@ Reads from mlb_stats.db and outputs the formatted betting brief.
 
 CHANGE LOG (latest first)
 ──────────────────────────
+2026-04-21  Morning session (pipeline ``early_peek``): single "Today's Slate" section
+            only — matchup, venue, start time, factual weather, starters when known,
+            ML / O/U / runline. No signal evaluation, no picks, streak monitor, or avoids;
+            no ``signal_state`` writes from morning. ``weather_line(..., wind_signal_hints=False)``
+            for this run; ``odds_summary_line`` shows both sides' runline when present.
 2026-04-20  Retractable roof removed as a model/brief factor (no AvoidFinding, no
             confidence penalty, no weather-line or prior-report retractable copy).
 2026-04-19  Default brief filenames: ``brief-{slate_date}_{ET_run_stamp}_ET[ _prior].txt`` (Windows-safe);
@@ -393,7 +398,20 @@ def build_docx_from_text(session: str, game_date: str, brief_text: str) -> "Docu
             continue
 
         # Section headings (Top Pick / Avoid / No Signal / Ledger Summary etc.)
-        if any(k in s.upper() for k in ("TOP PICK", "ADDITIONAL MODEL SELECTIONS", "BETS TO AVOID", "NO SIGNAL", "BET LEDGER SUMMARY", "SIGNAL TRACKER", "S6 PITCHER")):
+        if any(
+            k in s.upper()
+            for k in (
+                "TOP PICK",
+                "ADDITIONAL MODEL SELECTIONS",
+                "BETS TO AVOID",
+                "NO SIGNAL",
+                "BET LEDGER SUMMARY",
+                "SIGNAL TRACKER",
+                "S6 PITCHER",
+                "TODAY'S SLATE",
+                "TODAYS SLATE",
+            )
+        ):
             _add_line(s, size_pt=12, bold=True)
             continue
 
@@ -2739,8 +2757,12 @@ def matchup_line(game: dict) -> str:
     return f"{away}  vs  {home} (h)    [{venue}]{start_str}"
 
 
-def weather_line(game: dict) -> str:
-    """Return formatted weather / conditions line."""
+def weather_line(game: dict, *, wind_signal_hints: bool = True) -> str:
+    """Return formatted weather / conditions line.
+
+    When ``wind_signal_hints`` is False (morning sneak peek), omit in-line
+    wind “signal” callouts — only factual temp/wind/venue suppression text.
+    """
     wind_effect = (game.get("wind_effect") or "HIGH").upper()
     roof_type   = game.get("roof_type") or "Open"
 
@@ -2763,10 +2785,11 @@ def weather_line(game: dict) -> str:
         mph       = game["wind_mph"]
         direction = wind_direction_label(game.get("wind_direction") or "")
         parts.append(f"{mph} mph wind {direction}")
-        if wind_effect == "HIGH" and mph >= WIND_OUT_MIN_MPH and direction in ("OUT", "IN"):
-            parts.append("⚑ WIND SIGNAL")
-        elif wind_effect == "MODERATE" and mph >= WIND_OUT_MIN_MPH and direction in ("OUT", "IN"):
-            parts.append("~ wind (moderate venue)")
+        if wind_signal_hints:
+            if wind_effect == "HIGH" and mph >= WIND_OUT_MIN_MPH and direction in ("OUT", "IN"):
+                parts.append("⚑ WIND SIGNAL")
+            elif wind_effect == "MODERATE" and mph >= WIND_OUT_MIN_MPH and direction in ("OUT", "IN"):
+                parts.append("~ wind (moderate venue)")
 
     return "  ".join(parts) if parts else "Conditions not available"
 
@@ -2780,6 +2803,8 @@ def odds_summary_line(game: dict) -> str:
     tot  = fmt_total(game.get("total_line"))
     hrl  = game.get("home_rl")
     hrl_o = game.get("home_rl_odds")
+    arl = game.get("away_rl")
+    arl_o = game.get("away_rl_odds")
     book = game.get("odds_bookmaker") or ""
     # Clean up bookmaker name for display
     book_display = {
@@ -2789,9 +2814,12 @@ def odds_summary_line(game: dict) -> str:
         "lowvig": "LV", "mybookieag": "MYB",
     }.get(book, book.upper() if book else "")
     src = f"  [{book_display}]" if book_display else ""
-    rl_str = ""
+    rl_parts: list[str] = []
     if hrl is not None:
-        rl_str = f"  RL: {home} {'+' if hrl >= 0 else ''}{hrl} ({fmt_odds(hrl_o)})"
+        rl_parts.append(f"{home} {'+' if float(hrl) >= 0 else ''}{hrl:g} ({fmt_odds(hrl_o)})")
+    if arl is not None:
+        rl_parts.append(f"{away} {'+' if float(arl) >= 0 else ''}{arl:g} ({fmt_odds(arl_o)})")
+    rl_str = f"  RL: {' / '.join(rl_parts)}" if rl_parts else ""
     return f"ML: {home} {hml} / {away} {aml}  |  {tot}{rl_str}{src}"
 
 
@@ -3364,103 +3392,33 @@ def build_morning_brief(games, streaks, starters, game_date,
                         now: datetime.datetime | None = None,
                         verbose: bool = False,
                         debug_wind: bool = False):
+    """
+    Morning session = pipeline ``early_peek`` sneak peek: slate only.
+
+    One section (Today's Slate): matchup, venue, start time, weather, starters
+    when known, and Vegas lines (ML, total, runline). No signal evaluation,
+    no picks, no streak monitor, no avoids, no signal_state persistence.
+    """
+    _ = (streaks, conn, session, verbose, debug_wind)  # API compatibility; unused (slate-only).
     lines = []
     if now is None:
         now = _now_et()
     generated_ts = now.strftime("%Y-%m-%d %I:%M %p ET").lstrip("0")
-    lines.append(banner(f"MLB BETTING BRIEF  ·  MORNING SESSION  ·  {game_date}"))
+    lines.append(banner(f"MLB BETTING BRIEF  ·  MORNING SNEAK PEEK  ·  {game_date}"))
     lines.append(f"  Generated: {generated_ts}\n")
     lines.append(
-        "\n  MORNING NOTE: These are early signal flags based on OPENING LINES.\n"
-        "  Prices will move. DO NOT bet from this brief.\n"
-        "  Flag games of interest and re-evaluate at the PRIMARY BRIEF (~5:30 PM).\n"
+        "\n  Today's schedule and lines only — no model signals at this run time.\n"
+        "  Weather and odds reflect the latest load; re-check before you bet.\n"
     )
 
-    watch_games   = []
-    dome_games    = []
-    no_signal     = []
-
-    # For persistence (does not affect output)
-    all_picks_entries = []
-    avoid_entries     = []
-
+    lines.append(section(f"📋  TODAY'S SLATE  ({len(games)} games)"))
+    if not games:
+        lines.append("\n  No games on the slate for this date.\n")
     for game in games:
-        sigs = evaluate_signals(
-            conn, game, streaks, "morning", starters,
-            verbose=verbose, debug_wind=debug_wind,
-        )
-        entry = {
-            "game":   game,
-            "sigs":   sigs,
-            "starter": starter_line(game, starters),
-            "streak":  streak_line(game, streaks),
-        }
-        we = (game.get("wind_effect") or "HIGH").upper()
-        if we == "SUPPRESSED":
-            dome_games.append(entry)
-        elif sigs["watch"] or sigs["signals"]:
-            watch_games.append(entry)
-        else:
-            no_signal.append(entry)
-
-        # Persistable classifications (no change to signal logic)
-        if sigs.get("picks"):
-            all_picks_entries.append(entry)
-        elif sigs.get("avoid"):
-            avoid_entries.append(entry)
-
-    # ── Persist signal state (TOP / NEXT / AVOID) ─────────────────────────
-    # Best-effort insert only; does not affect computation or report output.
-    if conn is not None and session is not None:
-        try:
-            all_picks_entries.sort(key=lambda e: min(p["priority"] for p in e["sigs"]["picks"]))
-        except Exception:
-            pass
-        top_entry    = all_picks_entries[0] if len(all_picks_entries) >= 1 else None
-        next_entries = all_picks_entries[1:6] if len(all_picks_entries) >= 2 else []
-        save_signal_state(conn, game_date, session, top_entry, next_entries, avoid_entries, now=now)
-
-    # ── Watch list ───────────────────────────────────────────────────────
-    lines.append(section(f"⚑  GAMES TO WATCH  ({len(watch_games)} of {len(games)})"))
-    if not watch_games:
-        lines.append("\n  No strong early signals on today's slate.\n")
-    for e in watch_games:
-        g    = e["game"]
-        sigs = e["sigs"]
-        lines.append(f"\n  {matchup_line(g)}")
-        lines.append(f"  {weather_line(g)}")
-        lines.append(f"  {odds_summary_line(g)}")
-        lines.append(f"  {e['starter']}")
-        lines.append(f"  {e['streak']}")
-        if sigs["watch_reason"]:
-            lines.append(f"\n  ▶ WATCH: {sigs['watch_reason']}")
-        if sigs["signals"]:
-            lines.append(f"  ▶ EARLY SIGNAL(S): {', '.join(sigs['signals'])}")
-        if sigs["data_flags"]:
-            for f in sigs["data_flags"]:
-                lines.append(f"  ⚠ {f}")
-        lines.append("")
-
-    # ── Suppressed / indoor venues ───────────────────────────────────────
-    # Removed from default output: it is redundant with per-game weather_line()
-    # and reads like an exclusion list. Keep only under --verbose for diagnostics.
-    if verbose:
-        lines.append(section(f"[verbose] SUPPRESSED / INDOOR VENUES  ({len(dome_games)})"))
-        if not dome_games:
-            lines.append("\n  No suppressed-wind venues today.\n")
-        for e in dome_games:
-            g = e["game"]
-            lines.append(f"\n  {matchup_line(g)}")
-            lines.append(f"  {weather_line(g)}")
-            lines.append(f"  {odds_summary_line(g)}")
-            lines.append(f"  {e['streak']}")
-            lines.append("")
-
-    # ── Full slate ───────────────────────────────────────────────────────
-    lines.append(section(f"📋  FULL SLATE  ({len(games)} games)"))
-    for game in games:
-        lines.append(f"  {matchup_line(game)}  |  {weather_line(game)}")
-        lines.append(f"    {odds_summary_line(game)}")
+        lines.append(f"\n  {matchup_line(game)}")
+        lines.append(f"  {weather_line(game, wind_signal_hints=False)}")
+        lines.append(f"  {starter_line(game, starters)}")
+        lines.append(f"  {odds_summary_line(game)}")
     lines.append("")
     lines.append(CAVEAT)
     return "\n".join(lines)
@@ -3907,7 +3865,9 @@ def _add_note(doc, text: str, italic=True, color_hex="475569"):
 
 def _add_matchup_block(doc, game: dict, streaks: dict, starters: dict,
                        sigs: dict, show_movement: bool = False,
-                       movement: dict = None, show_picks: bool = True):
+                       movement: dict = None, show_picks: bool = True,
+                       *, include_streak: bool = True,
+                       wind_signal_hints: bool = True):
     """
     Render one game block: matchup line, weather, odds, streak, starters,
     then any signals/picks/avoid/watch in a shaded pick table if relevant.
@@ -3928,13 +3888,14 @@ def _add_matchup_block(doc, game: dict, streaks: dict, starters: dict,
     p.paragraph_format.space_before = Pt(8)
     p.paragraph_format.space_after  = Pt(1)
 
-    # ── Details line (weather | odds | streak | starters) ────────────────
+    # ── Details line (weather | odds | [streak] | starters) ─────────────
     details = [
-        weather_line(game),
+        weather_line(game, wind_signal_hints=wind_signal_hints),
         odds_summary_line(game),
-        streak_line(game, streaks),
-        starter_line(game, starters),
     ]
+    if include_streak:
+        details.append(streak_line(game, streaks))
+    details.append(starter_line(game, starters))
     for detail in details:
         p   = doc.add_paragraph()
         run = p.add_run(detail)
@@ -4125,7 +4086,7 @@ def build_docx_brief(
 
     # ── Banner ────────────────────────────────────────────────────────────
     session_titles = {
-        "morning":   "Morning Brief — Watch List",
+        "morning":   "Morning Sneak Peek — Today's Slate",
         "early":     "Early Games Brief — 1 PM Action",
         "afternoon": "Afternoon Brief — 4 PM Action",
         "primary":   "Primary Brief — Evening Action",
@@ -4137,7 +4098,7 @@ def build_docx_brief(
 
     # ── Session note ──────────────────────────────────────────────────────
     notes = {
-        "morning":   "Early signal flags based on OPENING LINES. DO NOT bet from this brief. Re-evaluate at Primary (~5:30 PM).",
+        "morning":   "Slate listing only — schedule, weather, starters when known, and current lines (ML / O/U / runline). No model signals.",
         "early":     "All unplayed games on today's slate. Decide now before first pitch. Confirm lineup and weather.",
         "afternoon": "All unplayed games on today's slate. Decide now before first pitch. Confirm lineup and weather.",
         "primary":   "PRIMARY ACTION WINDOW — All unplayed games on today's slate. Make your betting decisions NOW. Confirm each line before placing.",
@@ -4152,6 +4113,27 @@ def build_docx_brief(
         _add_note(doc, "No games found for this session.", color_hex="C62828")
         return doc
 
+    # ── MORNING = pipeline ``early_peek`` — slate only, no signal eval ──
+    if session == "morning":
+        _add_heading(doc, f"Today's Slate  ({len(games)} games)", level=2)
+        empty_sigs = {
+            "picks": [],
+            "signals": [],
+            "avoid": False,
+            "avoid_reason": None,
+            "watch": False,
+            "watch_reason": None,
+            "data_flags": [],
+        }
+        for game in games:
+            _add_matchup_block(
+                doc, game, streaks, starters, empty_sigs,
+                show_picks=False,
+                include_streak=False,
+                wind_signal_hints=False,
+            )
+        return doc
+
     # ── Evaluate signals for all games ───────────────────────────────────
     entries = []
     for game in games:
@@ -4161,33 +4143,8 @@ def build_docx_brief(
         )
         entries.append({"game": game, "sigs": sigs})
 
-    # ── MORNING layout ────────────────────────────────────────────────────
-    if session == "morning":
-        watch   = [e for e in entries
-                   if (e["game"].get("wind_effect") or "HIGH").upper() != "SUPPRESSED"
-                   and (e["sigs"]["watch"] or e["sigs"]["signals"])]
-        domes   = [e for e in entries
-                   if (e["game"].get("wind_effect") or "HIGH").upper() == "SUPPRESSED"]
-        no_sig  = [e for e in entries if e not in watch and e not in domes]
-
-        _add_heading(doc, f"Games to Watch  ({len(watch)} of {len(games)})", level=2)
-        if not watch:
-            _add_note(doc, "No strong early signals on today's slate.", color_hex="475569")
-        for e in watch:
-            _add_matchup_block(doc, e["game"], streaks, starters, e["sigs"])
-
-        # Keep suppressed/indoor list only under --verbose (diagnostic).
-        if verbose:
-            _add_heading(doc, f"[verbose] Suppressed / Indoor Venues  ({len(domes)})", level=2)
-            if not domes:
-                _add_note(doc, "No suppressed-wind venues today.", color_hex="475569")
-            for e in domes:
-                _add_matchup_block(doc, e["game"], streaks, starters, e["sigs"])
-
-        _add_full_slate_table(doc, games)
-
     # ── PRIMARY / EARLY / AFTERNOON layout ───────────────────────────────
-    elif session in ("primary", "early", "afternoon", "late"):
+    if session in ("primary", "early", "afternoon", "late"):
         picks_entries  = [e for e in entries if e["sigs"]["picks"]]
         avoid_entries  = [e for e in entries if not e["sigs"]["picks"] and e["sigs"]["avoid"]]
         nosig_entries  = [e for e in entries if not e["sigs"]["picks"] and not e["sigs"]["avoid"]]

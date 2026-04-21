@@ -658,6 +658,7 @@ def _build_command(job: dict) -> str:
             else "python batch/jobs/schedule_pipeline_day.py --groups-only"
         ),
         "prior_report": f"python batch/pipeline/generate_daily_brief.py --session prior --date {job_date}" if job_date else "python batch/pipeline/generate_daily_brief.py --session prior",
+        # ``morning`` = Today's Slate only (no model signals); job_type name is ``early_peek``.
         "early_peek": f"python batch/pipeline/generate_daily_brief.py --session morning --date {job_date}" if job_date else "python batch/pipeline/generate_daily_brief.py --session morning",
         # Group jobs (windows are informational; scripts should filter by unplayed games / session rules)
         "odds_pull": _odds_pull,
