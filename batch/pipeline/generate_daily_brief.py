@@ -2929,7 +2929,11 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
             v.wind_effect, v.wind_note, v.roof_type,
             v.park_factor_runs, v.park_factor_hr, v.orientation_hp,
             go_ml.home_ml,   go_ml.away_ml,
-            go_tot.total_line, go_tot.over_odds, go_tot.under_odds
+            go_tot.total_line, go_tot.over_odds, go_tot.under_odds,
+            rl.home_rl_line  AS home_rl,
+            rl.away_rl_line  AS away_rl,
+            rl.home_rl_odds,
+            rl.away_rl_odds
         FROM   games g
         JOIN   teams  th     ON th.team_id  = g.home_team_id
         JOIN   teams  ta     ON ta.team_id  = g.away_team_id
@@ -2938,6 +2942,8 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
                                              AND go_ml.market_type  = 'moneyline'
         LEFT JOIN v_closing_game_odds go_tot ON go_tot.game_pk = g.game_pk
                                              AND go_tot.market_type = 'total'
+        LEFT JOIN v_closing_game_odds rl     ON rl.game_pk = g.game_pk
+                                             AND rl.market_type = 'runline'
         WHERE  g.game_date_et = ?
           AND  g.game_type = 'R'
           AND  g.status    = 'Final'
@@ -2977,6 +2983,33 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
         hit = (bet == "over" and runs > total) or (bet == "under" and runs < total)
         if hit:
             pnl = odds / 100.0 if (odds and odds > 0) else 100.0 / abs(odds or 110)
+            return "✓ WIN", round(pnl, 2)
+        return "✗ LOSS", -1.0
+
+    def grade_runline(team: str, line: float, hs: int, as_: int,
+                      *, home_abbr: str, away_abbr: str,
+                      odds: int | None):
+        """Grade a runline/spread bet for one side at one line."""
+        if hs is None or as_ is None or line is None:
+            return "— NO RESULT", 0.0
+        side = (team or "").strip().upper()
+        home_abbr_u = (home_abbr or "").strip().upper()
+        away_abbr_u = (away_abbr or "").strip().upper()
+        if side == home_abbr_u:
+            adj = float(hs) + float(line)
+            opp = float(as_)
+        elif side == away_abbr_u:
+            adj = float(as_) + float(line)
+            opp = float(hs)
+        else:
+            return "— NO RESULT", 0.0
+        if adj == opp:
+            return "— PUSH", 0.0
+        won = adj > opp
+        if won:
+            if odds is None:
+                return "✓ WIN", 0.0
+            pnl = odds / 100.0 if odds > 0 else 100.0 / abs(odds)
             return "✓ WIN", round(pnl, 2)
         return "✗ LOSS", -1.0
 
@@ -3192,6 +3225,55 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
         else:
             lines.append(
                 "  BET LINE: TOTAL N/A     | SIGNAL: No Signal  | RESULT: —    | P&L: N/A"
+            )
+
+        # RUNLINE line (spread) — show when data available
+        hrl = g.get("home_rl")
+        arl = g.get("away_rl")
+        hrl_o = g.get("home_rl_odds")
+        arl_o = g.get("away_rl_odds")
+        hs = g.get("home_score")
+        as_ = g.get("away_score")
+
+        rl_pick = _best_pick_for_market(e.get("graded") or [], "RL") or _best_pick_for_market(e.get("graded") or [], "RUNLINE") or _best_pick_for_market(e.get("graded") or [], "SPREAD")
+        if rl_pick:
+            # Grade vs final score using the bet text itself.
+            team, line = _parse_runline_bet(rl_pick.get("bet") or "")
+            odds = None
+            if team and line is not None:
+                if team.strip().upper() == (g.get("home_abbr") or "").strip().upper():
+                    odds = hrl_o
+                elif team.strip().upper() == (g.get("away_abbr") or "").strip().upper():
+                    odds = arl_o
+            res, pnl = grade_runline(
+                team or "", float(line) if line is not None else 0.0, hs, as_,
+                home_abbr=g.get("home_abbr") or "", away_abbr=g.get("away_abbr") or "",
+                odds=int(odds) if odds is not None else None,
+            )
+            lines.append(
+                f"  BET LINE: {rl_pick.get('bet',''):<12} | SIGNAL: {sig_label:<10} | "
+                f"RESULT: {_clean_result(res):<4} | P&L: {pnl_str(float(pnl))}"
+            )
+        elif hrl is not None and arl is not None and hs is not None and as_ is not None:
+            # No signal: print the side that covered at the closing line.
+            home_adj = float(hs) + float(hrl)
+            away_adj = float(as_) + float(arl)
+            if home_adj == float(as_) or away_adj == float(hs):
+                outcome_bet = f"PUSH {g.get('home_abbr','')} {hrl:+g}"
+                outcome_res = "PUSH"
+            elif home_adj > float(as_):
+                outcome_bet = f"{g.get('home_abbr','')} {hrl:+g}"
+                outcome_res = "WIN"
+            else:
+                outcome_bet = f"{g.get('away_abbr','')} {arl:+g}"
+                outcome_res = "WIN"
+            lines.append(
+                f"  BET LINE: {outcome_bet:<12} | SIGNAL: No Signal  | "
+                f"RESULT: {outcome_res:<4} | P&L: N/A"
+            )
+        else:
+            lines.append(
+                "  BET LINE: RUNLINE N/A   | SIGNAL: No Signal  | RESULT: —    | P&L: N/A"
             )
 
         if e["sigs"].get("data_flags"):
@@ -4287,6 +4369,28 @@ def build_docx_brief(
                     txt = f"BET LINE: {outcome_bet}  | SIGNAL: No Signal  | RESULT: {outcome_res}  | P&L: N/A"
             else:
                 txt = "BET LINE: TOTAL N/A  | SIGNAL: No Signal  | RESULT: —  | P&L: N/A"
+            _add_note(doc, txt, italic=False, color_hex="333333")
+
+            # RUNLINE bet line
+            hrl = g.get("home_rl")
+            arl = g.get("away_rl")
+            hs = g.get("home_score")
+            as_ = g.get("away_score")
+            if hrl is not None and arl is not None and hs is not None and as_ is not None:
+                home_adj = float(hs) + float(hrl)
+                away_adj = float(as_) + float(arl)
+                if home_adj == float(as_) or away_adj == float(hs):
+                    outcome_bet = f"PUSH {g.get('home_abbr','')} {hrl:+g}"
+                    outcome_res = "PUSH"
+                elif home_adj > float(as_):
+                    outcome_bet = f"{g.get('home_abbr','')} {hrl:+g}"
+                    outcome_res = "WIN"
+                else:
+                    outcome_bet = f"{g.get('away_abbr','')} {arl:+g}"
+                    outcome_res = "WIN"
+                txt = f"BET LINE: {outcome_bet}  | SIGNAL: No Signal  | RESULT: {outcome_res}  | P&L: N/A"
+            else:
+                txt = "BET LINE: RUNLINE N/A  | SIGNAL: No Signal  | RESULT: —  | P&L: N/A"
             _add_note(doc, txt, italic=False, color_hex="333333")
 
             doc.add_paragraph()
