@@ -9,7 +9,7 @@ Central signal scoring — all model signal if/else logic lives here.
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from batch.pipeline.dressed_game_blocks import (
@@ -30,10 +30,6 @@ def min_tier(a: str | None, b: str | None) -> str | None:
     ai = TIER_ORDER.index(a) if a in TIER_ORDER else len(TIER_ORDER)
     bi = TIER_ORDER.index(b) if b in TIER_ORDER else len(TIER_ORDER)
     return TIER_ORDER[max(ai, bi)]
-
-
-def strength_to_base_tier(strength: str) -> str | None:
-    return {"strong": "Tier1", "moderate": "Tier2", "weak": "Tier3"}.get(strength)
 
 
 def _env_ceiling_to_cap_tier(env_ceiling: str) -> str | None:
@@ -65,6 +61,19 @@ SIGNAL_STRENGTH: dict[str, str] = {
 }
 
 WIND_SIGNAL_IDS = frozenset({"MV-F", "MV-B", "H3b"})
+
+SIGNAL_BASE_SCORE: dict[str, int] = {
+    "S1H2": 8,
+    "MV-F": 8,
+    "MV-B": 7,
+    "LHP_FADE": 7,
+    "S1": 5,
+    "H3b": 3,
+    "NF4": 3,
+}
+
+BETTING_THRESHOLD = 5
+FULL_STAKE_THRESHOLD = 7
 
 
 def _fmt_odds(val: Any) -> str:
@@ -253,10 +262,11 @@ def _eval_mv_b(g: FullyDressedGame, game_month: int) -> SignalFinding:
     mph = _mph(g)
     pf = float(env.park_factor_runs or 0.0)
 
+    we = (env.wind_effect or "").strip().upper()
     fires = (
         env.wind_out
         and mph >= gdb.WIND_OUT_MIN_MPH
-        and env.env_ceiling != "NoSignal"
+        and we in ("HIGH", "MODERATE")
         and env.h3b_eligible
         and pf >= gdb.H3B_MIN_PARK_FACTOR
         and mkt.total_current is not None
@@ -279,7 +289,7 @@ def _eval_mv_b(g: FullyDressedGame, game_month: int) -> SignalFinding:
     else:
         reason = (
             f"MV-B blocked: wind_out={env.wind_out} mph={mph} "
-            f"env_ceiling={env.env_ceiling!r} h3b_eligible={env.h3b_eligible} "
+            f"wind_effect={env.wind_effect!r} (need HIGH/MODERATE) h3b_eligible={env.h3b_eligible} "
             f"pf={pf} total={mkt.total_current!r} h3b_blocked={g.completeness.h3b_blocked}"
         )
     return SignalFinding(
@@ -407,27 +417,12 @@ def _eval_h3b(g: FullyDressedGame, mvb_fires: bool) -> SignalFinding:
 
 def _eval_avoids(g: FullyDressedGame) -> list[AvoidFinding]:
     """
-    Hard avoids only — things that should persist as signal_state / brief AVOID rows.
+    Hard avoids for signal_state / brief AVOID rows.
 
-    Venue wind suppression is NOT listed here: it is already encoded in
-    GameEnvironment (env_ceiling=NoSignal, wind_effect=SUPPRESSED) and blocks
-    MV-F / MV-B / H3b via gates, plus data_flags in score_game. Treating it as an
-    AvoidFinding caused legacy ``avoid=True`` alongside matchup signals (e.g.
-    LHP_FADE), which read as “override everything.”
+    Retractable roof is not modeled as an outcome factor and does not emit
+    AvoidFindings. Venue wind suppression remains on ``GameEnvironment`` only.
     """
-    avoids: list[AvoidFinding] = []
-    if g.environment.is_retractable and g.environment.wind_source != "actual":
-        avoids.append(
-            AvoidFinding(
-                avoid_type="retractable_roof_pregame",
-                bet_type="wind_signals",
-                reason=(
-                    f"Retractable roof venue ({g.identifiers.venue_name}). "
-                    f"Verify roof status before acting on wind signals."
-                ),
-            )
-        )
-    return avoids
+    return []
 
 
 def _is_hostile_environment(g: FullyDressedGame, signal: SignalFinding) -> bool:
@@ -453,6 +448,99 @@ def _avoid_affects_top(avoids: list[AvoidFinding], top: SignalFinding) -> bool:
     return False
 
 
+def _compute_confidence_score(
+    signal_id: str,
+    fdg: FullyDressedGame,
+    game_month: int,
+    clv_available: bool,
+    clv_positive: bool,
+    second_signal: bool,
+    hostile: bool,
+) -> tuple[int, str]:
+    """
+    Returns (score, basis_string).
+    Score is capped to [1, 10].
+    """
+    gdb = _gdb()
+    base = SIGNAL_BASE_SCORE.get(signal_id, 5)
+    mods: list[tuple[str, int]] = []
+
+    if signal_id == "MV-F":
+        if clv_available and clv_positive:
+            mods.append(("CLV gate met", +1))
+        elif not clv_available:
+            base = 6
+            mods.append(("CLV unavailable — base reduced", 0))
+
+    if signal_id == "MV-B":
+        w = float(fdg.environment.wind_mph or 0)
+        if 10 <= w <= 11:
+            mods.append(("wind 10-11 mph (historically strongest bucket)", +1))
+
+    if signal_id in ("LHP_FADE", "NF4"):
+        away_sp = fdg.matchup.away_sp
+        home_off = fdg.matchup.home_offense
+        if away_sp.quality_tier == "strong":
+            mods.append(("away SP ERA gate met (<=3.04)", +1))
+        ops_min = gdb.NF4_OPS_MIN
+        if home_off.rolling_ops is not None and float(home_off.rolling_ops) >= ops_min:
+            mods.append((f"home OPS gate met (>={ops_min})", +1))
+        else:
+            base = 6
+        if game_month == 9:
+            mods.append(("September — signal historically inverts", -1))
+
+    wind_signals = {"MV-F", "MV-B", "H3b"}
+    if signal_id in wind_signals:
+        src = (fdg.environment.wind_source or "").strip().lower()
+        mph = float(fdg.environment.wind_mph or 0)
+        if src == "actual" and mph >= 15:
+            mods.append(("actual wind confirmed >=15 mph", +1))
+        elif src == "actual":
+            mods.append(("actual wind confirmed", 0))
+        elif src == "forecast":
+            mods.append(("forecast wind — not yet confirmed", 0))
+        else:
+            mods.append(("wind source unknown", -2))
+
+    comp = fdg.completeness
+    if comp.completeness_tier == "complete":
+        mods.append(("data complete", +1))
+    elif comp.completeness_tier == "degraded":
+        mods.append(("data degraded (fallbacks used)", 0))
+    elif comp.completeness_tier == "blocking":
+        mods.append(("blocking data gap", -2))
+
+    if second_signal:
+        mods.append(("second independent signal confirms", +1))
+
+    if hostile:
+        mods.append(("hostile environment — signal contradicted", -1))
+
+    if signal_id == "MV-B":
+        home_sp = fdg.matchup.home_sp
+        away_sp = fdg.matchup.away_sp
+        if home_sp.quality_tier == "weak" and away_sp.quality_tier == "weak":
+            mods.append(("weak vs weak matchup", -1))
+        elif away_sp.quality_tier == "strong":
+            mods.append(("away SP strong — confirms OVER edge", +1))
+
+    if signal_id == "H3b" and game_month in (8, 9):
+        mods.append(("Aug/Sep — H3b historically weak", -1))
+
+    total_mod = sum(v for _, v in mods)
+    score = max(1, min(10, base + total_mod))
+
+    mod_str = "  |  ".join(f"{name} ({v:+d})" for name, v in mods if v != 0)
+    basis = f"base={base}"
+    if mod_str:
+        basis += f"  →  {mod_str}  →  total={score}"
+    else:
+        basis += f"  →  total={score}"
+
+    return score, basis
+
+
 @dataclass
 class ScoredGame:
     game: FullyDressedGame
@@ -464,6 +552,10 @@ class ScoredGame:
     stake_multiplier: float
     top_pick: SignalFinding | None
     data_flags: list[str]
+    active_bets: list[SignalFinding] = field(default_factory=list)
+    all_bets: list[SignalFinding] = field(default_factory=list)
+    watch_list: list[SignalFinding] = field(default_factory=list)
+    contradicted: list[SignalFinding] = field(default_factory=list)
 
 
 def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> ScoredGame:
@@ -479,10 +571,6 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
         note = (g.venue_wind_note or "")[:80]
         extra_flags.append(
             f"Wind signals suppressed at this venue ({note or env.roof_type})"
-        )
-    elif env.is_retractable:
-        extra_flags.append(
-            "Retractable roof venue — verify roof status before acting on wind signals"
         )
 
     s1h2 = _eval_s1h2(g, home_streak)
@@ -568,41 +656,100 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
             stake_multiplier=0.0,
             top_pick=None,
             data_flags=data_flags,
+            active_bets=[],
+            all_bets=[],
+            watch_list=[],
+            contradicted=[],
         )
 
-    top = min(fired, key=lambda f: SIGNAL_PRIORITY.get(f.signal_id, 99))
-    signal_strength = SIGNAL_STRENGTH[top.signal_id]
-    base_tier = strength_to_base_tier(signal_strength)
-    assert base_tier is not None
+    for finding in fired:
+        same_direction = [
+            f
+            for f in fired
+            if f.signal_id != finding.signal_id and f.bet_side == finding.bet_side
+        ]
+        second_signal = len(same_direction) > 0
 
-    if top.signal_id in WIND_SIGNAL_IDS:
-        env_cap = _env_ceiling_to_cap_tier(env.env_ceiling)
-        effective_tier = min_tier(base_tier, env_cap)
-        env_note = f"env_ceiling={env.env_ceiling}"
+        hostile_f = _is_hostile_environment(g, finding)
+
+        clv_avail = mkt.clv_available
+        clv_pos = (
+            mkt.clv_away_delta is not None and mkt.clv_away_delta >= gdb.MV_F_CLV_GATE
+        ) if clv_avail else False
+
+        score, basis = _compute_confidence_score(
+            signal_id=finding.signal_id,
+            fdg=g,
+            game_month=game_month,
+            clv_available=clv_avail,
+            clv_positive=clv_pos,
+            second_signal=second_signal,
+            hostile=hostile_f,
+        )
+        finding.confidence_score = score
+        finding.score_basis = basis
+
+    all_bets = sorted(
+        fired,
+        key=lambda f: (-f.confidence_score, SIGNAL_PRIORITY.get(f.signal_id, 99)),
+    )
+    active_bets = sorted(
+        [f for f in fired if f.confidence_score >= FULL_STAKE_THRESHOLD],
+        key=lambda f: (-f.confidence_score, SIGNAL_PRIORITY.get(f.signal_id, 99)),
+    )
+    watch_list = sorted(
+        [f for f in fired if BETTING_THRESHOLD <= f.confidence_score < FULL_STAKE_THRESHOLD],
+        key=lambda f: (-f.confidence_score, SIGNAL_PRIORITY.get(f.signal_id, 99)),
+    )
+    contradicted = sorted(
+        [f for f in fired if f.confidence_score < BETTING_THRESHOLD],
+        key=lambda f: (-f.confidence_score, SIGNAL_PRIORITY.get(f.signal_id, 99)),
+    )
+
+    top_pick = active_bets[0] if active_bets else None
+
+    if top_pick is not None:
+        if top_pick.confidence_score >= 9:
+            effective_tier = "Tier1"
+        elif top_pick.confidence_score >= 7:
+            effective_tier = "Tier2"
+        else:
+            effective_tier = "Tier3"
     else:
-        effective_tier = base_tier
-        env_note = "env=N/A (matchup signal)"
+        effective_tier = None
 
-    hostile = _is_hostile_environment(g, top)
-    if hostile:
-        effective_tier = min_tier(effective_tier, "Tier2")
+    if top_pick is not None:
+        if top_pick.signal_id in WIND_SIGNAL_IDS:
+            env_cap = _env_ceiling_to_cap_tier(env.env_ceiling)
+            effective_tier = min_tier(effective_tier, env_cap)
+            env_note = f"env_ceiling={env.env_ceiling}"
+        else:
+            env_note = "env=N/A (matchup signal)"
+        hostile = _is_hostile_environment(g, top_pick)
+        if hostile:
+            effective_tier = min_tier(effective_tier, "Tier2")
+    else:
+        env_note = "no_active_pick"
+        hostile = False
 
-    if g.completeness.completeness_tier == "degraded":
-        effective_tier = min_tier(effective_tier, "Tier2")
-    if g.completeness.completeness_tier == "blocking":
-        effective_tier = min_tier(effective_tier, "Tier3")
+    if effective_tier is not None:
+        if g.completeness.completeness_tier == "degraded":
+            effective_tier = min_tier(effective_tier, "Tier2")
+        if g.completeness.completeness_tier == "blocking":
+            effective_tier = min_tier(effective_tier, "Tier3")
 
-    if avoids and _avoid_affects_top(avoids, top):
+    if top_pick is not None and avoids and _avoid_affects_top(avoids, top_pick):
         effective_tier = "Avoid"
 
-    # Dual LHP boosters: document only; N<50 keeps moderate tier (no upgrade to Tier1).
     tier_basis = (
-        f"signal={signal_strength}({top.signal_id}), "
+        f"confidence_top={top_pick.confidence_score if top_pick else None}"
+        f"({top_pick.signal_id if top_pick else None}), "
+        f"basis={top_pick.score_basis if top_pick else ''}, "
         f"{env_note}, "
         f"completeness={g.completeness.completeness_tier}, "
         f"hostile={hostile}"
     )
-    if top.signal_id == "LHP_FADE":
+    if top_pick is not None and top_pick.signal_id == "LHP_FADE":
         away = g.matchup.away_sp
         home_off = g.matchup.home_offense
         era_b = away.quality_tier == "strong"
@@ -625,8 +772,11 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
         output_tier=effective_tier,
         tier_basis=tier_basis,
         stake_multiplier=stake,
-        top_pick=top,
+        top_pick=top_pick,
         data_flags=data_flags,
+        all_bets=all_bets,
+        watch_list=watch_list,
+        contradicted=contradicted,
     )
 
 
@@ -708,8 +858,12 @@ def scored_game_to_eval_dict(scored: ScoredGame, session: str) -> dict[str, Any]
     total_pick: dict[str, Any] | None = None
 
     fired_sorted = sorted(
-        scored.signals_fired,
-        key=lambda s: SIGNAL_PRIORITY.get(s.signal_id, 99),
+        (
+            s
+            for s in scored.signals_fired
+            if s.confidence_score >= FULL_STAKE_THRESHOLD
+        ),
+        key=lambda s: (-s.confidence_score, SIGNAL_PRIORITY.get(s.signal_id, 99)),
     )
     for s in fired_sorted:
         pr = SIGNAL_PRIORITY.get(s.signal_id, 9)
@@ -721,6 +875,9 @@ def scored_game_to_eval_dict(scored: ScoredGame, session: str) -> dict[str, Any]
                     "odds": s.odds,
                     "reason": s.edge_basis,
                     "priority": pr,
+                    "confidence_score": s.confidence_score,
+                    "score_basis": s.score_basis,
+                    "signal_id": s.signal_id,
                 }
             )
         elif s.bet_side == "over_total":
@@ -733,11 +890,23 @@ def scored_game_to_eval_dict(scored: ScoredGame, session: str) -> dict[str, Any]
                     "odds": s.odds,
                     "reason": s.edge_basis,
                     "priority": pr,
+                    "confidence_score": s.confidence_score,
+                    "score_basis": s.score_basis,
+                    "signal_id": s.signal_id,
                 }
                 picks.append(total_pick)
             else:
                 total_pick["reason"] += " " + s.edge_basis
                 total_pick["priority"] = min(total_pick["priority"], pr)
+                if s.confidence_score > int(total_pick.get("confidence_score") or 0):
+                    total_pick["confidence_score"] = s.confidence_score
+                    total_pick["score_basis"] = s.score_basis
+                    total_pick["signal_id"] = s.signal_id
+                elif s.confidence_score == int(total_pick.get("confidence_score") or 0):
+                    tid = str(total_pick.get("signal_id") or "")
+                    total_pick["signal_id"] = (
+                        f"{tid}+{s.signal_id}" if tid and tid != s.signal_id else s.signal_id
+                    )
 
     watch = False
     watch_reason = None
@@ -771,8 +940,7 @@ def scored_game_to_eval_dict(scored: ScoredGame, session: str) -> dict[str, Any]
 
     # Legacy ``avoid``: do not conflate “venue note” with “this card is an AVOID.”
     # If any signal fires, soft environment avoids must not set avoid=True (Word
-    # brief showed picks + AVOID banner). Hard avoid = tier Avoid, or no signals
-    # but a persisted AvoidFinding (e.g. retractable roof pregame).
+    # brief showed picks + AVOID banner). Hard avoid = tier Avoid from model policy.
     hard_avoid = bool(scored.avoids) and (
         scored.output_tier == "Avoid" or not scored.signals_fired
     )

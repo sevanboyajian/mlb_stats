@@ -6,6 +6,8 @@ Reads from mlb_stats.db and outputs the formatted betting brief.
 
 CHANGE LOG (latest first)
 ──────────────────────────
+2026-04-20  Retractable roof removed as a model/brief factor (no AvoidFinding, no
+            confidence penalty, no weather-line or prior-report retractable copy).
 2026-04-19  Default brief filenames: ``brief-{slate_date}_{ET_run_stamp}_ET[ _prior].txt`` (Windows-safe);
             ``brief_log.output_file`` stores that path; legacy ``{date}_{session}.txt`` names may be archived.
 2026-04-19  ``--as-of-time`` accepts full ``YYYY-MM-DD HH:MM`` (ET) or time-only ``HH:MM`` with ``--date``.
@@ -1079,9 +1081,6 @@ def save_signal_state(conn: sqlite3.Connection, game_date: str, session: str,
         ):
             market_type = "environment"
             bet_text = "Weather-signal class (no single ticket) — see brief reason"
-        elif "RETRACTABLE ROOF" in reason_u or "ROOF STATUS" in reason_u:
-            market_type = "environment"
-            bet_text = "Wind plays pending roof status — class warning, not one ticket"
         elif "AVOID HOME ML" in reason_u and home:
             market_type = "moneyline"
             bet_text = f"Avoid {home} ML"
@@ -1449,12 +1448,6 @@ def avoid_entry_bet_fields(entry: dict) -> tuple[str, str, float | None]:
             f"Weather-driven model plays only (wind/MV-B/H3b-style edges) — "
             f"no single numbered bet{where}; venue treated as non-actionable for weather signals"
         )
-    elif "RETRACTABLE ROOF" in reason_u or "ROOF STATUS" in reason_u:
-        market = "ENV"
-        bet_text = (
-            "Wind-based model plays until roof status is known — not one fixed ML/total ticket"
-        )
-
     if bet_text is None:
         if "AVOID HOME ML" in reason_u and home:
             market = "ML"
@@ -1496,7 +1489,7 @@ def prior_avoid_outcome_lines(entry: dict) -> tuple[str, str, str] | None:
             f"  BET TO SKIP: {bet_label}",
             "  Counterfactual: N/A — this flags a class of weather-driven model plays, "
             "not one specific ML or O/U ticket at the closing line.",
-            "  Verdict: N/A — informational; see model detail for the venue / roof context.",
+            "  Verdict: N/A — informational; see model detail for venue / weather context.",
         )
     equiv = strip_avoid_bet_label(bet_label)
     home_abbr = (g.get("home_abbr") or "").strip().upper()
@@ -2743,7 +2736,6 @@ def weather_line(game: dict) -> str:
     """Return formatted weather / conditions line."""
     wind_effect = (game.get("wind_effect") or "HIGH").upper()
     roof_type   = game.get("roof_type") or "Open"
-    sky         = (game.get("sky_condition") or "").lower()
 
     parts = []
 
@@ -2753,9 +2745,7 @@ def weather_line(game: dict) -> str:
         note = game.get("wind_note") or ""
         first_sentence = note.split(".")[0] if note else f"{roof_type} — wind signals suppressed"
         parts.append(f"⚠ {first_sentence}")
-    elif wind_effect == "LOW":
-        roof_status = "closed" if "closed" in sky or "roof closed" in sky else "check roof"
-        parts.append(f"Retractable roof ({roof_status})")
+    # LOW wind_effect: no extra venue headline (temp/wind only).
 
     # Temperature
     if game.get("temp_f") is not None:
@@ -2810,8 +2800,6 @@ def _avoid_scope_line(game: dict, sigs: dict) -> str | None:
     # Fallback for older avoids: infer from reason text.
     reason = (sigs.get("avoid_reason") or "").strip()
     ru = reason.upper()
-    if "RETRACTABLE ROOF" in ru or "ROOF STATUS" in ru:
-        return "WIND SIGNALS ONLY (totals/wind edges) — other analysis OK"
     if "WIND" in ru and ("SUPPRESSED" in ru or "NO WEATHER" in ru):
         return "WIND SIGNALS ONLY (totals/wind edges) — other analysis OK"
     if "AVOID HOME ML" in ru or "AVOID AWAY ML" in ru or " ML" in ru:

@@ -145,6 +145,8 @@ class SignalFinding:
     odds: str
     edge_basis: str
     fires: bool
+    confidence_score: int = 0
+    score_basis: str = ""
 
 
 @dataclass
