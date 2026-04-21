@@ -689,6 +689,7 @@ def _build_command(job: dict) -> str:
             if job_date
             else f"python batch/jobs/schedule_pipeline_day.py --globals-only --date-et {_default_tomorrow_date_et()}"
         ),
+        "daily_backup": "python batch/utils/daily_backup.py",
     }
 
     # Never append ``# …`` for human context: Windows cmd.exe (shell=True) does not treat
@@ -734,6 +735,8 @@ def _dependency_rules() -> dict[str, list[str]]:
         "group_brief": ["load_today", "odds_pull", "load_weather"],
         "bet_ledger_sync": ["load_today"],
         "ledger_snapshot": ["load_today", "odds_pull"],
+        # Run backup only after next-day globals have been scheduled.
+        "daily_backup": ["schedule_next_day_globals"],
     }
 
 

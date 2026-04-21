@@ -426,29 +426,38 @@ def _insert_global_daily_setup_jobs(con: sqlite3.Connection, *, job_date_et: str
 
 def _insert_schedule_next_day_globals_job(
     con: sqlite3.Connection, *, job_date_et: str, groups: List[Dict[str, Any]]
-) -> tuple[int, str]:
+) -> tuple[int, int, str, str]:
     """
     One row at last group T0 + 5 min ET. Runner runs --globals-only for the *next* calendar day.
     Needed after both full-day scheduling and --groups-only (day_setup) so the evening hook
     is never omitted when globals were not inserted in the same run.
     """
     if not groups:
-        return 0, ""
+        return 0, 0, "", ""
     try:
         group_t0_by_id = {int(g["group_id"]): _parse_iso_z(str(g["start_time"])) for g in groups}
         last_t0_utc = max(group_t0_by_id.values())
         last_t0_et = last_t0_utc.replace(tzinfo=dt.timezone.utc).astimezone(_ET)
         sched_next_et = last_t0_et + dt.timedelta(minutes=5)
         sched_next_et_str = sched_next_et.strftime("%Y-%m-%d %H:%M ET")
-        n = _insert_global_job(
+        n_next = _insert_global_job(
             con,
             job_date_et=job_date_et,
             job_type="schedule_next_day_globals",
             scheduled_time_et=sched_next_et_str,
         )
-        return int(n), sched_next_et_str
+        # Daily DB backup: run immediately after schedule_next_day_globals completes.
+        sched_backup_et = sched_next_et + dt.timedelta(minutes=1)
+        sched_backup_et_str = sched_backup_et.strftime("%Y-%m-%d %H:%M ET")
+        n_backup = _insert_global_job(
+            con,
+            job_date_et=job_date_et,
+            job_type="daily_backup",
+            scheduled_time_et=sched_backup_et_str,
+        )
+        return int(n_next), int(n_backup), sched_next_et_str, sched_backup_et_str
     except Exception:
-        return 0, ""
+        return 0, 0, "", ""
 
 
 def _print_jobs_for_date(con: sqlite3.Connection, game_date_et: str, limit: int = 200) -> None:
@@ -933,12 +942,16 @@ def main() -> None:
 
     # Pre-seed next calendar day's group-0 globals (evening). Same row whether we came from full day or --groups-only.
     try:
-        inserted_next, sched_next_et_str = _insert_schedule_next_day_globals_job(
+        inserted_next, inserted_backup, sched_next_et_str, sched_backup_et_str = _insert_schedule_next_day_globals_job(
             con, job_date_et=game_date_et, groups=groups
         )
         print(
             f"[schedule] inserted schedule_next_day_globals: {inserted_next}"
             + (f" at {sched_next_et_str}" if sched_next_et_str else "")
+        )
+        print(
+            f"[schedule] inserted daily_backup: {inserted_backup}"
+            + (f" at {sched_backup_et_str}" if sched_backup_et_str else "")
         )
     except Exception as exc:
         print(f"[schedule] failed to insert schedule_next_day_globals: {exc}")
