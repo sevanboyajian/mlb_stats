@@ -2894,8 +2894,7 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
       · Final score, runs, winner, conditions
       · Closing odds and O/U outcome
       · Which model signals fired and whether they won
-      · Top Pick, next 5 Additional Picks, and Avoids with outcomes
-      · Full no-signal slate (all games accounted for)
+      · Full slate per-game bet outcomes (or NO SIGNAL)
       · Day-level P&L summary
     """
     lines = []
@@ -3018,29 +3017,8 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
             "winner": g["home_abbr"] if (hs or 0) > (as_ or 0) else g["away_abbr"],
         })
 
-    pick_entries  = sorted([e for e in evaluated if e["graded"]],
-                           key=lambda e: min(p["priority"] for p in e["graded"]))
-    avoid_entries = [e for e in evaluated if e["sigs"]["avoid"] and not e["graded"]]
-    nosig_entries = [e for e in evaluated if not e["graded"] and not e["sigs"]["avoid"]]
-    top_pick      = pick_entries[:1]
-    next_picks    = pick_entries[1:6]
-    rest_picks    = pick_entries[6:]
-
     def pnl_str(pnl):
         return f"+{pnl:.2f}u" if pnl > 0 else (f"{pnl:.2f}u" if pnl < 0 else "push")
-
-    def p_str(entry):
-        """Signal label string for retroactive display."""
-        return ", ".join(entry["sigs"]["signals"])
-
-    def summarise(entries):
-        picks = [p for e in entries for p in e["graded"]]
-        if not picks:
-            return None
-        w = sum(1 for p in picks if p["pnl"] > 0)
-        l = sum(1 for p in picks if p["pnl"] < 0)
-        p = sum(1 for p in picks if p["pnl"] == 0)
-        return w, l, p, sum(x["pnl"] for x in picks)
 
     def game_score_line(e, indent="  "):
         g = e["game"]
@@ -3134,141 +3112,43 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
         m = (r.get("market_type") or "unknown").strip() or "unknown"
         by_market.setdefault(m, []).append(r)
 
-    # Map bets back to evaluated games for display blocks
-    bet_by_game = {e["game"]["game_pk"]: e for e in evaluated}
-    top_bets  = [r for r in bet_rows if r.get("signal_at_time") == "top"]
-    next_bets = [r for r in bet_rows if r.get("signal_at_time") == "next"]
-    bet_game_pks = {r.get("game_pk") for r in bet_rows if r.get("game_pk") is not None}
-
     # ════════════════════════════════════════════════════════════════════
-    # TOP PICK
+    # FULL SLATE — per-game, per-bet grading
     # ════════════════════════════════════════════════════════════════════
-    lines.append(section("🔺  TOP PICK  —  Highest Priority Signal"))
+    lines.append(section(f"📋  FULL SLATE  ({len(evaluated)} games)"))
+    lines.append(
+        "\n  For each game: every fired model bet (if any) with WIN/LOSS/PUSH.\n"
+        "  Games with no qualifying signals show: NO SIGNAL.\n"
+    )
 
-    if top_bets:
-        b = top_bets[0]
-        e = bet_by_game.get(b["game_pk"])
-        if e:
-            g = e["game"]
-            lines.append(f"\n  {matchup_line(g)}")
-            lines.append(f"  {weather_line(g)}")
+    for e in evaluated:
+        g = e["game"]
+        lines.append(f"\n  {matchup_line(g)}")
+        lines.append(f"  {weather_line(g)}")
+        if g.get("home_score") is not None:
             lines.append(game_score_line(e))
-            ol = game_odds_line(e)
-            if ol: lines.append(ol)
-        lines.append(f"\n  ┌─────────────────────────────────────────────────────────┐")
-        lines.append(f"  │  BET:     {str(b.get('bet') or ''):<20}  ODDS: {fmt_odds(b.get('odds_taken')) if b.get('odds_taken') is not None else 'N/A':<8}        │")
-        lines.append(f"  │  SIGNAL:  {_ledger_signal_label(b.get('signal_at_time')):<47}  │")
-        res_field = (b.get("result") or "—").upper()
-        pnl_field = pnl_str(float(b.get("pnl_units") or 0.0)) if b.get("result") else "—"
-        lines.append(f"  │  RESULT:  {res_field:<20}  P&L: {pnl_field:<16}    │")
-        lines.append(f"  └─────────────────────────────────────────────────────────┘")
-        lines.append("")
-    else:
-        lines.append("\n  No TOP bet recorded in bet_ledger yesterday.\n")
+        ol = game_odds_line(e)
+        if ol:
+            lines.append(ol)
 
-    # ════════════════════════════════════════════════════════════════════
-    # ADDITIONAL MODEL SELECTIONS (next 5)
-    # ════════════════════════════════════════════════════════════════════
-    lines.append(section(f"📋  ADDITIONAL MODEL SELECTIONS  ({min(len(next_bets), 5)})"))
-    if not next_bets:
-        lines.append("\n  No NEXT bets recorded in bet_ledger yesterday.\n")
-    else:
-        for i, b in enumerate(next_bets[:5], start=2):
-            e = bet_by_game.get(b["game_pk"])
-            if e:
-                g = e["game"]
-                lines.append(f"\n  #{i}  {matchup_line(g)}")
-                lines.append(f"       {weather_line(g)}")
-                if g.get("home_score") is not None:
-                    lines.append(f"       {game_score_line(e, indent='')}")
-                ol = game_odds_line(e, indent="       ")
-                if ol:
-                    lines.append(ol)
-            res_field = (b.get("result") or "—").upper()
-            pnl_field = pnl_str(float(b.get("pnl_units") or 0.0)) if b.get("result") else "—"
-            lines.append(f"\n  ┌─────────────────────────────────────────────────────────┐")
-            lines.append(
-                f"  │  BET:     {str(b.get('bet') or ''):<20}  ODDS: "
-                f"{fmt_odds(b.get('odds_taken')) if b.get('odds_taken') is not None else 'N/A':<8}        │"
-            )
-            lines.append(f"  │  SIGNAL:  {_ledger_signal_label(b.get('signal_at_time')):<47}  │")
-            lines.append(f"  │  RESULT:  {res_field:<20}  P&L: {pnl_field:<16}    │")
-            lines.append(f"  └─────────────────────────────────────────────────────────┘")
-            lines.append("")
-
-    # Ranks #7+ from the same post-game re-run appear only under RETROACTIVE SIGNALS
-    # (not a second “next five” — avoids duplicating ADDITIONAL MODEL SELECTIONS).
-
-    # ════════════════════════════════════════════════════════════════════
-    # BETS TO AVOID
-    # ════════════════════════════════════════════════════════════════════
-    lines.append(section(f"⛔  BETS TO AVOID  ({len(avoid_entries)} flagged)"))
-    if not avoid_entries:
-        lines.append("\n  No avoid flags were active yesterday.\n")
-    else:
-        lines.append(
-            "\n  Ticket-style avoids name a side (ML / Over / Under) when possible.\n"
-            "  Environment flags discourage a class of plays (e.g. wind-only edges) — no\n"
-            "  single counterfactual bet; see BET TO SKIP lines below. (Stake 0u — info.)\n"
-        )
-        avoid_by_gpk = {
-            r["game_pk"]: r
-            for r in bet_rows
-            if (r.get("signal_at_time") or "").lower() == "avoid" and r.get("game_pk") is not None
-        }
-        for e in avoid_entries:
-            g = e["game"]
-            lines.append(f"  {matchup_line(g)}")
-            lines.append(f"  {weather_line(g)}")
-            if g["home_score"] is not None:
-                lines.append(game_score_line(e))
-            ol = game_odds_line(e)
-            if ol:
-                lines.append(ol)
-            av_lines = prior_avoid_outcome_lines(e)
-            if av_lines:
-                a, b, c = av_lines
-                lines.append(a)
-                lines.append(b)
-                lines.append(c)
-            gpk = g.get("game_pk")
-            br = avoid_by_gpk.get(gpk) if gpk is not None else None
-            if br and br.get("result"):
-                lr = (br.get("result") or "").replace("_", " ").upper()
-                lines.append(f"  Ledger match: {lr}  (recorded stake {float(br.get('stake_units') or 0):.0f}u)")
-            reason = (e["sigs"].get("avoid_reason") or "").strip()
-            if reason:
+        if e["graded"]:
+            sig_label = ", ".join(e["sigs"].get("signals") or [])
+            for pick in sorted(e["graded"], key=lambda x: x.get("priority", 99)):
+                res = (pick.get("result") or "—").strip() or "—"
+                pnl = float(pick.get("pnl") or 0.0)
+                bet = pick.get("bet") or ""
+                odds = pick.get("odds") or ""
                 lines.append(
-                    f"  Model detail: {textwrap.fill(reason, width=64, subsequent_indent='                ')}"
+                    f"  BET: {bet:<22} ODDS: {odds:<8}  "
+                    f"SIGNAL: {sig_label:<16}  RESULT: {res:<8}  P&L: {pnl_str(pnl)}"
                 )
-            lines.append("")
+        else:
+            lines.append("  NO SIGNAL")
 
-    # ════════════════════════════════════════════════════════════════════
-    # NO SIGNAL — full remaining slate
-    # ════════════════════════════════════════════════════════════════════
-    lines.append(section(f"—  NO SIGNAL  ({len(nosig_entries)} games — market efficient or no qualifying conditions)"))
-    if not nosig_entries:
-        lines.append("\n  All games had a model signal or avoid flag yesterday.\n")
-    else:
-        lines.append("")
-        if rest_picks:
-            lines.append(
-                "  ℹ  “No signal” means no qualifying pick/avoid in the forward model here.\n"
-                "     Slate ranks #7+ from the post-game re-run are under RETROACTIVE only.\n"
-            )
-        for e in nosig_entries:
-            g = e["game"]
-            lines.append(f"  {matchup_line(g)}  |  {weather_line(g)}")
-            if g["home_score"] is not None:
-                hs = g["home_score"]; as_ = g["away_score"]
-                ou = f"  |  {e['ou_label']}" if e["ou_label"] else ""
-                lines.append(f"    Final: {g['away_abbr']} {as_}  –  {g['home_abbr']} {hs}"
-                             f"  ({e['winner']} wins){ou}")
-            ol = game_odds_line(e, indent="    ")
-            if ol: lines.append(ol)
+        if e["sigs"].get("data_flags"):
             for f in e["sigs"]["data_flags"]:
-                lines.append(f"    ⚠ {f}")
-            lines.append("")
+                lines.append(f"  ⚠ {f}")
+        lines.append("")
 
     # ════════════════════════════════════════════════════════════════════
     # BET LEDGER SUMMARY (P&L source of truth)
@@ -3279,15 +3159,6 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
         f"{bet_summary['wins']}W {bet_summary['losses']}L {bet_summary['pushes']}P   "
         f"Units: {bet_summary['units']:+.2f}u   ROI: {bet_summary['roi']:.1f}%"
     )
-    if bet_summary.get("avoid_graded"):
-        lines.append(
-            f"\n  Avoid calls (graded, counterfactual):  {bet_summary['avoid_good']} good  /  "
-            f"{bet_summary['avoid_bad']} poor  /  {bet_summary['avoid_push']} push"
-        )
-    elif any((r.get("signal_at_time") or "").lower() == "avoid" for r in bet_rows):
-        lines.append(
-            "\n  Avoid calls: rows in ledger — counterfactual grades appear once games are Final."
-        )
 
     # Optional grouping by market_type
     for m, rows_m in sorted(by_market.items(), key=lambda x: x[0]):
@@ -3346,40 +3217,6 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
             + f"  ({overs/len(ou_games):.0%} over rate)"
         )
     lines.append("")
-
-    # ════════════════════════════════════════════════════════════════════
-    # RETROACTIVE SIGNALS (informational — with actual post-game wind)
-    # ════════════════════════════════════════════════════════════════════
-    retro_picks = top_pick + next_picks + rest_picks
-    # Only show retroactive picks for games that were not actually bet
-    has_new_retro = bool([e for e in retro_picks if e["game"]["game_pk"] not in bet_game_pks])
-
-    if has_new_retro:
-        lines.append(section(
-            "🔍  RETROACTIVE SIGNALS  —  Post-hoc model (incl. ranks #7+)"
-        ))
-        lines.append(
-            "\n  ℹ  Re-evaluation with final stats / recorded wind. Includes any slate\n"
-            "     priority below your TOP + five NEXT ledger slots (#7, #8, …) when\n"
-            "     those games were not in bet_ledger — not “extra” brief picks, only\n"
-            "     what the model would flag after the fact. Forward briefs did not show\n"
-            "     these as bet cards. Paper P&L = ledger sections above only.\n"
-        )
-        if not retro_picks:
-            lines.append("  No retroactive signals found either.\n")
-        for e in retro_picks:
-            g = e["game"]; p = e["graded"][0]
-            # Skip if already bet in bet_ledger
-            if g["game_pk"] in bet_game_pks:
-                continue
-            lines.append(f"  {matchup_line(g)}")
-            lines.append(f"  {weather_line(g)}")
-            lines.append(game_score_line(e))
-            lines.append(f"  BET: {p['bet']}  SIGNAL: {p_str(e)}"
-                         f"  →  {p['result']}  ({pnl_str(p['pnl'])})  [RETROACTIVE]")
-            lines.append("")
-
-    # Note: prior report P&L now uses bet_ledger only.
 
     lines.append(CAVEAT)
     return "\n".join(lines)
@@ -4268,13 +4105,8 @@ def build_docx_brief(
                 "ou_label": _ou_label(g), "runs": runs, "winner": winner,
             })
 
-        pick_entries  = sorted([e for e in evaluated if e["graded"]],
-                               key=lambda e: min(p["priority"] for p in e["graded"]))
-        avoid_entries = [e for e in evaluated if e["sigs"]["avoid"] and not e["graded"]]
-        nosig_entries = [e for e in evaluated if not e["graded"] and not e["sigs"]["avoid"]]
-        top_pick      = pick_entries[:1]
-        next_picks    = pick_entries[1:6]
-        rest_picks    = pick_entries[6:]
+        # FULL SLATE: one block per game; picks show graded table; otherwise "NO SIGNAL".
+        # (No separate "Bets to Avoid" section in prior report.)
 
         def _add_graded_pick_table(doc, graded_picks: list, sigs: dict):
             """Pick table with result and P&L columns added for prior-day grading."""
@@ -4344,92 +4176,21 @@ def build_docx_brief(
             p.paragraph_format.space_after  = Pt(2)
             p.paragraph_format.left_indent  = Inches(0.2)
 
-        # ── TOP PICK ────────────────────────────────────────────────────
-        _add_heading(doc, "🔺  Top Pick  —  Highest Priority Signal", level=2)
-        if not top_pick:
-            _add_note(doc, "No model signals fired yesterday.", color_hex="C62828")
-        else:
-            e = top_pick[0]; g = e["game"]
-            # show_picks=False: prior report uses _add_graded_pick_table instead
-            _add_matchup_block(doc, g, streaks, starters, e["sigs"],
-                               show_picks=False)
+        _add_heading(doc, f"Full Slate  ({len(evaluated)} games)", level=2)
+        for e in evaluated:
+            g = e["game"]
+            _add_matchup_block(doc, g, streaks, starters, e["sigs"], show_picks=False)
             _add_score_line(doc, e)
             _add_odds_line(doc, g)
-            _add_graded_pick_table(doc, e["graded"], e["sigs"])
-
-        # ── ADDITIONAL PICKS ─────────────────────────────────────────────
-        _add_heading(doc, f"📋  Additional Model Selections  ({len(next_picks)})", level=2)
-        if not next_picks:
-            _add_note(doc, "No additional model selections yesterday.", color_hex="475569")
-        else:
-            for i, e in enumerate(next_picks, start=2):
-                g = e["game"]
-                # Use _add_matchup_block for consistent header/weather/streak/starter
-                # but suppress its picks table — graded table is added below.
-                _add_matchup_block(doc, g, streaks, starters, e["sigs"],
-                                   show_picks=False)
-                _add_score_line(doc, e)
-                _add_odds_line(doc, g)
+            if e["graded"]:
                 _add_graded_pick_table(doc, e["graded"], e["sigs"])
-
-        if rest_picks:
-            _add_heading(doc, f"Further Signals  ({len(rest_picks)})", level=2)
-            for e in rest_picks:
-                g = e["game"]
-                _add_matchup_block(doc, g, streaks, starters, e["sigs"],
-                                   show_picks=False)
-                _add_score_line(doc, e)
-                _add_graded_pick_table(doc, e["graded"], e["sigs"])
-
-        # ── BETS TO AVOID ────────────────────────────────────────────────
-        _add_heading(doc, f"⛔  Bets to Avoid  ({len(avoid_entries)} flagged)", level=2)
-        if not avoid_entries:
-            _add_note(doc, "No avoid flags were active yesterday.", color_hex="475569")
-        else:
-            _add_note(doc, "These games were flagged to AVOID. Outcome confirms whether avoidance was correct.", color_hex="C62828")
-            for e in avoid_entries:
-                g = e["game"]
-                _add_matchup_block(doc, g, streaks, starters, e["sigs"])
-                _add_score_line(doc, e)
-                _add_odds_line(doc, g)
-
-        # ── NO SIGNAL SLATE ──────────────────────────────────────────────
-        _add_heading(doc, f"—  No Signal  ({len(nosig_entries)} games)", level=2)
-        if nosig_entries:
-            # Results table: Away | Home | Score | O/U | ML
-            tbl = doc.add_table(rows=1, cols=5)
-            tbl.style = "Table Grid"
-            tbl.autofit = False
-            widths = [1080, 1080, 2000, 2200, 3000]
-            for i, cell in enumerate(tbl.rows[0].cells):
-                cell.width = widths[i]
-            for cell, hdr in zip(tbl.rows[0].cells,
-                                  ["AWAY", "HOME", "FINAL SCORE", "O/U RESULT", "CLOSING ML"]):
-                _set_cell_bg(cell, "1F3864")
-                _cell_para(cell, hdr, bold=True, size_pt=9,
-                           color_hex="FFFFFF", align=WD_ALIGN_PARAGRAPH.CENTER)
-            for ri, e in enumerate(nosig_entries):
-                g   = e["game"]
-                hs  = g.get("home_score"); as_ = g.get("away_score")
-                hml = fmt_odds(g.get("home_ml")); aml = fmt_odds(g.get("away_ml"))
-                score_txt = (f"{g.get('away_abbr','')} {as_}  –  {g.get('home_abbr','')} {hs}  ({e['winner']} wins)"
-                             if hs is not None else "TBD")
-                bg = "F5F5F5" if ri % 2 == 0 else "FFFFFF"
-                row_cells = tbl.add_row().cells
-                for cell in row_cells:
-                    _set_cell_bg(cell, bg)
-                _cell_para(row_cells[0], g.get("away_abbr", ""), size_pt=10, color_hex="333333")
-                _cell_para(row_cells[1], f"{g.get('home_abbr','')} (h)", bold=True, size_pt=10, color_hex="1F3864")
-                _cell_para(row_cells[2], score_txt, size_pt=9, color_hex="333333")
-                _cell_para(row_cells[3], e["ou_label"] or "—", size_pt=9, color_hex="333333",
-                           align=WD_ALIGN_PARAGRAPH.CENTER)
-                ml_txt = f"{g.get('home_abbr','')} {hml} / {g.get('away_abbr','')} {aml}"
-                _cell_para(row_cells[4], ml_txt, size_pt=9, color_hex="333333")
-            doc.add_paragraph()
+            else:
+                _add_note(doc, "NO SIGNAL", italic=False, color_hex="475569")
+                doc.add_paragraph()
 
         # ── MODEL P&L SUMMARY ────────────────────────────────────────────
         _add_heading(doc, "📈  Model P&L Summary", level=2)
-        all_signal_entries = top_pick + next_picks + rest_picks
+        all_signal_entries = [e for e in evaluated if e["graded"]]
 
         def _summarise(entries):
             picks = [p for e in entries for p in e["graded"]]
@@ -4453,9 +4214,7 @@ def build_docx_brief(
                 _set_cell_bg(cell, "1F3864")
                 _cell_para(cell, hdr, bold=True, size_pt=9,
                            color_hex="FFFFFF", align=WD_ALIGN_PARAGRAPH.CENTER)
-            for label, entries in [("Top Pick", top_pick),
-                                   ("Additional (next 5)", next_picks),
-                                   ("All signals", all_signal_entries)]:
+            for label, entries in [("All signals", all_signal_entries)]:
                 s = _summarise(entries)
                 if not s: continue
                 w, l, pu, total_pnl = s
