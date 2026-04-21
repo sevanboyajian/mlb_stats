@@ -11,3 +11,7 @@ secrets.toml
 
 outputs/
 archive/
+# Local scratch / notes (never commit tokens or passwords)
+Scratch file.txt
+Scratch*.txt
+
