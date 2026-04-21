@@ -49,6 +49,13 @@ CHANGE LOG (latest first)
             so they can be tracked/grated later without generating bets.
 2026-04-17  Fix starters column name: players.throws (was throw_hand). Update
             load_starters() SELECT + mapping, and enrich_game_with_starters().
+2026-04-20  Run line analysis complete (OW era 2022-2025).
+            LHP_FADE with ERA gate: RL cover 66.1% vs 60.0% BE,
+            ROI +0.102. Added as active supplementary pick (score -1
+            vs ML). S1H2: RL at breakeven (-0.2pp), shown as
+            informational only. All other signals: ML primary only.
+            MarketSnapshot extended with rl_available, away_rl_odds,
+            home_rl_odds. LHP_FADE_RL signal added to evaluator.
 2026-04-16  Finding 5 validated: NF4 implied prob gate confirmed as 60–67%.
             55–60% band shows only 5.5pp edge (not significant). Gate constants
             unchanged (already 0.60/0.67). Comments, signal reason, and constant
@@ -3546,9 +3553,32 @@ def build_primary_brief(games, streaks, starters, game_date,
         if alert:
             lines.append("")
             lines.append(alert)
+        score_txt = ""
+        if p.get("confidence_score") is not None:
+            score_txt = f"[{int(p['confidence_score'])}/10]"
+
         lines.append(f"\n  ┌─────────────────────────────────────────────────────────┐")
-        lines.append(f"  │  BET:     {p['bet']:<20}  ODDS: {p['odds']:<8}        │")
+        lines.append(
+            f"  │  BET:     {p['bet']:<20}  ODDS: {p['odds']:<8} {score_txt:<7} │"
+        )
         lines.append(f"  │  SIGNAL:  {', '.join(top['sigs']['signals']):<47}  │")
+        if p.get("alt"):
+            alt = p["alt"]
+            alt_score = f"[{int(alt.get('confidence_score') or 0)}/10]"
+            lines.append(
+                f"  │  ALT:     {alt['bet']:<20}  ODDS: {alt['odds']:<8} {alt_score:<7} │"
+            )
+            note = str(alt.get("note") or "")
+            if note:
+                lines.append(f"  │           {note:<53}│")
+        if p.get("info"):
+            info = p["info"]
+            lines.append(
+                f"  │  INFO:    {info['bet']:<20}  ODDS: {info['odds']:<8}         │"
+            )
+            note = str(info.get("note") or "")
+            if note:
+                lines.append(f"  │           {note:<53}│")
         lines.append(f"  └─────────────────────────────────────────────────────────┘")
         lines.append(f"\n  {odds_summary_line(g)}")
         lines.append(f"\n  REASON: {textwrap.fill(p['reason'], width=66, subsequent_indent='          ')}")
@@ -3575,7 +3605,33 @@ def build_primary_brief(games, streaks, starters, game_date,
         if alert:
             lines.append("")
             lines.append(alert)
-        lines.append(f"       BET: {best['bet']:<20} ODDS: {best['odds']:<8} SIGNAL: {', '.join(sigs['signals'])}")
+        score_txt = ""
+        if best.get("confidence_score") is not None:
+            score_txt = f"[{int(best['confidence_score'])}/10]"
+        lines.append(
+            f"       BET: {best['bet']:<20} ODDS: {best['odds']:<8} {score_txt:<7} SIGNAL: {', '.join(sigs['signals'])}"
+        )
+        if best.get("alt"):
+            alt = best["alt"]
+            alt_score = f"[{int(alt.get('confidence_score') or 0)}/10]"
+            lines.append(
+                f"       ALT: {alt['bet']:<20} ODDS: {alt['odds']:<8} {alt_score:<7}"
+            )
+            note = str(alt.get("note") or "")
+            if note:
+                lines.append(
+                    f"            {textwrap.fill(note, width=66, subsequent_indent='            ')}"
+                )
+        if best.get("info"):
+            info = best["info"]
+            lines.append(
+                f"       INFO: {info['bet']:<19} ODDS: {info['odds']:<8}"
+            )
+            note = str(info.get("note") or "")
+            if note:
+                lines.append(
+                    f"             {textwrap.fill(note, width=66, subsequent_indent='             ')}"
+                )
         lines.append(f"       {textwrap.fill(best['reason'], width=66, subsequent_indent='       ')}")
         if sigs["data_flags"]:
             for f in sigs["data_flags"]:

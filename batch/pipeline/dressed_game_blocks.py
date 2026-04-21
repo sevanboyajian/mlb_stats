@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import datetime as dt
 import sqlite3
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from batch.ingestion.load_odds import implied_prob as american_to_implied
@@ -117,6 +117,12 @@ class MarketSnapshot:
     total_close: float | None
     over_odds: int | None
     under_odds: int | None
+    # Run line (spread) snapshot (usually ±1.5 in MLB)
+    home_rl_line: float | None
+    away_rl_line: float | None
+    home_rl_odds: int | None
+    away_rl_odds: int | None
+    rl_available: bool
     home_in_fade_band: bool
     home_in_heavy_band: bool
     home_is_dog: bool
@@ -518,6 +524,11 @@ def _empty_market_snapshot() -> MarketSnapshot:
         total_close=None,
         over_odds=None,
         under_odds=None,
+        home_rl_line=None,
+        away_rl_line=None,
+        home_rl_odds=None,
+        away_rl_odds=None,
+        rl_available=False,
         home_in_fade_band=False,
         home_in_heavy_band=False,
         home_is_dog=False,
@@ -850,6 +861,21 @@ def dress_full_game_row(con: sqlite3.Connection, row: dict[str, Any]) -> FullyDr
     )
 
     market = build_market_snapshot_from_odds_rows(bundle.odds_rows, row.get("game_start_utc"))
+    # Run line fields are sourced from the caller's game row (load_games join),
+    # not from game_odds snapshots.
+    hrl_line = row.get("home_rl")
+    arl_line = row.get("away_rl")
+    hrl_odds = row.get("home_rl_odds")
+    arl_odds = row.get("away_rl_odds")
+    rl_avail = (hrl_odds is not None) or (arl_odds is not None)
+    market = replace(
+        market,
+        home_rl_line=float(hrl_line) if hrl_line is not None else None,
+        away_rl_line=float(arl_line) if arl_line is not None else None,
+        home_rl_odds=int(hrl_odds) if hrl_odds is not None else None,
+        away_rl_odds=int(arl_odds) if arl_odds is not None else None,
+        rl_available=bool(rl_avail),
+    )
     comp = build_data_completeness(env, matchup, market)
 
     return FullyDressedGame(

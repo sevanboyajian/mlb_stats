@@ -46,9 +46,10 @@ SIGNAL_PRIORITY: dict[str, int] = {
     "S1H2": 1,
     "MV-F": 2,
     "LHP_FADE": 3,
-    "MV-B": 4,
-    "S1": 5,
-    "H3b": 6,
+    "LHP_FADE_RL": 4,
+    "MV-B": 5,
+    "S1": 6,
+    "H3b": 7,
 }
 
 SIGNAL_STRENGTH: dict[str, str] = {
@@ -57,6 +58,7 @@ SIGNAL_STRENGTH: dict[str, str] = {
     "MV-B": "strong",
     "H3b": "moderate",
     "LHP_FADE": "moderate",
+    "LHP_FADE_RL": "moderate",
     "S1": "weak",
 }
 
@@ -67,6 +69,7 @@ SIGNAL_BASE_SCORE: dict[str, int] = {
     "MV-F": 8,
     "MV-B": 7,
     "LHP_FADE": 7,
+    "LHP_FADE_RL": 6,
     "S1": 5,
     "H3b": 3,
     "NF4": 3,
@@ -81,6 +84,14 @@ def _fmt_odds(val: Any) -> str:
         return "N/A"
     v = int(val)
     return f"+{v}" if v > 0 else str(v)
+
+
+def _breakeven(odds: int) -> float:
+    """Return breakeven win probability for American odds (e.g., -150, +120)."""
+    o = int(odds)
+    if o < 0:
+        return (-o) / ((-o) + 100.0)
+    return 100.0 / (o + 100.0)
 
 
 def _gdb():
@@ -193,7 +204,9 @@ def _eval_mv_f(g: FullyDressedGame, s1h2_fired: bool) -> SignalFinding:
     )
 
 
-def _eval_lhp_fade(g: FullyDressedGame, game_month: int, s1h2_fired: bool) -> SignalFinding:
+def _eval_lhp_fade(
+    g: FullyDressedGame, game_month: int, s1h2_fired: bool
+) -> list[SignalFinding]:
     gdb = _gdb()
     mkt = g.market
     away = g.matchup.away_sp
@@ -245,7 +258,7 @@ def _eval_lhp_fade(g: FullyDressedGame, game_month: int, s1h2_fired: bool) -> Si
             f"lhp_fade_blocked={g.completeness.lhp_fade_blocked} s1h2_active={s1h2_fired} "
             f"month={game_month} in_ok={game_month in gdb.NF4_MONTHS_OK}{boost_block}"
         )
-    return SignalFinding(
+    ml_finding = SignalFinding(
         signal_id="LHP_FADE",
         signal_strength=SIGNAL_STRENGTH["LHP_FADE"],
         bet_side="away_ml",
@@ -253,6 +266,32 @@ def _eval_lhp_fade(g: FullyDressedGame, game_month: int, s1h2_fired: bool) -> Si
         edge_basis=reason,
         fires=fires,
     )
+
+    rl_finding: SignalFinding | None = None
+    # Supplementary RL — only when ERA gate confirmed and RL odds are present.
+    if (
+        away.quality_tier == "strong"
+        and mkt.rl_available
+        and mkt.away_rl_odds is not None
+    ):
+        be = _breakeven(int(mkt.away_rl_odds))
+        rl_finding = SignalFinding(
+            signal_id="LHP_FADE_RL",
+            signal_strength="moderate",
+            bet_side="away_rl",
+            odds=_fmt_odds(mkt.away_rl_odds),
+            edge_basis=(
+                "LHP_FADE supplementary RL — ERA gate confirmed. "
+                f"OW era 2022-2025: 66.1% cover rate vs {be:.1%} breakeven. "
+                "Higher hit rate than ML at lower ROI per unit. "
+                "Choose ML for max ROI, RL for higher hit rate."
+            ),
+            fires=bool(fires),
+            confidence_score=0,  # computed from ML score later (ML-1)
+            score_basis="pending",
+        )
+
+    return [f for f in (ml_finding, rl_finding) if f is not None]
 
 
 def _eval_mv_b(g: FullyDressedGame, game_month: int) -> SignalFinding:
@@ -579,10 +618,11 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
     mvb = _eval_mv_b(g, game_month)
     h3b = _eval_h3b(g, mvb.fires)
 
+    lhp_findings = _eval_lhp_fade(g, game_month, s1h2_fired)
     all_findings = [
         s1h2,
         _eval_mv_f(g, s1h2_fired),
-        _eval_lhp_fade(g, game_month, s1h2_fired),
+        *lhp_findings,
         mvb,
         _eval_s1(g, home_streak, s1h2_fired),
         h3b,
@@ -689,12 +729,25 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
         finding.confidence_score = score
         finding.score_basis = basis
 
+    # LHP_FADE_RL score is derived from the ML score (ML - 1).
+    ml = next((f for f in fired if f.signal_id == "LHP_FADE"), None)
+    rl = next((f for f in fired if f.signal_id == "LHP_FADE_RL"), None)
+    if ml is not None and rl is not None:
+        rl.confidence_score = max(1, int(ml.confidence_score) - 1)
+        rl.score_basis = (
+            f"ML score {ml.confidence_score} minus 1 (RL less confirmed, n=56)"
+        )
+
     all_bets = sorted(
         fired,
         key=lambda f: (-f.confidence_score, SIGNAL_PRIORITY.get(f.signal_id, 99)),
     )
     active_bets = sorted(
-        [f for f in fired if f.confidence_score >= FULL_STAKE_THRESHOLD],
+        [
+            f
+            for f in fired
+            if f.confidence_score >= FULL_STAKE_THRESHOLD and f.signal_id != "LHP_FADE_RL"
+        ],
         key=lambda f: (-f.confidence_score, SIGNAL_PRIORITY.get(f.signal_id, 99)),
     )
     watch_list = sorted(
@@ -836,6 +889,8 @@ def scored_game_to_eval_dict(scored: ScoredGame, session: str) -> dict[str, Any]
         elif s.signal_id == "LHP_FADE":
             legacy_signals.append("LHP_FADE")
             legacy_signals.append("NF4")
+        elif s.signal_id == "LHP_FADE_RL":
+            legacy_signals.append("LHP_FADE_RL")
         else:
             legacy_signals.append(s.signal_id)
 
@@ -857,29 +912,58 @@ def scored_game_to_eval_dict(scored: ScoredGame, session: str) -> dict[str, Any]
     picks: list[dict[str, Any]] = []
     total_pick: dict[str, Any] | None = None
 
+    lhp_rl = next((s for s in scored.signals_fired if s.signal_id == "LHP_FADE_RL"), None)
     fired_sorted = sorted(
         (
             s
             for s in scored.signals_fired
             if s.confidence_score >= FULL_STAKE_THRESHOLD
+            and s.signal_id != "LHP_FADE_RL"  # rendered under LHP_FADE as ALT
         ),
         key=lambda s: (-s.confidence_score, SIGNAL_PRIORITY.get(s.signal_id, 99)),
     )
     for s in fired_sorted:
         pr = SIGNAL_PRIORITY.get(s.signal_id, 9)
         if s.bet_side == "away_ml":
-            picks.append(
-                {
-                    "bet": f"{ids.away_team_abbr} ML",
-                    "market": "ML",
-                    "odds": s.odds,
-                    "reason": s.edge_basis,
-                    "priority": pr,
-                    "confidence_score": s.confidence_score,
-                    "score_basis": s.score_basis,
-                    "signal_id": s.signal_id,
+            pick = {
+                "bet": f"{ids.away_team_abbr} ML",
+                "market": "ML",
+                "odds": s.odds,
+                "reason": s.edge_basis,
+                "priority": pr,
+                "confidence_score": s.confidence_score,
+                "score_basis": s.score_basis,
+                "signal_id": s.signal_id,
+            }
+            # LHP_FADE: show RL as an alternative line (not a separate pick card).
+            if s.signal_id == "LHP_FADE" and lhp_rl is not None:
+                rl_line = mkt.away_rl_line
+                bet = (
+                    f"{ids.away_team_abbr} {rl_line:+g}"
+                    if rl_line is not None
+                    else f"{ids.away_team_abbr} +1.5"
+                )
+                pick["alt"] = {
+                    "bet": bet,
+                    "odds": lhp_rl.odds,
+                    "confidence_score": lhp_rl.confidence_score,
+                    "note": "Higher hit rate (66%) at lower ROI per unit.",
+                    "signal_id": "LHP_FADE_RL",
                 }
-            )
+            # S1H2: show RL as informational only (no score).
+            if s.signal_id == "S1H2" and mkt.rl_available and mkt.away_rl_odds is not None:
+                rl_line = mkt.away_rl_line
+                bet = (
+                    f"{ids.away_team_abbr} {rl_line:+g}"
+                    if rl_line is not None
+                    else f"{ids.away_team_abbr} +1.5"
+                )
+                pick["info"] = {
+                    "bet": bet,
+                    "odds": _fmt_odds(mkt.away_rl_odds),
+                    "note": "RL at breakeven — ML is the preferred bet.",
+                }
+            picks.append(pick)
         elif s.bet_side == "over_total":
             tline = mkt.total_current
             bet_txt = f"OVER {tline}" if tline is not None else "OVER"
