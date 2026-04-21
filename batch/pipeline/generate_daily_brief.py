@@ -3117,9 +3117,26 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
     # ════════════════════════════════════════════════════════════════════
     lines.append(section(f"📋  FULL SLATE  ({len(evaluated)} games)"))
     lines.append(
-        "\n  For each game: every fired model bet (if any) with WIN/LOSS/PUSH.\n"
-        "  Games with no qualifying signals show: NO SIGNAL.\n"
+        "\n  For each game: prints a moneyline (ML) line and a totals (O/U) line.\n"
+        "  If a model signal fired for that market, it is shown with P&L.\n"
+        "  If not, SIGNAL shows 'No Signal' and P&L is N/A.\n"
     )
+
+    def _clean_result(res: str) -> str:
+        r = (res or "").upper()
+        if "WIN" in r:
+            return "WIN"
+        if "LOSS" in r:
+            return "LOSS"
+        if "PUSH" in r:
+            return "PUSH"
+        return (res or "—").strip() or "—"
+
+    def _best_pick_for_market(graded: list, market: str) -> dict | None:
+        picks = [p for p in graded if (p.get("market") or "").upper() == market.upper()]
+        if not picks:
+            return None
+        return sorted(picks, key=lambda x: x.get("priority", 99))[0]
 
     for e in evaluated:
         g = e["game"]
@@ -3131,19 +3148,51 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
         if ol:
             lines.append(ol)
 
-        if e["graded"]:
-            sig_label = ", ".join(e["sigs"].get("signals") or [])
-            for pick in sorted(e["graded"], key=lambda x: x.get("priority", 99)):
-                res = (pick.get("result") or "—").strip() or "—"
-                pnl = float(pick.get("pnl") or 0.0)
-                bet = pick.get("bet") or ""
-                odds = pick.get("odds") or ""
+        sig_label = ", ".join(e["sigs"].get("signals") or []) or "No Signal"
+
+        # ML line
+        ml_pick = _best_pick_for_market(e.get("graded") or [], "ML")
+        if ml_pick:
+            lines.append(
+                f"  BET LINE: {ml_pick.get('bet',''):<12} | SIGNAL: {sig_label:<10} | "
+                f"RESULT: {_clean_result(ml_pick.get('result')):<4} | P&L: {pnl_str(float(ml_pick.get('pnl') or 0.0))}"
+            )
+        else:
+            winner = e.get("winner") or ""
+            lines.append(
+                f"  BET LINE: {winner} ML{' ' * max(0, 9-len(winner))} | SIGNAL: No Signal  | "
+                f"RESULT: WIN  | P&L: N/A"
+            )
+
+        # TOTAL line (always show the closing-line outcome side)
+        tot = g.get("total_line")
+        runs = e.get("runs")
+        if tot is not None and runs is not None:
+            if runs > tot:
+                outcome_bet = f"OVER {tot}"
+                outcome_res = "WIN"
+            elif runs < tot:
+                outcome_bet = f"UNDER {tot}"
+                outcome_res = "WIN"
+            else:
+                outcome_bet = f"PUSH {tot}"
+                outcome_res = "PUSH"
+
+            tot_pick = _best_pick_for_market(e.get("graded") or [], "TOTAL")
+            if tot_pick:
                 lines.append(
-                    f"  BET: {bet:<22} ODDS: {odds:<8}  "
-                    f"SIGNAL: {sig_label:<16}  RESULT: {res:<8}  P&L: {pnl_str(pnl)}"
+                    f"  BET LINE: {tot_pick.get('bet',''):<12} | SIGNAL: {sig_label:<10} | "
+                    f"RESULT: {_clean_result(tot_pick.get('result')):<4} | P&L: {pnl_str(float(tot_pick.get('pnl') or 0.0))}"
+                )
+            else:
+                lines.append(
+                    f"  BET LINE: {outcome_bet:<12} | SIGNAL: No Signal  | "
+                    f"RESULT: {outcome_res:<4} | P&L: N/A"
                 )
         else:
-            lines.append("  NO SIGNAL")
+            lines.append(
+                "  BET LINE: TOTAL N/A     | SIGNAL: No Signal  | RESULT: —    | P&L: N/A"
+            )
 
         if e["sigs"].get("data_flags"):
             for f in e["sigs"]["data_flags"]:
@@ -4176,17 +4225,71 @@ def build_docx_brief(
             p.paragraph_format.space_after  = Pt(2)
             p.paragraph_format.left_indent  = Inches(0.2)
 
+        def _clean_result(res: str) -> str:
+            r = (res or "").upper()
+            if "WIN" in r:
+                return "WIN"
+            if "LOSS" in r:
+                return "LOSS"
+            if "PUSH" in r:
+                return "PUSH"
+            return (res or "—").strip() or "—"
+
+        def _best_pick_for_market(graded: list, market: str) -> dict | None:
+            picks = [p for p in graded if (p.get("market") or "").upper() == market.upper()]
+            if not picks:
+                return None
+            return sorted(picks, key=lambda x: x.get("priority", 99))[0]
+
         _add_heading(doc, f"Full Slate  ({len(evaluated)} games)", level=2)
         for e in evaluated:
             g = e["game"]
             _add_matchup_block(doc, g, streaks, starters, e["sigs"], show_picks=False)
             _add_score_line(doc, e)
             _add_odds_line(doc, g)
-            if e["graded"]:
-                _add_graded_pick_table(doc, e["graded"], e["sigs"])
+
+            sig_label = ", ".join(e["sigs"].get("signals") or []) or "No Signal"
+
+            # ML bet line
+            ml_pick = _best_pick_for_market(e.get("graded") or [], "ML")
+            if ml_pick:
+                txt = (
+                    f"BET LINE: {ml_pick.get('bet','')}  | SIGNAL: {sig_label}  | "
+                    f"RESULT: {_clean_result(ml_pick.get('result'))}  | "
+                    f"P&L: {('+' if float(ml_pick.get('pnl') or 0.0) > 0 else '')}{float(ml_pick.get('pnl') or 0.0):.2f}u"
+                )
             else:
-                _add_note(doc, "NO SIGNAL", italic=False, color_hex="475569")
-                doc.add_paragraph()
+                txt = f"BET LINE: {e.get('winner','')} ML  | SIGNAL: No Signal  | RESULT: WIN  | P&L: N/A"
+            _add_note(doc, txt, italic=False, color_hex="333333")
+
+            # TOTAL bet line (closing outcome side)
+            tot = g.get("total_line")
+            runs = e.get("runs")
+            if tot is not None and runs is not None:
+                if runs > tot:
+                    outcome_bet = f"OVER {tot}"
+                    outcome_res = "WIN"
+                elif runs < tot:
+                    outcome_bet = f"UNDER {tot}"
+                    outcome_res = "WIN"
+                else:
+                    outcome_bet = f"PUSH {tot}"
+                    outcome_res = "PUSH"
+
+                tot_pick = _best_pick_for_market(e.get("graded") or [], "TOTAL")
+                if tot_pick:
+                    txt = (
+                        f"BET LINE: {tot_pick.get('bet','')}  | SIGNAL: {sig_label}  | "
+                        f"RESULT: {_clean_result(tot_pick.get('result'))}  | "
+                        f"P&L: {('+' if float(tot_pick.get('pnl') or 0.0) > 0 else '')}{float(tot_pick.get('pnl') or 0.0):.2f}u"
+                    )
+                else:
+                    txt = f"BET LINE: {outcome_bet}  | SIGNAL: No Signal  | RESULT: {outcome_res}  | P&L: N/A"
+            else:
+                txt = "BET LINE: TOTAL N/A  | SIGNAL: No Signal  | RESULT: —  | P&L: N/A"
+            _add_note(doc, txt, italic=False, color_hex="333333")
+
+            doc.add_paragraph()
 
         # ── MODEL P&L SUMMARY ────────────────────────────────────────────
         _add_heading(doc, "📈  Model P&L Summary", level=2)
