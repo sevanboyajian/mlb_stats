@@ -90,19 +90,6 @@ SIGNAL_DISPLAY_NAME: dict[str, str] = {
     "S6": "Hot pitcher fade",
 }
 
-# For layered “Signal stack” (Core / Support / Extras) in action briefs
-SIGNAL_BRIEF_CATEGORY: dict[str, str] = {
-    "S1H2": "core",
-    "LHP_FADE": "core",
-    "MV-F": "support",
-    "LHP_FADE_RL": "support",
-    "NF4": "support",
-    "MV-B": "extras",
-    "H3b": "extras",
-    "S1": "extras",
-    "JulyOVER": "extras",
-}
-
 BETTING_THRESHOLD = 5
 FULL_STAKE_THRESHOLD = 7
 
@@ -128,52 +115,82 @@ def signal_display_name(signal_id: str) -> str:
     return SIGNAL_DISPLAY_NAME.get(raw, raw)
 
 
+def aggregate_score_to_confidence_pct(score: int) -> int:
+    """Map bucket aggregate (sum of per-signal 1–10 scores on that side) to 50–95%."""
+    s = int(score)
+    return min(95, max(50, int(50 + (s - 5) * 2)))
+
+
 def format_aggregate_for_brief(aggregate: int | None, tier: str | None) -> str:
     """
-    Aggregated best-side total score (sum of per-signal 1–10 scores on that side), not
-    a single-signal 1–10. ``Tier1`` uses [HIGH n]; otherwise [n].
+    Aggregated bucket total from ``score_game`` (not a single-signal 1–10) → display
+    ``[HIGH · 95%]`` / ``[MED · XX%]`` / ``[LOW · XX%]``. Percent uses
+    ``min(95, max(50, int(50 + (score - 5) * 2)))``. HIGH / MED / LOW follow
+    ``output_tier``; if tier is missing, infer from the same 10 / 7 / 5 cutoffs as
+    ``score_game``.
     """
     if aggregate is None:
         return ""
     n = int(aggregate)
-    if (tier or "").strip() == "Tier1" and n > 0:
-        return f"[HIGH {n}]"
-    if n > 0:
-        return f"[{n}]"
-    return ""
+    if n <= 0:
+        return ""
+    pct = aggregate_score_to_confidence_pct(n)
+    t = (tier or "").strip()
+    if t == "Tier1":
+        band = "HIGH"
+    elif t == "Tier2":
+        band = "MED"
+    elif t == "Tier3":
+        band = "LOW"
+    else:
+        band = "HIGH" if n >= 10 else ("MED" if n >= 7 else "LOW")
+    return f"[{band} · {pct}%]"
 
 
-def format_signal_brief_text(signal_ids: list[str]) -> str:
-    """
-    Build the multi-line "Signal stack" (Core / Support / Extras) for the brief.
-    """
-    seen: set[str] = set()
-    core: list[tuple[int, str]] = []
-    support: list[tuple[int, str]] = []
-    extras: list[tuple[int, str]] = []
-    for sid in signal_ids:
+def _dedup_signal_id_scores(
+    id_score_pairs: list[tuple[str, int]],
+) -> list[tuple[str, int]]:
+    """One row per ``signal_id``, highest ``confidence_score`` wins; sort score desc, then id."""
+    best: dict[str, int] = {}
+    for sid, sc in id_score_pairs:
         s = (sid or "").strip()
-        if not s or s in seen:
+        if not s:
             continue
-        seen.add(s)
-        cat = SIGNAL_BRIEF_CATEGORY.get(s)
-        if not cat:
-            continue
-        label = signal_display_name(s)
+        v = int(sc)
+        if s not in best or v > best[s]:
+            best[s] = v
+    return sorted(best.items(), key=lambda x: (-x[1], x[0]))
+
+
+def format_signal_brief_scored(
+    id_score_pairs: list[tuple[str, int]],
+) -> str:
+    """
+    Build the "Signal stack" for the brief: human-readable labels only, sorted by
+    per-signal ``confidence_score`` (descending), then grouped:
+    score >= 7 → Core, 5–6 → Support, <= 4 → Minor.
+    """
+    ordered = _dedup_signal_id_scores(id_score_pairs)
+    core: list[str] = []
+    support: list[str] = []
+    minor: list[str] = []
+    for sid, sc in ordered:
+        label = signal_display_name(sid)
         if not label:
             continue
-        pr = SIGNAL_PRIORITY.get(s, 99)
-        bucket = core if cat == "core" else (support if cat == "support" else extras)
-        bucket.append((pr, label))
-    for bucket in (core, support, extras):
-        bucket.sort(key=lambda t: t[0])
+        if sc >= 7:
+            core.append(label)
+        elif sc >= 5:
+            support.append(label)
+        else:
+            minor.append(label)
     lines: list[str] = ["Signal stack"]
     if core:
-        lines.append("  Core: " + " · ".join(t[1] for t in core))
+        lines.append("  Core: " + " · ".join(core))
     if support:
-        lines.append("  Support: " + " · ".join(t[1] for t in support))
-    if extras:
-        lines.append("  Extras: " + " · ".join(t[1] for t in extras))
+        lines.append("  Support: " + " · ".join(support))
+    if minor:
+        lines.append("  Minor: " + " · ".join(minor))
     if len(lines) == 1:
         return ""
     return "\n".join(lines)
@@ -885,7 +902,7 @@ def scored_game_to_eval_dict(scored: ScoredGame, session: str) -> dict[str, Any]
     ids = g.identifiers
     mkt = g.market
 
-    # Internal ids (same order as model fires) + July reinforcer as synthetic tag
+    # Internal ids (model fire order) + July reinforcer as synthetic tag (analytics)
     internal_signal_ids: list[str] = [s.signal_id for s in scored.signals_fired]
 
     gdb = _gdb()
@@ -903,8 +920,23 @@ def scored_game_to_eval_dict(scored: ScoredGame, session: str) -> dict[str, Any]
     if july_ok and (fired_id_set & {"H3b", "MV-B"}) and "JulyOVER" not in internal_signal_ids:
         internal_signal_ids.append("JulyOVER")
 
-    # Customer briefs: short labels only (no S1H2, MV-F, H3b, etc.)
-    display_signals: list[str] = [signal_display_name(sid) for sid in internal_signal_ids]
+    # Brief: (signal_id, per-signal confidence) for display grouping — sorted by score in output
+    brief_findings: list[tuple[str, int]] = [
+        (s.signal_id, int(s.confidence_score or 0)) for s in scored.signals_fired
+    ]
+    if july_ok and (fired_id_set & {"H3b", "MV-B"}) and "JulyOVER" not in {
+        a for a, _ in brief_findings
+    }:
+        july_sc = 5
+        for s in scored.signals_fired:
+            if s.signal_id in ("H3b", "MV-B"):
+                july_sc = max(july_sc, int(s.confidence_score or 0))
+        brief_findings.append(("JulyOVER", july_sc))
+
+    # Customer briefs: reader labels, best score per id, ordered by score (high → low)
+    display_signals: list[str] = [
+        signal_display_name(sid) for sid, _ in _dedup_signal_id_scores(brief_findings)
+    ]
 
     picks: list[dict[str, Any]] = []
     total_pick: dict[str, Any] | None = None
@@ -1055,7 +1087,7 @@ def scored_game_to_eval_dict(scored: ScoredGame, session: str) -> dict[str, Any]
         "signals": display_signals,
         "signal_ids": internal_signal_ids,
         "picks": picks,
-        "signal_brief": format_signal_brief_text(internal_signal_ids),
+        "signal_brief": format_signal_brief_scored(brief_findings),
         "best_aggregate_score": int(scored.best_aggregate_score or 0),
         "avoid": hard_avoid,
         "avoid_scope": avoid_scope,

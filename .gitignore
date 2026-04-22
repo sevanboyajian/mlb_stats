@@ -6,6 +6,7 @@ mlb_stats.db
 mlb_stats.db-shm
 mlb_stats.db-wal
 
+backups/daily/*.db
 .env
 secrets.toml
 

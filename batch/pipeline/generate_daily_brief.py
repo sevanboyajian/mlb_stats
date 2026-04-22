@@ -2750,9 +2750,10 @@ def evaluate_signals(
 
     Flow: ``enrich_game`` → ``score_game`` → ``scored_game_to_eval_dict``. Extra keys:
     ``output_tier``, ``tier_basis``, ``stake_multiplier`` (from ``ScoredGame``);
-    ``best_aggregate_score``; ``signal_brief`` (Core / Support / Extras text).
+    ``best_aggregate_score``; ``signal_brief`` (Core / Support / Minor by per-signal score).
     Per-pick ``aggregate_score`` = sum of 1–10 signal scores in that bet bucket
-    (ML/total/…); not a single-signal 1–10. ``signals`` = short reader labels
+    (ML/total/…); the brief shows ``[HIGH · nn%]`` / ``[MED · nn%]`` / ``[LOW · nn%]``
+    (tier label + percent from that aggregate). ``signals`` = short reader labels
     (no internal codes); ``signal_ids`` = internal ids for filters and analytics.
     When ``verbose`` is True, prints tier_basis per game to stdout.
     When ``debug_wind`` is True, prints a wind classification dump per game (DB vs dressed env).
