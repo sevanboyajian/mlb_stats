@@ -848,7 +848,8 @@ CREATE TABLE IF NOT EXISTS brief_log (
     generated_at    TEXT    NOT NULL,
     games_covered   INTEGER,
     picks_count     INTEGER,
-    output_file     TEXT
+    output_file     TEXT,
+    game_group_id   INTEGER
 );
 
 

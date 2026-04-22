@@ -8,6 +8,12 @@ Polls pipeline_jobs and runs due jobs (single-threaded) in scheduled_time order.
 
 CHANGE LOG (latest first)
 ────────────────────────
+2026-04-22  ``_group_brief_cli_suffix``: pass ``--game-group-id`` for ``group_brief`` so
+            ``brief_log`` duplicate checks and bet_ledger materialization are not skipped after
+            the first same-session group run.
+2026-04-22  ``_gdb_as_of_suffix``: pass America/New_York wall time when the job is dequeued
+            (not ``pipeline_jobs.scheduled_time_et``) so ``generate_daily_brief`` timestamps
+            and hybrid session match actual execution; still satisfies ``--as-of`` for rc≠2.
 2026-04-17  ``_build_command``: ``odds_pull`` includes ``--pregame`` (required by load_odds.py);
             ``--date job_date_et`` and ``--force`` when slate date is not local today;
             ``odds_check`` / ``ledger_snapshot`` pass ``--date`` so jobs match the slate.
@@ -70,7 +76,7 @@ CHANGE LOG (latest first)
             updating DB state. Useful to validate schedule completeness safely.
 2026-04-16  Initial version: single-threaded pipeline runner for pipeline_jobs.
 2026-04-16  Compatibility: pipeline_jobs is job_type-driven (no command column);
-            runner derives commands from job_type and uses scheduled_time_et when present.
+            runner derives commands from job_type; brief jobs get --as-of from wall-clock ET at run.
 
 Rules:
 - Only runs jobs with status='pending' and scheduled_time <= now
@@ -637,20 +643,26 @@ def _table_columns(con: sqlite3.Connection, table: str) -> set[str]:
     except Exception:
         return set()
 
-def _gdb_as_of_suffix(job: dict) -> str:
+def _gdb_as_of_suffix(_job: dict) -> str:
     """
-    Append --as-of for generate_daily_brief hybrid session resolution (scheduled ET instant).
-    Falls back to job_date_et at noon if scheduled_time_et is missing.
+    Append --as-of for generate_daily_brief (hybrid session + run timestamps).
+
+    Uses **America/New_York wall time at the moment the command is built** (when a due job
+    is dequeued in the run loop), not the row's ``scheduled_time_et``. That way
+    ``brief_log.generated_at``, default filenames, and email bodies align with when the
+    process actually runs; slate filtering uses the same clock.
+
+    The ``_job`` argument is unused but kept for call-site stability. For reproducible
+    backtests, run generate_daily_brief from the shell with an explicit ``--as-of`` instead
+    of the pipeline.
     """
-    ste = str(job.get("scheduled_time_et") or "").strip()
-    jd = str(job.get("job_date_et") or "").strip()
-    if ste.endswith(" ET"):
-        base = ste[:-2].strip()
-        if len(base) >= 10:
-            return f' --as-of "{base}"'
-    if jd:
-        return f' --as-of "{jd} 12:00"'
-    return ""
+    try:
+        from zoneinfo import ZoneInfo
+
+        w = dt.datetime.now(ZoneInfo("America/New_York")).replace(microsecond=0)
+    except Exception:
+        w = dt.datetime.now()
+    return f' --as-of "{w.strftime("%Y-%m-%d %H:%M")}"'
 
 
 def _build_command(job: dict) -> str:
@@ -743,12 +755,29 @@ def _build_command(job: dict) -> str:
     if not base:
         return ""
     # Hybrid session CLI: generate_daily_brief needs a clock for non-prior sessions.
-    # Always append --as-of for scheduled briefs so they never fail rc=2 on Windows/Task Scheduler runs.
+    # Append --as-of using wall-clock ET at execution (see _gdb_as_of_suffix) so rc≠2.
     if job_type in ("early_peek", "group_brief"):
-        return base + _gdb_as_of_suffix(job)
+        cmd = base + _gdb_as_of_suffix(job)
+        if job_type == "group_brief":
+            cmd += _group_brief_cli_suffix(job)
+        return cmd
     if job_type in ("prior_report", "bet_ledger_sync"):
         return base + _gdb_as_of_suffix(job)
     return base
+
+
+def _group_brief_cli_suffix(job: dict) -> str:
+    """So duplicate guard and filenames are per pipeline game group, not per session slot."""
+    gid = job.get("game_group_id")
+    if gid in (None, "", 0, "0"):
+        return ""
+    try:
+        n = int(gid)
+    except (TypeError, ValueError):
+        return ""
+    if n <= 0:
+        return ""
+    return f" --game-group-id {n}"
 
 
 def _job_group_context(job: dict) -> str:

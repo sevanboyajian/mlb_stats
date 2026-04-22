@@ -6,6 +6,9 @@ Reads from mlb_stats.db and outputs the formatted betting brief.
 
 CHANGE LOG (latest first)
 ──────────────────────────
+2026-04-22  ``--game-group-id`` + ``brief_log.game_group_id``: pipeline ``group_brief`` can run once
+            per group without tripping the duplicate guard; bet_ledger T−30 materialization
+            is no longer skipped for later groups. Filenames get ``_gN`` when set.
 2026-04-21  Morning session (pipeline ``early_peek``): single "Today's Slate" section
             only — matchup, venue, start time, factual weather, starters when known,
             ML / O/U / runline. No signal evaluation, no picks, streak monitor, or avoids;
@@ -450,18 +453,23 @@ def _default_brief_file_stem(
     now_et: datetime.datetime,
     *,
     is_prior: bool,
+    game_group_id: int | None = None,
 ) -> str:
     """
     Windows-safe default filename stem (no extension).
-    Pattern: brief-{slate_date}_{run_yyyymmdd_hhmmss}_ET[_prior]
+    Pattern: brief-{slate_date}_{run_yyyymmdd_hhmmss}_ET[_gN][_prior]
     - slate_date: YYYY-MM-DD the brief is for (``today`` for forward briefs, ``yesterday`` for prior report).
     - run_*: generation instant in America/New_York (unique across intraday runs).
+    - _gN: optional ``pipeline_jobs.game_group_id`` (per-group group_brief) so same-minute runs
+      do not overwrite each other.
     Stored in brief_log.output_file as the full path to the .txt file.
     """
     wall = now_et.astimezone(_ET) if now_et.tzinfo else now_et.replace(tzinfo=_ET)
     wall = wall.replace(microsecond=0)
     run_stamp = wall.strftime("%Y%m%d_%H%M%S")
     base = f"brief-{game_date}_{run_stamp}_ET"
+    if game_group_id is not None and int(game_group_id) > 0:
+        base = f"{base}_g{int(game_group_id)}"
     if is_prior:
         return f"{base}_prior"
     return base
@@ -833,17 +841,52 @@ def check_prereqs(conn: sqlite3.Connection, game_date: str, session: str) -> Non
     print(f"  ✓ Prereq: odds pull found ({row['pulled_at_utc']}, {row['api_requests_used']} req used)")
 
 
-def already_ran(conn: sqlite3.Connection, game_date: str, session: str) -> bool:
-    """Return True if a brief_log entry exists for this date + session."""
+def already_ran(
+    conn: sqlite3.Connection,
+    game_date: str,
+    session: str,
+    *,
+    game_group_id: int | None = None,
+) -> bool:
+    """
+    Return True if a brief_log row would block a non-``--force`` run.
+
+    - Without ``--game-group-id`` (or id≤0): same as legacy — any row for (game_date, session).
+    - With ``--game-group-id N`` (N>0): only a row for the same (game_date, session, N) blocks.
+    """
     try:
-        cur = conn.execute(
-            "SELECT 1 FROM brief_log WHERE game_date=? AND session=? LIMIT 1",
-            (game_date, session),
-        )
+        if game_group_id is not None and int(game_group_id) > 0:
+            g = int(game_group_id)
+            cur = conn.execute(
+                """
+                SELECT 1 FROM brief_log
+                WHERE game_date=? AND session=? AND IFNULL(game_group_id,0)=?
+                LIMIT 1
+                """,
+                (game_date, session, g),
+            )
+        else:
+            cur = conn.execute(
+                "SELECT 1 FROM brief_log WHERE game_date=? AND session=? LIMIT 1",
+                (game_date, session),
+            )
         return cur.fetchone() is not None
     except sqlite3.OperationalError:
-        # Table may not exist yet on first run
         return False
+
+
+def _ensure_brief_log_game_group_id_column(conn: sqlite3.Connection) -> None:
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(brief_log)").fetchall()}
+    except sqlite3.OperationalError:
+        return
+    if "game_group_id" in cols:
+        return
+    try:
+        conn.execute("ALTER TABLE brief_log ADD COLUMN game_group_id INTEGER")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
 
 
 def ensure_brief_log(conn: sqlite3.Connection) -> None:
@@ -861,6 +904,7 @@ def ensure_brief_log(conn: sqlite3.Connection) -> None:
         """
     )
     conn.commit()
+    _ensure_brief_log_game_group_id_column(conn)
     ensure_daily_pnl(conn)   # create paper-trading ledger alongside
     ensure_brief_picks(conn)  # create confirmed-picks ledger alongside
 
@@ -2370,17 +2414,22 @@ def log_brief(
     pick_entries=None,
     avoid_entries=None,
     now: datetime.datetime | None = None,
+    game_group_id: int | None = None,
 ):
     if now is None:
         now = _now_et()
     generated_at_et = now.strftime("%Y-%m-%d %H:%M ET")
+    _gid: int | None = None
+    if game_group_id is not None and int(game_group_id) > 0:
+        _gid = int(game_group_id)
     try:
         conn.execute(
             """
-            INSERT INTO brief_log (game_date, session, generated_at, games_covered, picks_count, output_file)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO brief_log
+                (game_date, session, generated_at, games_covered, picks_count, output_file, game_group_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (game_date, session, generated_at_et, games_covered, picks_count, output_file),
+            (game_date, session, generated_at_et, games_covered, picks_count, output_file, _gid),
         )
         conn.commit()
         # Save confirmed picks for prior-report grading (action sessions only)
@@ -4616,6 +4665,14 @@ def parse_args():
         help="Overwrite/rerun even if this session's brief was already generated today.",
     )
     p.add_argument(
+        "--game-group-id",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Pipeline: game_group_id for this run. Duplicate check is per (date, session, N); "
+        "use with run_pipeline group_brief so each group can run and materialize bet_ledger.",
+    )
+    p.add_argument(
         "--dry-run", action="store_true",
         help="Print brief to console only. Do NOT write to brief_log or output file.",
     )
@@ -4729,6 +4786,10 @@ def main():
     PERSIST_WRITES = not args.dry_run
 
     print(f"[TIME] Running as-of: {now.strftime('%Y-%m-%d %H:%M ET')}")
+    _ggid: int | None = None
+    if getattr(args, "game_group_id", None) is not None and int(args.game_group_id) > 0:
+        _ggid = int(args.game_group_id)
+        print(f"[TIME] game_group_id: {_ggid} (per-group duplicate scope)")
 
     # Validate date
     try:
@@ -4817,8 +4878,9 @@ def main():
     )
     ensure_brief_log(conn)
     if not args.dry_run and not args.force:
-        if already_ran(conn, key_date, session):
-            print(f"\n  ⚠  A {session} brief for {key_date} already exists in brief_log.")
+        if already_ran(conn, key_date, session, game_group_id=(None if session == "prior" else _ggid)):
+            gtxt = f" (game_group_id={_ggid})" if _ggid is not None else ""
+            print(f"\n  ⚠  A {session} brief for {key_date}{gtxt} already exists in brief_log.")
             print(f"     Use --force to regenerate, or --dry-run to preview.\n")
             sys.exit(0)
 
@@ -5028,7 +5090,7 @@ def main():
     print(brief_text)
 
     output_file = None
-    default_stem = _default_brief_file_stem(today, now, is_prior=False)
+    default_stem = _default_brief_file_stem(today, now, is_prior=False, game_group_id=_ggid)
     if not args.no_file and not args.dry_run:
         if args.output:
             output_file = args.output
@@ -5091,8 +5153,18 @@ def main():
                     verbose=args.verbose, debug_wind=False,
                 )["picks"]
             )
-        log_brief(conn, today, session, len(games), picks_count,
-                  output_file, pick_entries=pick_entries_for_log, avoid_entries=avoid_entries_for_log, now=now)
+        log_brief(
+            conn,
+            today,
+            session,
+            len(games),
+            picks_count,
+            output_file,
+            pick_entries=pick_entries_for_log,
+            avoid_entries=avoid_entries_for_log,
+            now=now,
+            game_group_id=_ggid,
+        )
         if args.verbose:
             print(f"  [verbose] brief_log entry written: {today} / {session} / {picks_count} picks")
 
