@@ -435,7 +435,7 @@ def main() -> None:
                 doc.add_paragraph()
 
 """
-    anchor_doc = '        # Avoid\n        _add_heading(doc, f"Bets to Avoid'
+    anchor_doc = '        # No signal\n        _add_heading(doc, f"No Signal'
     if "Watch list — model 5–6" not in t and anchor_doc in t:
         t = t.replace(anchor_doc, doc_watch + anchor_doc, 1)
 

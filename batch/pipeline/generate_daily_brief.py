@@ -403,7 +403,6 @@ def build_docx_from_text(session: str, game_date: str, brief_text: str) -> "Docu
             for k in (
                 "TOP PICK",
                 "ADDITIONAL MODEL SELECTIONS",
-                "BETS TO AVOID",
                 "NO SIGNAL",
                 "BET LEDGER SUMMARY",
                 "SIGNAL TRACKER",
@@ -3628,23 +3627,6 @@ def build_primary_brief(games, streaks, starters, game_date,
             lines.append(f"\n  REASON: {textwrap.fill(fire['reason_text'], width=66, subsequent_indent='          ')}")
             lines.append("")
 
-    # ── Bets to Avoid ────────────────────────────────────────────────────
-    lines.append(section(f"⛔  BETS TO AVOID  ({len(avoid_games)})"))
-    if not avoid_games:
-        lines.append("\n  No active avoid flags today.\n")
-    for entry in avoid_games:
-        g    = entry["game"]
-        sigs = entry["sigs"]
-        lines.append(f"\n  {matchup_line(g)}")
-        lines.append(f"  {weather_line(g)}")
-        lines.append(f"  {odds_summary_line(g)}")
-        lines.append(f"  {entry['streak']}")
-        scope = _avoid_scope_line(g, sigs)
-        if scope:
-            lines.append(f"  BET TO SKIP: {scope}")
-        lines.append(f"  ⛔ AVOID: {textwrap.fill(sigs['avoid_reason'], width=64, subsequent_indent='          ')}")
-        lines.append("")
-
     # ── No-signal slate ──────────────────────────────────────────────────
     if no_signal:
         lines.append(section(f"—  NO SIGNAL  ({len(no_signal)} games — market efficient or insufficient data)"))
@@ -4164,13 +4146,6 @@ def build_docx_brief(
         if not rest:
             _add_note(doc, "No additional confirmed signals today.", color_hex="475569")
         for e in rest:
-            _add_matchup_block(doc, e["game"], streaks, starters, e["sigs"])
-
-        # Avoid
-        _add_heading(doc, f"Bets to Avoid  ({len(avoid_entries)})", level=2)
-        if not avoid_entries:
-            _add_note(doc, "No active avoid flags today.", color_hex="475569")
-        for e in avoid_entries:
             _add_matchup_block(doc, e["game"], streaks, starters, e["sigs"])
 
         # No signal
