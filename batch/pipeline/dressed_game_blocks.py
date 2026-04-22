@@ -728,6 +728,12 @@ def build_market_snapshot_from_odds_rows(
         total_close=float(tt["total_close"]) if tt["total_close"] is not None else None,
         over_odds=int(tt["over_odds"]) if tt["over_odds"] is not None else None,
         under_odds=int(tt["under_odds"]) if tt["under_odds"] is not None else None,
+        # Run line comes from the caller's game row in ``dress_full_game_row`` (replace).
+        home_rl_line=None,
+        away_rl_line=None,
+        home_rl_odds=None,
+        away_rl_odds=None,
+        rl_available=False,
         home_in_fade_band=in_fade,
         home_in_heavy_band=in_heavy,
         home_is_dog=is_dog,

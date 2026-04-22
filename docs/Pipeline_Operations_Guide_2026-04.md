@@ -157,5 +157,6 @@ Upstream **`failed`** / **`timeout`** can still count as “resolved” so the s
 ## Related documents
 
 - `docs/Generate_Daily_Brief_Guide_2026-04.md` — brief sessions and **`--sync-bet-ledger-only`**
-- `docs/MLB_Scout_Daily_Operations_Guide_2026-04.md` — Streamlit app
+- `docs/MLB_Scout_Daily_Operations_Guide_2026-04.md` — Streamlit Scout + Admin
+- `online/app/mlb_scout_admin.py` — operator UI (pipeline tables, `--status` / `--explain-deps`, ingestion triggers)
 - `README.md` — tree and setup

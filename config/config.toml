@@ -1,0 +1,32 @@
+# ──────────────────────────────────────────────────────────────
+#  .streamlit/config.toml
+#  Shared by both Streamlit apps in this project:
+#    app.py   — Learn to Code with Baseball (LTCWBB)
+#    scout.py — MLB Scout Analytics Platform
+#
+#  This file sets the base theme that Streamlit applies to all
+#  of its own native widgets: selectboxes, sliders, tabs, radio
+#  buttons, progress bars, and text inputs.
+#
+#  The custom CSS in each app overrides everything else
+#  (topbar, badges, tables, buttons, layout).
+# ──────────────────────────────────────────────────────────────
+
+[theme]
+# ── Background colours — match the dark palette ──────────────
+backgroundColor          = "#0d0f14"   # main page background  (--bg)
+secondaryBackgroundColor = "#14171f"   # sidebar + card surface (--surface)
+
+# ── Text ─────────────────────────────────────────────────────
+textColor                = "#e2e8f0"   # primary text          (--text)
+
+# ── Primary accent ───────────────────────────────────────────
+# Used by Streamlit for type="primary" buttons and active tab underlines.
+# Green is used for Run/action buttons in both apps.
+primaryColor             = "#10b981"   # green                 (--accent3)
+
+# ── Font ─────────────────────────────────────────────────────
+# "monospace" maps to the system monospace font as a fallback.
+# Both apps import IBM Plex Mono via Google Fonts in their CSS
+# and override Streamlit's font setting there.
+font                     = "monospace"

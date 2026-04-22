@@ -34,19 +34,22 @@ The app resolves the project root and imports `core.db.connection` so it uses th
 
 ## Start the app
 
-**Option A — from repository root (recommended for docs consistency):**
+From the repository root:
 
 ```text
 cd C:\path\to\mlb_stats
 streamlit run online/app/scout.py
 ```
 
-**Option B — from the app directory (matches the banner in `scout.py`):**
+**MLB Scout Admin** (operators — pipeline, ingestion, logs; separate from `scout.py`):
 
 ```text
-cd C:\path\to\mlb_stats\online\app
-streamlit run scout.py
+cd C:\path\to\mlb_stats
+streamlit run online/app/mlb_scout_admin.py
 ```
+
+- Auth: `.streamlit/secrets.toml` → `[auth] admin_password`, or set `MLB_SCOUT_ADMIN_NO_AUTH=1` for trusted local dev only.
+- If Scout is already using port 8501: `streamlit run online/app/mlb_scout_admin.py --server.port 8503`
 
 Your browser should open to the local Streamlit URL (typically `http://localhost:8501`).
 
