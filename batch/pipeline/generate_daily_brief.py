@@ -6,6 +6,14 @@ Reads from mlb_stats.db and outputs the formatted betting brief.
 
 CHANGE LOG (latest first)
 ──────────────────────────
+2026-04-22  Primary / additional brief pick rows: ``format_bet_block`` (ASCII card, bucket BET
+            label, grouped signals, model score, stake); ALT/INFO below card. Word SIGNAL column
+            uses ``signal_summary_for_doc`` (same Core/Support/Minor grouping when ``_scored_game``
+            present).
+2026-04-22  Brief helpers: ``score_to_confidence``, ``tier_label``, ``SIGNAL_LABELS`` /
+            ``humanize_signal``, ``group_signals``, ``format_bet_block``; ``evaluate_signals``
+            attaches ``_scored_game`` (in-process). ``format_bet_block`` uses ``best_aggregate_score``
+            on ``ScoredGame`` (not ``data_flags`` ``BEST …`` parsing).
 2026-04-22  Customer-facing action briefs: removed all “bets to avoid” output (text + Word).
             Avoid-only games roll into the no-signal slate; ``save_signal_state`` /
             ``brief_picks`` no longer persist AVOID rows from these runs. Confidence scores
@@ -2755,6 +2763,8 @@ def evaluate_signals(
     (ML/total/…); the brief shows ``[HIGH · nn%]`` / ``[MED · nn%]`` / ``[LOW · nn%]``
     (tier label + percent from that aggregate). ``signals`` = short reader labels
     (no internal codes); ``signal_ids`` = internal ids for filters and analytics.
+    ``_scored_game`` is the in-process ``ScoredGame`` for helpers like ``format_bet_block``
+    (omit when serializing).
     When ``verbose`` is True, prints tier_basis per game to stdout.
     When ``debug_wind`` is True, prints a wind classification dump per game (DB vs dressed env).
     """
@@ -2791,6 +2801,7 @@ def evaluate_signals(
         if verbose and scored.tier_basis:
             ab = f"{fdg.identifiers.away_team_abbr}@{fdg.identifiers.home_team_abbr}"
             print(f"  [verbose] score {ab}: tier={scored.output_tier!r} | {scored.tier_basis}")
+        out["_scored_game"] = scored
         return out
     except Exception as e:
         return {
@@ -2807,12 +2818,159 @@ def evaluate_signals(
             "output_tier": None,
             "tier_basis": "",
             "stake_multiplier": 0.0,
+            "_scored_game": None,
         }
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Brief formatting helpers
 # ═══════════════════════════════════════════════════════════════════════════
+
+# -----------------------------------------------------------------------------
+# Confidence conversion
+# -----------------------------------------------------------------------------
+def score_to_confidence(score: int) -> int:
+    """Normalize roughly 5–30 range → 50–95%."""
+    return min(95, max(50, int(50 + (score - 5) * 2)))
+
+
+def tier_label(tier: str | None) -> str:
+    return {
+        "Tier1": "HIGH",
+        "Tier2": "MED",
+        "Tier3": "LOW",
+    }.get(tier, "NO EDGE")
+
+
+# -----------------------------------------------------------------------------
+# Signal name mapping (display only; internal ids unchanged)
+# -----------------------------------------------------------------------------
+SIGNAL_LABELS = {
+    "S1+H2": "Streak Fade",
+    "S1H2": "Streak Fade",
+    "S1": "Streak Pressure",
+    "MV-F": "Wind Fade (ML)",
+    "MV-B": "Wind Boost (Over)",
+    "LHP_FADE": "LHP Mismatch",
+    "LHP_FADE_RL": "LHP RL Edge",
+    "NF4": "Pitching Edge",
+    "H3b": "Wind → Over",
+}
+
+
+def humanize_signal(sig_id: str) -> str:
+    if sig_id in SIGNAL_LABELS:
+        return SIGNAL_LABELS[sig_id]
+    from batch.pipeline.score_game import signal_display_name
+
+    return signal_display_name(sig_id)
+
+
+# -----------------------------------------------------------------------------
+# Signal grouping (per-signal confidence_score on model findings)
+# -----------------------------------------------------------------------------
+def group_signals(signals: list) -> dict[str, list[str]]:
+    core: list[str] = []
+    support: list[str] = []
+    minor: list[str] = []
+
+    def _sc(s: object) -> int:
+        v = getattr(s, "confidence_score", None)
+        try:
+            return int(v) if v is not None else 0
+        except (TypeError, ValueError):
+            return 0
+
+    for s in sorted(signals, key=_sc, reverse=True):
+        sid = str(getattr(s, "signal_id", "") or "")
+        name = humanize_signal(sid)
+        sc = _sc(s)
+        if sc >= 7:
+            core.append(name)
+        elif sc >= 5:
+            support.append(name)
+        else:
+            minor.append(name)
+
+    return {
+        "Core": core,
+        "Support": support,
+        "Minor": minor,
+    }
+
+
+def format_bet_block(scored_game: object) -> str:
+    """
+    ASCII pick card from a ``ScoredGame`` (primary / additional brief rows).
+
+    ``[HIGH · nn%]`` uses **game** ``best_aggregate_score`` + ``output_tier``.
+    BET shows the aggregate bucket id (e.g. ``AWAY_ML``). Signals: all
+    ``signals_fired``, sorted by per-signal ``confidence_score``, grouped
+    Core (≥7) / Support (5–6) / Minor (≤4) with ``humanize_signal`` labels.
+    """
+    tier = getattr(scored_game, "output_tier", None)
+    stake = float(getattr(scored_game, "stake_multiplier", 0.0) or 0.0)
+    best_score = int(getattr(scored_game, "best_aggregate_score", 0) or 0)
+    confidence = score_to_confidence(best_score)
+    tier_txt = tier_label(tier)
+
+    grouped = group_signals(list(getattr(scored_game, "signals_fired", []) or []))
+
+    def fmt_group(label: str, items: list[str]) -> str:
+        return f"{label}: " + " · ".join(items) if items else ""
+
+    signal_lines = "\n".join(
+        filter(
+            None,
+            [
+                fmt_group("Core", grouped["Core"]),
+                fmt_group("Support", grouped["Support"]),
+                fmt_group("Minor", grouped["Minor"]),
+            ],
+        )
+    )
+    if not signal_lines.strip():
+        signal_lines = "(none)"
+
+    pick = getattr(scored_game, "top_pick", None)
+    best_side = getattr(scored_game, "best_side", None)
+    if pick is not None and getattr(pick, "bet_side", None):
+        bet_txt = str(pick.bet_side).upper()
+    else:
+        bet_txt = str(best_side or "unknown").upper()
+
+    return f"""
+┌─────────────────────────────────────────────────────────┐
+│  BET:     {bet_txt:<18}  [{tier_txt} · {confidence}%]
+│
+│  SIGNAL:
+{signal_lines}
+│
+│  MODEL SCORE: {best_score}
+│  STAKE: {stake:.1f}u
+└─────────────────────────────────────────────────────────┘
+""".strip()
+
+
+def signal_summary_for_doc(sigs: dict) -> str:
+    """Word table SIGNAL column: same Core / Support / Minor grouping as ``format_bet_block``."""
+    sg = sigs.get("_scored_game")
+    if sg is not None:
+        grouped = group_signals(list(getattr(sg, "signals_fired", []) or []))
+        parts: list[str] = []
+        if grouped["Core"]:
+            parts.append("Core: " + " · ".join(grouped["Core"]))
+        if grouped["Support"]:
+            parts.append("Support: " + " · ".join(grouped["Support"]))
+        if grouped["Minor"]:
+            parts.append("Minor: " + " · ".join(grouped["Minor"]))
+        if parts:
+            return "\n".join(parts)
+    fb = (sigs.get("signal_brief") or "").strip()
+    if fb:
+        return fb
+    return ", ".join(sigs.get("signals") or []) or ""
+
 
 def matchup_line(game: dict) -> str:
     """Return formatted matchup string with (h) home indicator and ET start time."""
@@ -3592,39 +3750,42 @@ def build_primary_brief(games, streaks, starters, game_date,
         if alert:
             lines.append("")
             lines.append(alert)
-        score_txt = format_aggregate_for_brief(
-            p.get("aggregate_score"), top["sigs"].get("output_tier")
-        )
-
-        lines.append(f"\n  ┌─────────────────────────────────────────────────────────┐")
-        lines.append(
-            f"  │  BET:     {p['bet']:<20}  ODDS: {p['odds']:<8} {score_txt:<7} │"
-        )
+        sg = top["sigs"].get("_scored_game")
+        if sg is not None:
+            lines.append("")
+            for bl in format_bet_block(sg).splitlines():
+                lines.append("  " + bl)
+        else:
+            score_txt = format_aggregate_for_brief(
+                p.get("aggregate_score"), top["sigs"].get("output_tier")
+            )
+            lines.append(f"\n  BET: {p['bet']}  ODDS: {p['odds']}  {score_txt}")
+            stack_fb = (top["sigs"].get("signal_brief") or "").strip()
+            if stack_fb:
+                lines.append("")
+                for stack_line in stack_fb.splitlines():
+                    lines.append(f"  {stack_line}")
         if p.get("alt"):
             alt = p["alt"]
             alt_score = format_aggregate_for_brief(
                 alt.get("aggregate_score"), top["sigs"].get("output_tier")
             )
             lines.append(
-                f"  │  ALT:     {alt['bet']:<20}  ODDS: {alt['odds']:<8} {alt_score:<7} │"
+                f"  ALT: {alt['bet']:<20}  ODDS: {alt['odds']:<8}  {alt_score}"
             )
             note = str(alt.get("note") or "")
             if note:
-                lines.append(f"  │           {note:<53}│")
+                lines.append(
+                    f"      {textwrap.fill(note, width=66, subsequent_indent='      ')}"
+                )
         if p.get("info"):
             info = p["info"]
-            lines.append(
-                f"  │  INFO:    {info['bet']:<20}  ODDS: {info['odds']:<8}         │"
-            )
+            lines.append(f"  INFO: {info['bet']:<20}  ODDS: {info['odds']:<8}")
             note = str(info.get("note") or "")
             if note:
-                lines.append(f"  │           {note:<53}│")
-        lines.append(f"  └─────────────────────────────────────────────────────────┘")
-        stack_txt = (top["sigs"].get("signal_brief") or "").strip()
-        if stack_txt:
-            lines.append("")
-            for stack_line in stack_txt.splitlines():
-                lines.append(f"  {stack_line}")
+                lines.append(
+                    f"      {textwrap.fill(note, width=66, subsequent_indent='      ')}"
+                )
         lines.append(f"\n  {odds_summary_line(g)}")
         lines.append(f"\n  REASON: {textwrap.fill(p['reason'], width=66, subsequent_indent='          ')}")
         if top["sigs"]["data_flags"]:
@@ -3650,23 +3811,30 @@ def build_primary_brief(games, streaks, starters, game_date,
         if alert:
             lines.append("")
             lines.append(alert)
-        score_txt = format_aggregate_for_brief(
-            best.get("aggregate_score"), sigs.get("output_tier")
-        )
-        lines.append(
-            f"       BET: {best['bet']:<20} ODDS: {best['odds']:<8} {score_txt:<7}"
-        )
-        stack2 = (sigs.get("signal_brief") or "").strip()
-        if stack2:
-            for sl in stack2.splitlines():
-                lines.append(f"       {sl}")
+        sg2 = sigs.get("_scored_game")
+        ind = "       "
+        if sg2 is not None:
+            lines.append("")
+            for bl in format_bet_block(sg2).splitlines():
+                lines.append(ind + bl)
+        else:
+            score_txt = format_aggregate_for_brief(
+                best.get("aggregate_score"), sigs.get("output_tier")
+            )
+            lines.append(
+                f"{ind}BET: {best['bet']:<20} ODDS: {best['odds']:<8} {score_txt:<7}"
+            )
+            stack2 = (sigs.get("signal_brief") or "").strip()
+            if stack2:
+                for sl in stack2.splitlines():
+                    lines.append(ind + sl)
         if best.get("alt"):
             alt = best["alt"]
             alt_score = format_aggregate_for_brief(
                 alt.get("aggregate_score"), sigs.get("output_tier")
             )
             lines.append(
-                f"       ALT: {alt['bet']:<20} ODDS: {alt['odds']:<8} {alt_score:<7}"
+                f"{ind}ALT: {alt['bet']:<20} ODDS: {alt['odds']:<8}  {alt_score}"
             )
             note = str(alt.get("note") or "")
             if note:
@@ -3675,9 +3843,7 @@ def build_primary_brief(games, streaks, starters, game_date,
                 )
         if best.get("info"):
             info = best["info"]
-            lines.append(
-                f"       INFO: {info['bet']:<19} ODDS: {info['odds']:<8}"
-            )
+            lines.append(f"{ind}INFO: {info['bet']:<19} ODDS: {info['odds']:<8}")
             note = str(info.get("note") or "")
             if note:
                 lines.append(
@@ -4014,7 +4180,7 @@ def _add_matchup_block(doc, game: dict, streaks: dict, starters: dict,
                 _set_cell_bg(cell, pick_bg)
             _cell_para(
                 row_cells[0],
-                (sigs.get("signal_brief") or "").strip() or ", ".join(sigs["signals"]),
+                signal_summary_for_doc(sigs) or ", ".join(sigs["signals"]),
                 bold=True, size_pt=9, color_hex="1F3864",
             )
             _cell_para(row_cells[1], pick["bet"],
@@ -4325,7 +4491,7 @@ def build_docx_brief(
                     _set_cell_bg(cell, pick_bg)
                 _cell_para(
                     row_cells[0],
-                    (sigs.get("signal_brief") or "").strip() or ", ".join(sigs["signals"]),
+                    signal_summary_for_doc(sigs) or ", ".join(sigs["signals"]),
                     bold=True, size_pt=9, color_hex="1F3864",
                 )
                 _cell_para(row_cells[1], pick["bet"],
