@@ -34,6 +34,16 @@ BACKUP_DIR = REPO_ROOT / "backups" / "daily"
 LOG_PATH = REPO_ROOT / "logs" / "backup.log"
 
 
+def _reconfigure_stdio_utf8() -> None:
+    """Avoid UnicodeEncodeError on Windows terminals (cp1252)."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 def _ts_utc() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -79,7 +89,10 @@ def _sqlite_cli_backup(sqlite3_exe: str, src_db: Path, dst_db: Path) -> tuple[bo
     Run: sqlite3 SRC ".backup DST"
     """
     dst_db.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [sqlite3_exe, str(src_db), f".backup {dst_db}"]
+    # SQLite's dot-command parser treats backslashes as escapes (e.g. \b). Use a quoted
+    # forward-slash path so Windows paths are interpreted correctly.
+    dst_arg = dst_db.resolve().as_posix()
+    cmd = [sqlite3_exe, str(src_db), f'.backup \"{dst_arg}\"']
     try:
         p = subprocess.run(
             cmd,
@@ -112,22 +125,23 @@ def _retention_keep_last_2() -> None:
 
 
 def main() -> int:
+    _reconfigure_stdio_utf8()
     src = Path(get_db_path()).resolve()
     if not src.exists():
         _log(f"FAIL db_missing={src}")
-        print(f"✗ DB not found: {src}")
+        print(f"FAIL DB not found: {src}")
         return 2
 
     ok, msg = _integrity_check(src)
     if not ok:
         _log(f"FAIL integrity_main db={src.name} detail={msg}")
-        print(f"✗ integrity_check failed on main DB: {msg}")
+        print(f"FAIL integrity_check failed on main DB: {msg}")
         return 1
 
     sqlite3_exe = _resolve_sqlite3_exe()
     if not sqlite3_exe:
         _log("FAIL sqlite3_missing (set SQLITE3_PATH or install sqlite3 in PATH)")
-        print("✗ sqlite3 CLI not found. Install sqlite3 or set SQLITE3_PATH.")
+        print("FAIL sqlite3 CLI not found. Install sqlite3 or set SQLITE3_PATH.")
         return 3
 
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
@@ -137,7 +151,7 @@ def main() -> int:
     ok, detail = _sqlite_cli_backup(sqlite3_exe, src, dst)
     if not ok:
         _log(f"FAIL backup_write dst={dst.name} detail={detail}")
-        print(f"✗ backup failed: {detail}")
+        print(f"FAIL backup failed: {detail}")
         return 1
 
     ok, msg = _integrity_check(dst)
@@ -147,7 +161,7 @@ def main() -> int:
         except Exception:
             pass
         _log(f"FAIL integrity_backup dst={dst.name} detail={msg}")
-        print(f"✗ integrity_check failed on backup (deleted): {msg}")
+        print(f"FAIL integrity_check failed on backup (deleted): {msg}")
         return 1
 
     size = 0
@@ -156,7 +170,7 @@ def main() -> int:
     except Exception:
         pass
     _log(f"OK backup={dst.name} size_bytes={size}")
-    print(f"✓ backup ok: {dst} ({size} bytes)")
+    print(f"OK backup ok: {dst} ({size} bytes)")
 
     _retention_keep_last_2()
     return 0
