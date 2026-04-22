@@ -6,6 +6,14 @@ Reads from mlb_stats.db and outputs the formatted betting brief.
 
 CHANGE LOG (latest first)
 ──────────────────────────
+2026-04-22  Customer-facing action briefs: removed all “bets to avoid” output (text + Word).
+            Avoid-only games roll into the no-signal slate; ``save_signal_state`` /
+            ``brief_picks`` no longer persist AVOID rows from these runs. Confidence scores
+            on picks are unchanged.
+2026-04-22  Default ``now``: non-``prior`` briefs no longer require ``--as-of`` / ``--as-of-time``;
+            wall-clock America/New_York is used. ``as_of`` / ``as_of_time`` are for replays and
+            the pipeline runner. ``as_of_for_slate`` stays ``None`` for those live runs so
+            ``load_games`` still excludes completed games in SQL.
 2026-04-22  ``already_ran``: treat ``brief_log`` as duplicate only when ``output_file`` exists on
             disk, so a logged-but-missing file no longer blocks without ``--force``.
 2026-04-22  ``--game-group-id`` + ``brief_log.game_group_id``: pipeline ``group_brief`` can run once
@@ -402,7 +410,7 @@ def build_docx_from_text(session: str, game_date: str, brief_text: str) -> "Docu
             _add_line(s, size_pt=16, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER)
             continue
 
-        # Section headings (Top Pick / Avoid / No Signal / Ledger Summary etc.)
+        # Section headings (Top Pick / No Signal / Ledger Summary etc.)
         if any(
             k in s.upper()
             for k in (
@@ -411,7 +419,8 @@ def build_docx_from_text(session: str, game_date: str, brief_text: str) -> "Docu
                 "NO SIGNAL",
                 "BET LEDGER SUMMARY",
                 "SIGNAL TRACKER",
-                "S6 PITCHER",
+                "HOT PITCHER",
+                "PITCHER STREAK",
                 "TODAY'S SLATE",
                 "TODAYS SLATE",
             )
@@ -427,11 +436,6 @@ def build_docx_from_text(session: str, game_date: str, brief_text: str) -> "Docu
         # Matchup lines: "XXX  vs  YYY (h)".
         if " vs " in s and "[" in s and "]" in s and "ET" in s:
             _add_line(s, size_pt=11, bold=True)
-            continue
-
-        # Emphasize avoid callouts.
-        if s.upper().startswith("⛔") or s.upper().startswith("AVOID:") or "⛔ AVOID" in s.upper():
-            _add_line(s, size_pt=9, bold=True, color_hex="991B1B")  # red-800
             continue
 
         # Default line.
@@ -2327,7 +2331,7 @@ def compute_paper_picks(evaluated: list, game_date: str) -> list:
                 month = int(game_date[5:7])
             except (ValueError, TypeError):
                 month = 0
-            is_h3b    = "H3b" in entry["sigs"]["signals"]
+            is_h3b    = "H3b" in (entry["sigs"].get("signal_ids") or [])
             late_flag = 1 if (is_h3b and month in H3B_LATE_SEASON_MONTHS) else 0
             stake     = round(base_stake * (PAPER_LATE_FACTOR if late_flag else 1.0), 2)
 
@@ -2745,7 +2749,11 @@ def evaluate_signals(
     Returns a dict describing which signals fired and what they recommend.
 
     Flow: ``enrich_game`` → ``score_game`` → ``scored_game_to_eval_dict``. Extra keys:
-    ``output_tier``, ``tier_basis``, ``stake_multiplier`` (from ``ScoredGame``).
+    ``output_tier``, ``tier_basis``, ``stake_multiplier`` (from ``ScoredGame``);
+    ``best_aggregate_score``; ``signal_brief`` (Core / Support / Extras text).
+    Per-pick ``aggregate_score`` = sum of 1–10 signal scores in that bet bucket
+    (ML/total/…); not a single-signal 1–10. ``signals`` = short reader labels
+    (no internal codes); ``signal_ids`` = internal ids for filters and analytics.
     When ``verbose`` is True, prints tier_basis per game to stdout.
     When ``debug_wind`` is True, prints a wind classification dump per game (DB vs dressed env).
     """
@@ -2786,7 +2794,10 @@ def evaluate_signals(
     except Exception as e:
         return {
             "signals": [],
+            "signal_ids": [],
             "picks": [],
+            "signal_brief": "",
+            "best_aggregate_score": 0,
             "avoid": False,
             "avoid_reason": None,
             "watch": False,
@@ -3518,9 +3529,9 @@ def build_primary_brief(games, streaks, starters, game_date,
         "  Injury news absorbed. Lineups posting. Lines near closing.\n"
         "  Confirm each line before placing. No bet above 2% of bankroll.\n"
     )
+    from batch.pipeline.score_game import format_aggregate_for_brief
 
     all_picks   = []
-    avoid_games = []
     no_signal   = []
 
     for game in games:
@@ -3536,20 +3547,19 @@ def build_primary_brief(games, streaks, starters, game_date,
         }
         if sigs["picks"]:
             all_picks.append(entry)
-        elif sigs["avoid"]:
-            avoid_games.append(entry)
         else:
+            # No published "bets to avoid" — treat no-pick games (incl. internal avoid flags) as no-signal slate
             no_signal.append(entry)
 
     # Sort picks by priority (lower = higher priority)
     all_picks.sort(key=lambda e: min(p["priority"] for p in e["sigs"]["picks"]))
 
-    # ── Persist signal state (TOP / NEXT / AVOID) ─────────────────────────
+    # ── Persist signal state (TOP / NEXT only for customer briefs) ───────
     # Do not affect computation or report output; best-effort insert only.
     if conn is not None and session is not None:
         top_entry = all_picks[0] if len(all_picks) >= 1 else None
         next_entries = all_picks[1:6] if len(all_picks) >= 2 else []
-        save_signal_state(conn, game_date, session, top_entry, next_entries, avoid_games, now=now)
+        save_signal_state(conn, game_date, session, top_entry, next_entries, [], now=now)
 
     # ── Signal Tracker — intra-day pick status vs earlier sessions ────────
     # Only runs when conn is available and there were prior sessions today.
@@ -3581,18 +3591,19 @@ def build_primary_brief(games, streaks, starters, game_date,
         if alert:
             lines.append("")
             lines.append(alert)
-        score_txt = ""
-        if p.get("confidence_score") is not None:
-            score_txt = f"[{int(p['confidence_score'])}/10]"
+        score_txt = format_aggregate_for_brief(
+            p.get("aggregate_score"), top["sigs"].get("output_tier")
+        )
 
         lines.append(f"\n  ┌─────────────────────────────────────────────────────────┐")
         lines.append(
             f"  │  BET:     {p['bet']:<20}  ODDS: {p['odds']:<8} {score_txt:<7} │"
         )
-        lines.append(f"  │  SIGNAL:  {', '.join(top['sigs']['signals']):<47}  │")
         if p.get("alt"):
             alt = p["alt"]
-            alt_score = f"[{int(alt.get('confidence_score') or 0)}/10]"
+            alt_score = format_aggregate_for_brief(
+                alt.get("aggregate_score"), top["sigs"].get("output_tier")
+            )
             lines.append(
                 f"  │  ALT:     {alt['bet']:<20}  ODDS: {alt['odds']:<8} {alt_score:<7} │"
             )
@@ -3608,6 +3619,11 @@ def build_primary_brief(games, streaks, starters, game_date,
             if note:
                 lines.append(f"  │           {note:<53}│")
         lines.append(f"  └─────────────────────────────────────────────────────────┘")
+        stack_txt = (top["sigs"].get("signal_brief") or "").strip()
+        if stack_txt:
+            lines.append("")
+            for stack_line in stack_txt.splitlines():
+                lines.append(f"  {stack_line}")
         lines.append(f"\n  {odds_summary_line(g)}")
         lines.append(f"\n  REASON: {textwrap.fill(p['reason'], width=66, subsequent_indent='          ')}")
         if top["sigs"]["data_flags"]:
@@ -3633,15 +3649,21 @@ def build_primary_brief(games, streaks, starters, game_date,
         if alert:
             lines.append("")
             lines.append(alert)
-        score_txt = ""
-        if best.get("confidence_score") is not None:
-            score_txt = f"[{int(best['confidence_score'])}/10]"
-        lines.append(
-            f"       BET: {best['bet']:<20} ODDS: {best['odds']:<8} {score_txt:<7} SIGNAL: {', '.join(sigs['signals'])}"
+        score_txt = format_aggregate_for_brief(
+            best.get("aggregate_score"), sigs.get("output_tier")
         )
+        lines.append(
+            f"       BET: {best['bet']:<20} ODDS: {best['odds']:<8} {score_txt:<7}"
+        )
+        stack2 = (sigs.get("signal_brief") or "").strip()
+        if stack2:
+            for sl in stack2.splitlines():
+                lines.append(f"       {sl}")
         if best.get("alt"):
             alt = best["alt"]
-            alt_score = f"[{int(alt.get('confidence_score') or 0)}/10]"
+            alt_score = format_aggregate_for_brief(
+                alt.get("aggregate_score"), sigs.get("output_tier")
+            )
             lines.append(
                 f"       ALT: {alt['bet']:<20} ODDS: {alt['odds']:<8} {alt_score:<7}"
             )
@@ -3666,18 +3688,18 @@ def build_primary_brief(games, streaks, starters, game_date,
                 lines.append(f"       ⚠ DATA: {f}")
         lines.append("")
 
-    # ── S6 W≥7 Pitcher Streak (Monitoring Signal) ────────────────────────
-    # Separate from main picks — monitoring status, half-stake until N≥50.
-    # When S6 also has S1 active: displayed as double-confirmation note.
-    # When S6 alone: displayed as standalone monitoring entry.
-    lines.append(section(f"🔬  S6 PITCHER STREAK MONITOR  ({len(s6_fires)} fire(s))"))
+    # ── Hot pitcher streak (separate monitor; half-stake until N≥50) ──────
+    # Double-confirmation when the home team is also on a long win streak.
+    lines.append(section(f"🔬  HOT PITCHER STREAK MONITOR  ({len(s6_fires)} fire(s))"))
     if not s6_fires:
-        lines.append("\n  No S6 W≥7 pitcher streak fires today.\n")
+        lines.append(
+            "\n  No long starter win streaks (7+ starts) flagged today.\n"
+        )
     else:
         lines.append(
             "\n  STATUS: Monitoring signal — +25.0% ROI on 27 fires (2018–2025, all bookmakers).\n"
-            "  74% of fires are independent of S1 team streaks (additive, not redundant).\n"
-            "  Stake: 0.5 unit until cumulative N ≥ 50. Full unit when S1 also active.\n"
+            "  74% of fires are independent of long team win-streak patterns (additive, not redundant).\n"
+            "  Stake: 0.5 unit until cumulative N ≥ 50. Full unit when the home team is also on a long win streak.\n"
         )
         # Build game lookup for matchup display
         game_lookup = {g["game_pk"]: g for g in games}
@@ -3686,11 +3708,11 @@ def build_primary_brief(games, streaks, starters, game_date,
             if g:
                 lines.append(f"  {matchup_line(g)}")
                 lines.append(f"  {odds_summary_line(g)}")
-            lines.append(f"  SIGNAL: {fire['signal_label']}")
+            lines.append("  SIGNAL:  Hot pitcher fade (monitoring)")
             lines.append(f"  BET: {fire['bet_side'].upper()} ML  "
                          f"  STREAK: W{fire['win_streak']} ({fire['start_count']} starts this season)")
             stake_note = (
-                "  ★ FULL STAKE — S1 also active (double confirmation)"
+                "  ★ FULL STAKE — long home team win streak also active (double confirmation)"
                 if fire["s1_also_active"]
                 else f"  ◆ 0.5 UNIT STAKE — monitoring (N={fire['cumulative_n']}/{50})"
             )
@@ -3740,7 +3762,6 @@ def build_closing_brief(games, streaks, starters, movement, game_date,
 
     # For persistence (does not affect output)
     all_picks_entries = []
-    avoid_entries     = []
 
     for game in games:
         if _game_started_or_in_progress_for_closing(game, now):
@@ -3778,8 +3799,6 @@ def build_closing_brief(games, streaks, starters, movement, game_date,
         }
         if sigs.get("picks"):
             all_picks_entries.append(entry)
-        elif sigs.get("avoid"):
-            avoid_entries.append(entry)
 
         # Closing-specific flag: steam or reverse line move
         gpk = game.get("game_pk")
@@ -3802,7 +3821,7 @@ def build_closing_brief(games, streaks, starters, movement, game_date,
             pass
         top_entry    = all_picks_entries[0] if len(all_picks_entries) >= 1 else None
         next_entries = all_picks_entries[1:6] if len(all_picks_entries) >= 2 else []
-        save_signal_state(conn, game_date, session, top_entry, next_entries, avoid_entries, now=now)
+        save_signal_state(conn, game_date, session, top_entry, next_entries, [], now=now)
 
     lines.append(
         "  ─────────────────────────────────────────────────────────────────\n"
@@ -3826,7 +3845,7 @@ def build_closing_brief(games, streaks, starters, movement, game_date,
 #   · Dark accent colour (#1F3864 navy) for headers — readable on print
 #   · Signal picks in a shaded table — stands out immediately
 #   · Full slate as a compact 4-column table (away, home, ML, O/U)
-#   · Avoid / Watch flags as bold callout paragraphs
+#   · Watch flags as bold callout paragraphs (no avoid callouts in customer docs)
 #   · All sessions supported: prior, morning, early, afternoon, primary, closing, late
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -3992,8 +4011,11 @@ def _add_matchup_block(doc, game: dict, streaks: dict, starters: dict,
             pick_bg   = "E8F5E9" if pick["market"] == "TOTAL" else "E3F2FD"
             for cell in row_cells:
                 _set_cell_bg(cell, pick_bg)
-            _cell_para(row_cells[0], ", ".join(sigs["signals"]),
-                       bold=True, size_pt=9, color_hex="1F3864")
+            _cell_para(
+                row_cells[0],
+                (sigs.get("signal_brief") or "").strip() or ", ".join(sigs["signals"]),
+                bold=True, size_pt=9, color_hex="1F3864",
+            )
             _cell_para(row_cells[1], pick["bet"],
                        bold=True, size_pt=10, color_hex="0D47A1")
             _cell_para(row_cells[2], pick["odds"],
@@ -4005,27 +4027,7 @@ def _add_matchup_block(doc, game: dict, streaks: dict, starters: dict,
 
         doc.add_paragraph()  # spacer
 
-    # ── Avoid flag (only when no picks — avoids duplicate banner when tier=Avoid+winds)
-    if sigs["avoid"] and not sigs.get("picks"):
-        scope = _avoid_scope_line(game, sigs)
-        if scope:
-            p0 = doc.add_paragraph()
-            run0 = p0.add_run(f"BET TO SKIP: {scope}")
-            run0.bold = True
-            run0.font.size = Pt(9)
-            run0.font.color.rgb = RGBColor(0x6B, 0x72, 0x80)  # slate gray
-            p0.paragraph_format.left_indent = Inches(0.2)
-            p0.paragraph_format.space_before = Pt(2)
-            p0.paragraph_format.space_after = Pt(0)
-
-        p   = doc.add_paragraph()
-        run = p.add_run(f"⛔  AVOID: {sigs['avoid_reason']}")
-        run.bold      = True
-        run.font.size = Pt(9)
-        run.font.color.rgb = RGBColor(0xC6, 0x28, 0x28)
-        p.paragraph_format.left_indent  = Inches(0.2)
-        p.paragraph_format.space_before = Pt(2)
-        p.paragraph_format.space_after  = Pt(2)
+    # (No "bets to avoid" block in customer Word output.)
 
     # ── Watch flag ───────────────────────────────────────────────────────
     if sigs.get("watch") and sigs.get("watch_reason"):
@@ -4172,6 +4174,7 @@ def build_docx_brief(
         empty_sigs = {
             "picks": [],
             "signals": [],
+            "signal_ids": [],
             "avoid": False,
             "avoid_reason": None,
             "watch": False,
@@ -4199,8 +4202,8 @@ def build_docx_brief(
     # ── PRIMARY / EARLY / AFTERNOON layout ───────────────────────────────
     if session in ("primary", "early", "afternoon", "late"):
         picks_entries  = [e for e in entries if e["sigs"]["picks"]]
-        avoid_entries  = [e for e in entries if not e["sigs"]["picks"] and e["sigs"]["avoid"]]
-        nosig_entries  = [e for e in entries if not e["sigs"]["picks"] and not e["sigs"]["avoid"]]
+        # Games without a graded pick (including internal avoid flags) — no separate avoid section
+        nosig_entries  = [e for e in entries if not e["sigs"]["picks"]]
         picks_entries.sort(key=lambda e: min(p["priority"] for p in e["sigs"]["picks"]))
 
         # Top Pick
@@ -4319,8 +4322,11 @@ def build_docx_brief(
                              else "FFF2CC")
                 for cell in row_cells:
                     _set_cell_bg(cell, pick_bg)
-                _cell_para(row_cells[0], ", ".join(sigs["signals"]),
-                           bold=True, size_pt=9, color_hex="1F3864")
+                _cell_para(
+                    row_cells[0],
+                    (sigs.get("signal_brief") or "").strip() or ", ".join(sigs["signals"]),
+                    bold=True, size_pt=9, color_hex="1F3864",
+                )
                 _cell_para(row_cells[1], pick["bet"],
                            bold=True, size_pt=10, color_hex="0D47A1")
                 _cell_para(row_cells[2], pick.get("odds", ""),
@@ -4674,8 +4680,9 @@ def parse_args():
     p.add_argument(
         "--session", required=False, default=None,
         choices=["prior", "morning", "early", "afternoon", "primary", "closing", "late"],
-        help="Brief kind hint: prior is explicit; other values are ignored when --as-of-time or "
-             "--as-of supplies a clock (session is derived from SESSION_WINDOWS). "
+        help="Brief kind hint: prior is explicit; for other values, session is derived from "
+             "the effective ET ''now'' (SESSION_WINDOWS): explicit --as-of / --as-of-time, or "
+             "current time when those are omitted. The hint can disagree — see [hybrid] line. "
              "Required unless --sync-bet-ledger-only.",
     )
     p.add_argument(
@@ -4730,7 +4737,9 @@ def parse_args():
         default=None,
         metavar="TS",
         type=_parse_as_of_arg,
-        help='Full wall clock in America/New_York ("YYYY-MM-DD HH:MM"). Overrides --as-of-time.',
+        help='Full wall clock in America/New_York ("YYYY-MM-DD HH:MM") for a fixed instant — '
+        "replays, tests, or scheduled runner. Overrides --as-of-time. For a normal live brief, "
+        "omit; the script uses the current time in Eastern.",
     )
     p.add_argument(
         "--as-of-time",
@@ -4739,7 +4748,8 @@ def parse_args():
         metavar="HH:MM",
         type=_parse_as_of_time_arg,
         help="ET clock: HH:MM with --date, or full YYYY-MM-DD HH:MM (same as --as-of). "
-        "Required for non-prior sessions unless --as-of is set. Session from SESSION_WINDOWS.",
+        "Omit both --as-of and --as-of-time to use *current* Eastern Time (normal live run). "
+        "Use a fixed time for replays, tests, or backtest. Session from SESSION_WINDOWS via ``now``.",
     )
     return p.parse_args()
 
@@ -4786,9 +4796,10 @@ def main():
 
     args = parse_args()
     raw_session = args.session
-    has_clock = args.as_of_dt is not None or getattr(args, "as_of_time", None) is not None
+    # Explicit clock: replay / test. If unset, "now" is current America/New_York (live run).
+    explicit_as_of = args.as_of_dt is not None or getattr(args, "as_of_time", None) is not None
 
-    # now: precedence --as-of > --as-of-time + date > wall clock
+    # now: precedence --as-of > --as-of-time + date > wall clock (Eastern)
     if args.as_of_dt is not None:
         now = _now_et(args.as_of_dt)
     elif getattr(args, "as_of_time", None) is not None:
@@ -4807,7 +4818,13 @@ def main():
     global PERSIST_WRITES
     PERSIST_WRITES = not args.dry_run
 
-    print(f"[TIME] Running as-of: {now.strftime('%Y-%m-%d %H:%M ET')}")
+    if explicit_as_of:
+        print(f"[TIME] Running as-of: {now.strftime('%Y-%m-%d %H:%M ET')}")
+    else:
+        print(
+            f"[TIME] no --as-of / --as-of-time: using current Eastern Time — "
+            f"{now.strftime('%Y-%m-%d %H:%M ET')}"
+        )
     _ggid: int | None = None
     if getattr(args, "game_group_id", None) is not None and int(args.game_group_id) > 0:
         _ggid = int(args.game_group_id)
@@ -4857,12 +4874,6 @@ def main():
     if raw_session == "prior":
         session = "prior"
     else:
-        if not has_clock:
-            print(
-                "✗  Non-prior sessions require --as-of-time HH:MM (ET) or full "
-                "--as-of 'YYYY-MM-DD HH:MM' (ET)."
-            )
-            sys.exit(2)
         session = _session_from_et_datetime(now)
         if raw_session != session:
             print(
@@ -4870,10 +4881,10 @@ def main():
                 f"(ignoring --session {raw_session!r})"
             )
 
-    # Slate simulation clock for load_games / filtering (full --as-of or hybrid now).
-    as_of_for_slate = (
-        args.as_of_dt if args.as_of_dt is not None else (now if has_clock else None)
-    )
+    # Slate: only pass a simulated instant into load_games when user/runner set an
+    # explicit --as-of or --as-of-time (replays include Final rows, then we filter in main).
+    # Live "no as-of" runs use as_of_dt=None in load_games so already-Final games stay out in SQL.
+    as_of_for_slate = args.as_of_dt if args.as_of_dt is not None else (now if explicit_as_of else None)
 
     print(f"\n{'═'*72}")
     print(f"  MLB Betting Model · Daily Brief · {session.upper()} · {today}")
@@ -5150,10 +5161,8 @@ def main():
         # Build pick_entries for action sessions so they can be saved
         # to brief_picks for confirmed prior-report grading.
         pick_entries_for_log = None
-        avoid_entries_for_log = None
         if session in ("primary", "early", "afternoon", "late"):
             all_sig = []
-            all_avoid = []
             for g in games:
                 sigs = evaluate_signals(
                     conn, g, streaks, session, starters,
@@ -5161,12 +5170,9 @@ def main():
                 )
                 if sigs["picks"]:
                     all_sig.append({"game": g, "sigs": sigs})
-                elif sigs.get("avoid"):
-                    all_avoid.append({"game": g, "sigs": sigs})
             all_sig.sort(key=lambda e: min(p["priority"]
                                           for p in e["sigs"]["picks"]))
             pick_entries_for_log = all_sig
-            avoid_entries_for_log = all_avoid
         picks_count = 0
         for g in games:
             picks_count += len(
@@ -5183,7 +5189,7 @@ def main():
             picks_count,
             output_file,
             pick_entries=pick_entries_for_log,
-            avoid_entries=avoid_entries_for_log,
+            avoid_entries=None,
             now=now,
             game_group_id=_ggid,
         )
