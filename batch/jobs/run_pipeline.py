@@ -119,6 +119,40 @@ _DEPS_UPSTREAM_RESOLVED_STATUSES: tuple[str, ...] = (
     "timeout",
 )
 
+class _TeeTextIO:
+    """Write-through tee for stdout/stderr (keeps console output)."""
+
+    def __init__(self, a, b):
+        self._a = a
+        self._b = b
+
+    def write(self, s):
+        try:
+            self._a.write(s)
+        except Exception:
+            pass
+        try:
+            self._b.write(s)
+        except Exception:
+            pass
+        return len(s)
+
+    def flush(self):
+        try:
+            self._a.flush()
+        except Exception:
+            pass
+        try:
+            self._b.flush()
+        except Exception:
+            pass
+
+    def isatty(self):
+        try:
+            return bool(self._a.isatty())
+        except Exception:
+            return False
+
 
 def _utc_now_iso_z() -> str:
     return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -691,6 +725,16 @@ def _build_command(job: dict) -> str:
             else f"python batch/jobs/schedule_pipeline_day.py --globals-only --date-et {_default_tomorrow_date_et()}"
         ),
         "daily_backup": "python batch/utils/daily_backup.py",
+        "email_runlog_morning": (
+            f"python batch/jobs/email_run_log.py --date {job_date} --kind morning"
+            if job_date
+            else "python batch/jobs/email_run_log.py --kind morning"
+        ),
+        "email_runlog_eod": (
+            f"python batch/jobs/email_run_log.py --date {job_date} --kind eod"
+            if job_date
+            else "python batch/jobs/email_run_log.py --kind eod"
+        ),
     }
 
     # Never append ``# …`` for human context: Windows cmd.exe (shell=True) does not treat
@@ -738,6 +782,9 @@ def _dependency_rules() -> dict[str, list[str]]:
         "ledger_snapshot": ["load_today", "odds_pull"],
         # Run backup only after next-day globals have been scheduled.
         "daily_backup": ["schedule_next_day_globals"],
+        # Email the runner log after group-0 phases complete.
+        "email_runlog_morning": ["early_peek"],
+        "email_runlog_eod": ["daily_backup"],
     }
 
 
@@ -2089,6 +2136,13 @@ def main() -> None:
     )
     p.add_argument("--once", action="store_true", help="Run one polling pass then exit")
     p.add_argument("--ghost", action="store_true", help="Print what would run; do not execute or update DB")
+    p.add_argument(
+        "--log-file",
+        default=None,
+        metavar="PATH",
+        help="Append all runner stdout/stderr to this UTF-8 log file while still printing to console. "
+        "If omitted and --job-date-et is set, defaults to logs/run_pipeline_YYYY-MM-DD.txt",
+    )
     p.add_argument("--poll-seconds", type=int, default=60, help="Polling interval when looping (default 60)")
     p.add_argument(
         "--sleep-until-due",
@@ -2131,6 +2185,19 @@ def main() -> None:
     args = p.parse_args()
 
     db_path = str(Path(args.db).resolve()) if args.db else str(Path(get_db_path()).resolve())
+    # Tee runner output to a log file (still prints live to console).
+    log_path = str(args.log_file).strip() if args.log_file else ""
+    if not log_path and args.job_date_et:
+        log_path = str((_REPO_ROOT / "logs" / f"run_pipeline_{str(args.job_date_et).strip()}.txt").resolve())
+    _log_fh = None
+    if log_path:
+        try:
+            Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+            _log_fh = open(log_path, "a", encoding="utf-8", errors="replace")
+            sys.stdout = _TeeTextIO(sys.stdout, _log_fh)
+            sys.stderr = _TeeTextIO(sys.stderr, _log_fh)
+        except Exception as exc:
+            print(f"[run_pipeline] WARNING: could not open --log-file {log_path!r}: {exc}")
     if args.force_unlock:
         try:
             con = db_connect(db_path, timeout=30)
@@ -2172,6 +2239,13 @@ def main() -> None:
         exit_when_no_pending=bool(args.exit_when_no_pending),
         max_sleep_seconds=int(max_sleep),
     )
+
+    try:
+        if _log_fh is not None:
+            _log_fh.flush()
+            _log_fh.close()
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

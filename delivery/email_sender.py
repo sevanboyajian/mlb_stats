@@ -109,10 +109,14 @@ def send_report_email(
     if has_attach and attach_p is not None:
         data = attach_p.read_bytes()
         part = MIMEApplication(data, _subtype="octet-stream")
-        part.add_header(
-            "Content-Type",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        )
+        suffix = attach_p.suffix.lower()
+        if suffix == ".docx":
+            ctype = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        elif suffix in (".txt", ".log"):
+            ctype = "text/plain; charset=utf-8"
+        else:
+            ctype = "application/octet-stream"
+        part.add_header("Content-Type", ctype)
         part.add_header("Content-Disposition", "attachment", filename=attach_p.name)
         msg.attach(part)
 

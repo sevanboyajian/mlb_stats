@@ -421,19 +421,21 @@ def _insert_global_daily_setup_jobs(con: sqlite3.Connection, *, job_date_et: str
     g_ins += _insert_global_job(con, job_date_et=job_date_et, job_type="day_setup", scheduled_time_et=f"{job_date_et} 06:10 ET")
     g_ins += _insert_global_job(con, job_date_et=job_date_et, job_type="prior_report", scheduled_time_et=f"{job_date_et} 06:15 ET")
     g_ins += _insert_global_job(con, job_date_et=job_date_et, job_type="early_peek", scheduled_time_et=f"{job_date_et} 06:20 ET")
+    # Email the runner log after group-0 morning globals complete.
+    g_ins += _insert_global_job(con, job_date_et=job_date_et, job_type="email_runlog_morning", scheduled_time_et=f"{job_date_et} 06:22 ET")
     return int(g_ins)
 
 
 def _insert_schedule_next_day_globals_job(
     con: sqlite3.Connection, *, job_date_et: str, groups: List[Dict[str, Any]]
-) -> tuple[int, int, str, str]:
+) -> tuple[int, int, int, str, str, str]:
     """
     One row at last group T0 + 5 min ET. Runner runs --globals-only for the *next* calendar day.
     Needed after both full-day scheduling and --groups-only (day_setup) so the evening hook
     is never omitted when globals were not inserted in the same run.
     """
     if not groups:
-        return 0, 0, "", ""
+        return 0, 0, 0, "", "", ""
     try:
         group_t0_by_id = {int(g["group_id"]): _parse_iso_z(str(g["start_time"])) for g in groups}
         last_t0_utc = max(group_t0_by_id.values())
@@ -455,9 +457,18 @@ def _insert_schedule_next_day_globals_job(
             job_type="daily_backup",
             scheduled_time_et=sched_backup_et_str,
         )
-        return int(n_next), int(n_backup), sched_next_et_str, sched_backup_et_str
+        # Email the runner log after end-of-day group-0 tasks complete.
+        sched_email_et = sched_backup_et + dt.timedelta(minutes=1)
+        sched_email_et_str = sched_email_et.strftime("%Y-%m-%d %H:%M ET")
+        n_email = _insert_global_job(
+            con,
+            job_date_et=job_date_et,
+            job_type="email_runlog_eod",
+            scheduled_time_et=sched_email_et_str,
+        )
+        return int(n_next), int(n_backup), int(n_email), sched_next_et_str, sched_backup_et_str, sched_email_et_str
     except Exception:
-        return 0, 0, "", ""
+        return 0, 0, 0, "", "", ""
 
 
 def _print_jobs_for_date(con: sqlite3.Connection, game_date_et: str, limit: int = 200) -> None:
@@ -942,7 +953,7 @@ def main() -> None:
 
     # Pre-seed next calendar day's group-0 globals (evening). Same row whether we came from full day or --groups-only.
     try:
-        inserted_next, inserted_backup, sched_next_et_str, sched_backup_et_str = _insert_schedule_next_day_globals_job(
+        inserted_next, inserted_backup, inserted_email_eod, sched_next_et_str, sched_backup_et_str, sched_email_eod_et_str = _insert_schedule_next_day_globals_job(
             con, job_date_et=game_date_et, groups=groups
         )
         print(
@@ -952,6 +963,10 @@ def main() -> None:
         print(
             f"[schedule] inserted daily_backup: {inserted_backup}"
             + (f" at {sched_backup_et_str}" if sched_backup_et_str else "")
+        )
+        print(
+            f"[schedule] inserted email_runlog_eod: {inserted_email_eod}"
+            + (f" at {sched_email_eod_et_str}" if sched_email_eod_et_str else "")
         )
     except Exception as exc:
         print(f"[schedule] failed to insert schedule_next_day_globals: {exc}")
