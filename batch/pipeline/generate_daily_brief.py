@@ -3925,6 +3925,8 @@ def build_closing_brief(games, streaks, starters, movement, game_date,
         "\n  CLOSING CONFIRMATION — Compare against Primary Brief picks.\n"
         "  No new bets unless closing price is BETTER than Primary Brief price.\n"
         "  Flag any line that moved 3+ cents since the Primary Brief.\n"
+        "  Per game, “no pick” means the model has no published bet at this price snapshot —\n"
+        "  not that some unstated earlier signal expired (check Primary for that matchup).\n"
     )
 
     # For persistence (does not affect output)
@@ -3955,7 +3957,10 @@ def build_closing_brief(games, streaks, starters, movement, game_date,
             for p in sigs["picks"]:
                 lines.append(f"     → {p['bet']}  {p['odds']}  ({p['reason'][:60]}…)")
         else:
-            lines.append(f"  — No new signal fires at closing prices.")
+            lines.append(
+                "  — No model pick at these lines (no bet card for this snapshot). "
+                "See Primary Brief if you expected this game to be live; DATA notes explain gates."
+            )
 
         # Persistable classifications (no change to signal logic)
         entry = {
