@@ -6,6 +6,8 @@ Reads from mlb_stats.db and outputs the formatted betting brief.
 
 CHANGE LOG (latest first)
 ──────────────────────────
+2026-04-22  ``already_ran``: treat ``brief_log`` as duplicate only when ``output_file`` exists on
+            disk, so a logged-but-missing file no longer blocks without ``--force``.
 2026-04-22  ``--game-group-id`` + ``brief_log.game_group_id``: pipeline ``group_brief`` can run once
             per group without tripping the duplicate guard; bet_ledger T−30 materialization
             is no longer skipped for later groups. Filenames get ``_gN`` when set.
@@ -851,15 +853,17 @@ def already_ran(
     """
     Return True if a brief_log row would block a non-``--force`` run.
 
-    - Without ``--game-group-id`` (or id≤0): same as legacy — any row for (game_date, session).
-    - With ``--game-group-id N`` (N>0): only a row for the same (game_date, session, N) blocks.
+    - Without ``--game-group-id`` (or id≤0): a row for (game_date, session) blocks only if
+      ``output_file`` is set and that path still exists on disk (stale/ missing files allow re-run).
+    - With ``--game-group-id N`` (N>0): only a row for the same (game_date, session, N) blocks,
+      and only when the stored ``output_file`` exists.
     """
     try:
         if game_group_id is not None and int(game_group_id) > 0:
             g = int(game_group_id)
             cur = conn.execute(
                 """
-                SELECT 1 FROM brief_log
+                SELECT output_file FROM brief_log
                 WHERE game_date=? AND session=? AND IFNULL(game_group_id,0)=?
                 LIMIT 1
                 """,
@@ -867,10 +871,28 @@ def already_ran(
             )
         else:
             cur = conn.execute(
-                "SELECT 1 FROM brief_log WHERE game_date=? AND session=? LIMIT 1",
+                "SELECT output_file FROM brief_log WHERE game_date=? AND session=? LIMIT 1",
                 (game_date, session),
             )
-        return cur.fetchone() is not None
+        row = cur.fetchone()
+        if not row:
+            return False
+        of = (row["output_file"] if hasattr(row, "keys") else row[0]) or ""
+        of = str(of).strip()
+        if not of:
+            print(
+                "  [note] brief_log has a row for this date/session but no output_file; "
+                "allowing a fresh run (not a duplicate)."
+            )
+            return False
+        out_path = Path(of)
+        if not out_path.is_file():
+            print(
+                f"  [note] brief_log lists {of} but that file is missing; "
+                "allowing a fresh run. Use --force to overwrite a still-existing file."
+            )
+            return False
+        return True
     except sqlite3.OperationalError:
         return False
 
