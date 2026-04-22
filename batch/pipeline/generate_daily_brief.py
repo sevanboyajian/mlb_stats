@@ -6,6 +6,9 @@ Reads from mlb_stats.db and outputs the formatted betting brief.
 
 CHANGE LOG (latest first)
 ──────────────────────────
+2026-04-22  Session windows: removed clock-derived ``closing`` (18:45–20:15 → ``primary``); run
+            closing only with ``--session closing``. Word ``build_docx_from_text`` bolds Signal stack
+            / Core / Support / Minor lines under the pick card.
 2026-04-22  Primary / additional brief pick rows: ``format_bet_block`` (ASCII card, bucket BET
             label, grouped signals, model score, stake); ALT/INFO below card. Word SIGNAL column
             uses ``signal_summary_for_doc`` (same Core/Support/Minor grouping when ``_scored_game``
@@ -441,6 +444,16 @@ def build_docx_from_text(session: str, game_date: str, brief_text: str) -> "Docu
             _add_line(s, size_pt=9, bold=True)
             continue
 
+        # Signal stack lines under the ASCII pick card
+        if (
+            s.startswith("Signal stack")
+            or s.startswith("Core:")
+            or s.startswith("Support:")
+            or s.startswith("Minor:")
+        ):
+            _add_line(s, size_pt=9, bold=True)
+            continue
+
         # Matchup lines: "XXX  vs  YYY (h)".
         if " vs " in s and "[" in s and "]" in s and "ET" in s:
             _add_line(s, size_pt=11, bold=True)
@@ -630,13 +643,16 @@ SESSION_PULL_WINDOW = {
 # ET wall-clock → session for hybrid mode (--as-of-time / full --as-of).
 # Half-open minute ranges [start, end) on a 0–1440 minute-of-day axis. Does not alter
 # SESSION_PULL_WINDOW (used by --check-prereqs). Boundaries align with simulate_day /
-# operator schedule for early/afternoon/primary/closing/late.
+# operator schedule for early/afternoon/primary/late.
+#
+# ``closing`` is NOT derived from the clock — only ``--session closing`` (see ``main``).
+# The former 18:45–20:15 window maps here as ``primary`` so late-day runs still get the
+# full pick card / docx layout until ``late`` (west-coast window).
 _SESSION_WINDOW_RANGES_ET: tuple[tuple[int, int, str], ...] = (
     (0, 570, "morning"),       # 00:00–09:30
     (570, 735, "early"),       # 09:30–12:15
     (735, 945, "afternoon"),   # 12:15–15:45
-    (945, 1125, "primary"),    # 15:45–18:45 (incl. 17:30 primary pull window)
-    (1125, 1215, "closing"),   # 18:45–20:15
+    (945, 1215, "primary"),    # 15:45–20:15 (was split at 18:45 into primary+closing)
     (1215, 1440, "late"),      # 20:15–24:00
 )
 SESSION_WINDOWS = tuple(
@@ -4852,10 +4868,11 @@ def parse_args():
     p.add_argument(
         "--session", required=False, default=None,
         choices=["prior", "morning", "early", "afternoon", "primary", "closing", "late"],
-        help="Brief kind hint: prior is explicit; for other values, session is derived from "
-             "the effective ET ''now'' (SESSION_WINDOWS): explicit --as-of / --as-of-time, or "
-             "current time when those are omitted. The hint can disagree — see [hybrid] line. "
-             "Required unless --sync-bet-ledger-only.",
+        help="Brief kind: ``prior`` and ``closing`` are always honored as-is. All other values "
+             "are hints: the effective ET clock (--as-of / --as-of-time, or wall time) maps to "
+             "a session via SESSION_WINDOWS (morning/early/afternoon/primary/late). If the hint "
+             "differs, see [hybrid]. ``closing`` is never inferred from the clock — use it only "
+             "for the dedicated closing confirmation brief. Required unless --sync-bet-ledger-only.",
     )
     p.add_argument(
         "--date", default=None,
@@ -5045,6 +5062,9 @@ def main():
 
     if raw_session == "prior":
         session = "prior"
+    elif raw_session == "closing":
+        # Closing confirmation brief: never auto-selected from wall clock.
+        session = "closing"
     else:
         session = _session_from_et_datetime(now)
         if raw_session != session:

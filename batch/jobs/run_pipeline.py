@@ -718,7 +718,7 @@ def _build_command(job: dict) -> str:
             if job_date
             else "python batch/ingestion/load_weather.py"
         ),
-        # Group brief generation (time-windowing is embedded in generate_daily_brief session logic)
+        # Group brief: --session primary; ET clock can remap to early/afternoon/primary/late (not closing).
         "group_brief": f"python batch/pipeline/generate_daily_brief.py --session primary --date {job_date}" if job_date else "python batch/pipeline/generate_daily_brief.py --session primary",
         # Materialize bet_ledger inside T−30 pregame window; schedule every N minutes on game days if needed.
         "bet_ledger_sync": (
