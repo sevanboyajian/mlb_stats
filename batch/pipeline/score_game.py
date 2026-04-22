@@ -75,6 +75,34 @@ SIGNAL_BASE_SCORE: dict[str, int] = {
     "NF4": 3,
 }
 
+# Short reader-facing names for briefs (no internal codes shown to end users)
+SIGNAL_DISPLAY_NAME: dict[str, str] = {
+    "S1H2": "Streak Fade",
+    "S1+H2": "Streak Fade",
+    "MV-F": "Wind Fade (ML)",
+    "MV-B": "Wind Boost (Over)",
+    "H3b": "Wind → Over",
+    "LHP_FADE": "LHP Mismatch",
+    "LHP_FADE_RL": "LHP RL Edge",
+    "S1": "Streak Pressure",
+    "NF4": "Pitching Edge",
+    "JulyOVER": "July over boost",
+    "S6": "Hot pitcher fade",
+}
+
+# For layered “Signal stack” (Core / Support / Extras) in action briefs
+SIGNAL_BRIEF_CATEGORY: dict[str, str] = {
+    "S1H2": "core",
+    "LHP_FADE": "core",
+    "MV-F": "support",
+    "LHP_FADE_RL": "support",
+    "NF4": "support",
+    "MV-B": "extras",
+    "H3b": "extras",
+    "S1": "extras",
+    "JulyOVER": "extras",
+}
+
 BETTING_THRESHOLD = 5
 FULL_STAKE_THRESHOLD = 7
 
@@ -84,6 +112,71 @@ def _fmt_odds(val: Any) -> str:
         return "N/A"
     v = int(val)
     return f"+{v}" if v > 0 else str(v)
+
+
+def signal_display_name(signal_id: str) -> str:
+    """
+    Map internal ``signal_id`` (may be compound ``A+B``) to a short reader label.
+    Unknown ids fall back to the raw id (rare; helps catch new evaluators in dev).
+    """
+    raw = (signal_id or "").strip()
+    if not raw:
+        return ""
+    if "+" in raw:
+        parts = [p.strip() for p in raw.split("+") if p.strip()]
+        return " + ".join(signal_display_name(p) for p in parts)
+    return SIGNAL_DISPLAY_NAME.get(raw, raw)
+
+
+def format_aggregate_for_brief(aggregate: int | None, tier: str | None) -> str:
+    """
+    Aggregated best-side total score (sum of per-signal 1–10 scores on that side), not
+    a single-signal 1–10. ``Tier1`` uses [HIGH n]; otherwise [n].
+    """
+    if aggregate is None:
+        return ""
+    n = int(aggregate)
+    if (tier or "").strip() == "Tier1" and n > 0:
+        return f"[HIGH {n}]"
+    if n > 0:
+        return f"[{n}]"
+    return ""
+
+
+def format_signal_brief_text(signal_ids: list[str]) -> str:
+    """
+    Build the multi-line "Signal stack" (Core / Support / Extras) for the brief.
+    """
+    seen: set[str] = set()
+    core: list[tuple[int, str]] = []
+    support: list[tuple[int, str]] = []
+    extras: list[tuple[int, str]] = []
+    for sid in signal_ids:
+        s = (sid or "").strip()
+        if not s or s in seen:
+            continue
+        seen.add(s)
+        cat = SIGNAL_BRIEF_CATEGORY.get(s)
+        if not cat:
+            continue
+        label = signal_display_name(s)
+        if not label:
+            continue
+        pr = SIGNAL_PRIORITY.get(s, 99)
+        bucket = core if cat == "core" else (support if cat == "support" else extras)
+        bucket.append((pr, label))
+    for bucket in (core, support, extras):
+        bucket.sort(key=lambda t: t[0])
+    lines: list[str] = ["Signal stack"]
+    if core:
+        lines.append("  Core: " + " · ".join(t[1] for t in core))
+    if support:
+        lines.append("  Support: " + " · ".join(t[1] for t in support))
+    if extras:
+        lines.append("  Extras: " + " · ".join(t[1] for t in extras))
+    if len(lines) == 1:
+        return ""
+    return "\n".join(lines)
 
 
 def _breakeven(odds: int) -> float:
@@ -595,6 +688,10 @@ class ScoredGame:
     all_bets: list[SignalFinding] = field(default_factory=list)
     watch_list: list[SignalFinding] = field(default_factory=list)
     contradicted: list[SignalFinding] = field(default_factory=list)
+    # Sum of per-signal 1–10 scores per bet_side bucket; tier uses max bucket total
+    aggregated_by_side: dict[str, int] = field(default_factory=dict)
+    best_side: str | None = None
+    best_aggregate_score: int = 0
 
 
 def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> ScoredGame:
@@ -603,7 +700,6 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
     env = g.environment
 
     extra_flags: list[str] = []
-    debug_lines: list[str] = []
 
     if mkt.home_ml_current is None or mkt.away_ml_current is None:
         extra_flags.append("ML odds missing — signal evaluation limited")
@@ -674,8 +770,6 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
         sig.score_basis = basis
         scored_signals.append(sig)
 
-        debug_lines.append(f"{sig.signal_id} [{sig.bet_side}] score={score} :: {basis}")
-
     # --- Aggregate by bet side ---
     buckets: dict[str, list[SignalFinding]] = {}
     for sig in scored_signals:
@@ -687,7 +781,6 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
     for side, sigs in buckets.items():
         total = sum(int(s.confidence_score or 0) for s in sigs)
         aggregated_scores[side] = total
-        debug_lines.append(f"AGG {side} = {total}")
 
     # --- Pick best side ---
     best_side: str | None = None
@@ -711,8 +804,6 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
         tier = None
         stake = 0.0
 
-    debug_lines.append(f"BEST {best_side} score={best_score} → {tier}")
-
     # --- Build outputs ---
     active_bets: list[SignalFinding] = []
     top_pick: SignalFinding | None = None
@@ -722,7 +813,8 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
         if relevant:
             top_pick = max(relevant, key=lambda s: int(s.confidence_score or 0))
 
-    data_flags = list(g.completeness.gaps) + extra_flags + debug_lines
+    # Customer briefs: gaps + venue/odds notes only (no per-signal / AGG debug lines)
+    data_flags = list(g.completeness.gaps) + extra_flags
 
     return ScoredGame(
         game=g,
@@ -738,6 +830,9 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
         all_bets=scored_signals,
         watch_list=[],
         contradicted=[],
+        aggregated_by_side=aggregated_scores,
+        best_side=best_side,
+        best_aggregate_score=int(best_score),
     )
 
 
@@ -790,17 +885,8 @@ def scored_game_to_eval_dict(scored: ScoredGame, session: str) -> dict[str, Any]
     ids = g.identifiers
     mkt = g.market
 
-    legacy_signals: list[str] = []
-    for s in scored.signals_fired:
-        if s.signal_id == "S1H2":
-            legacy_signals.append("S1+H2")
-        elif s.signal_id == "LHP_FADE":
-            legacy_signals.append("LHP_FADE")
-            legacy_signals.append("NF4")
-        elif s.signal_id == "LHP_FADE_RL":
-            legacy_signals.append("LHP_FADE_RL")
-        else:
-            legacy_signals.append(s.signal_id)
+    # Internal ids (same order as model fires) + July reinforcer as synthetic tag
+    internal_signal_ids: list[str] = [s.signal_id for s in scored.signals_fired]
 
     gdb = _gdb()
     month = _game_month(ids.game_date_et)
@@ -813,9 +899,12 @@ def scored_game_to_eval_dict(scored: ScoredGame, session: str) -> dict[str, Any]
         and pf >= gdb.JULY_OVER_MIN_PF
         and not g.environment.is_wind_suppressed
     )
-    if july_ok and ("H3b" in legacy_signals or "MV-B" in legacy_signals):
-        if "JulyOVER" not in legacy_signals:
-            legacy_signals.append("JulyOVER")
+    fired_id_set = {s.signal_id for s in scored.signals_fired}
+    if july_ok and (fired_id_set & {"H3b", "MV-B"}) and "JulyOVER" not in internal_signal_ids:
+        internal_signal_ids.append("JulyOVER")
+
+    # Customer briefs: short labels only (no S1H2, MV-F, H3b, etc.)
+    display_signals: list[str] = [signal_display_name(sid) for sid in internal_signal_ids]
 
     picks: list[dict[str, Any]] = []
     total_pick: dict[str, Any] | None = None
@@ -842,6 +931,7 @@ def scored_game_to_eval_dict(scored: ScoredGame, session: str) -> dict[str, Any]
                 "confidence_score": s.confidence_score,
                 "score_basis": s.score_basis,
                 "signal_id": s.signal_id,
+                "bet_side": "away_ml",
             }
             # LHP_FADE: show RL as an alternative line (not a separate pick card).
             if s.signal_id == "LHP_FADE" and lhp_rl is not None:
@@ -857,6 +947,7 @@ def scored_game_to_eval_dict(scored: ScoredGame, session: str) -> dict[str, Any]
                     "confidence_score": lhp_rl.confidence_score,
                     "note": "Higher hit rate (66%) at lower ROI per unit.",
                     "signal_id": "LHP_FADE_RL",
+                    "bet_side": "away_rl",
                 }
             # S1H2: show RL as informational only (no score).
             if s.signal_id == "S1H2" and mkt.rl_available and mkt.away_rl_odds is not None:
@@ -885,6 +976,7 @@ def scored_game_to_eval_dict(scored: ScoredGame, session: str) -> dict[str, Any]
                     "confidence_score": s.confidence_score,
                     "score_basis": s.score_basis,
                     "signal_id": s.signal_id,
+                    "bet_side": "over_total",
                 }
                 picks.append(total_pick)
             else:
@@ -930,6 +1022,17 @@ def scored_game_to_eval_dict(scored: ScoredGame, session: str) -> dict[str, Any]
                 (watch_reason + " | " if watch_reason else "") + extra
             )
 
+    # Aggregated brief scores: sum per bet_side in scored.aggregated_by_side
+    ab = scored.aggregated_by_side
+    for pick in picks:
+        bside = str(pick.get("bet_side") or "")
+        if bside:
+            pick["aggregate_score"] = int(ab.get(bside, 0))
+        alt = pick.get("alt")
+        if isinstance(alt, dict):
+            # LHP RL alt: show same narrative total as the paired ML (away_ml bucket)
+            alt["aggregate_score"] = int(ab.get("away_ml", 0))
+
     # Legacy ``avoid``: do not conflate “venue note” with “this card is an AVOID.”
     # If any signal fires, soft environment avoids must not set avoid=True (Word
     # brief showed picks + AVOID banner). Hard avoid = tier Avoid from model policy.
@@ -949,8 +1052,11 @@ def scored_game_to_eval_dict(scored: ScoredGame, session: str) -> dict[str, Any]
             # Fall back to listing bet_type(s) rather than implying everything.
             avoid_scope = " / ".join(sorted(set(str(x) for x in avoid_bet_types)))
     return {
-        "signals": legacy_signals,
+        "signals": display_signals,
+        "signal_ids": internal_signal_ids,
         "picks": picks,
+        "signal_brief": format_signal_brief_text(internal_signal_ids),
+        "best_aggregate_score": int(scored.best_aggregate_score or 0),
         "avoid": hard_avoid,
         "avoid_scope": avoid_scope,
         "avoid_types": avoid_types,

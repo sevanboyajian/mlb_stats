@@ -676,12 +676,12 @@ def run_backtest(conn, mod, date_from: str, date_to: str,
             for pick in sigs["picks"]:
                 # Apply signal filter if requested
                 if signal_filter:
-                    if signal_filter not in sigs["signals"]:
+                    if signal_filter not in (sigs.get("signal_ids") or []):
                         continue
                 picks_today.append({
                     "game":     game,
                     "pick":     pick,
-                    "signals":  sigs["signals"],
+                    "signals":  sigs.get("signal_ids") or sigs["signals"],
                     "priority": pick["priority"],
                 })
 
@@ -727,7 +727,9 @@ def run_backtest(conn, mod, date_from: str, date_to: str,
             "score":    f"{away} {as_}  –  {home} {hs}" if hs is not None else "N/A",
             "bet":      pick["bet"],
             "odds":     pick["odds"],
-            "signals":  ", ".join(top["signals"]),
+            "signals":  ", ".join(
+                str(x) for x in (top["signals"] if isinstance(top["signals"], (list, tuple)) else [top["signals"]])
+            ),
             "result":   result,
             "pnl":      pnl,
             "stake":    day_stake,
