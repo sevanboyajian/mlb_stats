@@ -671,7 +671,8 @@ def run_backtest(conn, mod, date_from: str, date_to: str,
             if game.get("home_ml") is None:
                 continue   # no odds — skip this game
             sigs = mod.evaluate_signals(conn, game, streaks, "primary")
-            if not sigs["picks"]:
+            # NO SIGNAL policy: best aggregated score < 5 only
+            if int(sigs.get("best_aggregate_score") or 0) < 5:
                 continue
             for pick in sigs["picks"]:
                 # Apply signal filter if requested

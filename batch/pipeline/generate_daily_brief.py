@@ -4022,15 +4022,17 @@ def build_closing_brief(games, streaks, starters, movement, game_date,
         if mov:
             lines.append(f"  Movement: {mov}")
 
-        # Signal hold check
-        if sigs["picks"]:
-            lines.append(f"  ✅ Signal(s) still ACTIVE: {', '.join(sigs['signals'])}")
-            for p in sigs["picks"]:
+        # Signal hold check (NO SIGNAL is aggregated-score driven; do not gate on empty pick lists)
+        best_score = int(sigs.get("best_aggregate_score") or 0)
+        if best_score >= 5:
+            lines.append(f"  ✅ Model pick tier at this snapshot: {sigs.get('output_tier') or 'Tier?'} (score {best_score})")
+            if sigs.get("signals"):
+                lines.append(f"     Signals: {', '.join(sigs['signals'])}")
+            for p in (sigs.get("picks") or []):
                 lines.append(f"     → {p['bet']}  {p['odds']}  ({p['reason'][:60]}…)")
         else:
             lines.append(
-                "  — No model pick at these lines (no bet card for this snapshot). "
-                "See Primary Brief if you expected this game to be live; DATA notes explain gates."
+                "  — NO SIGNAL at these lines (best aggregated score < 5; no published bet card)."
             )
 
         # Persistable classifications (no change to signal logic)
@@ -4040,7 +4042,7 @@ def build_closing_brief(games, streaks, starters, movement, game_date,
             "starter": starter_line(g, starters),
             "streak":  streak_line(g, streaks),
         }
-        if sigs.get("picks"):
+        if int(sigs.get("best_aggregate_score") or 0) >= 5:
             all_picks_entries.append(entry)
 
         # Closing-specific flag: steam or reverse line move
@@ -4444,15 +4446,17 @@ def build_docx_brief(
 
     # ── PRIMARY / EARLY / AFTERNOON layout ───────────────────────────────
     if session in ("primary", "early", "afternoon", "late"):
-        picks_entries  = [e for e in entries if e["sigs"]["picks"]]
-        # Games without a graded pick (including internal avoid flags) — no separate avoid section
-        nosig_entries  = [e for e in entries if not e["sigs"]["picks"]]
+        # NO SIGNAL policy:
+        # - best_aggregate_score < 5 → No Signal
+        # - otherwise → tier from score_game (Tier1/Tier2/Tier3) and must NOT be labeled No Signal
+        picks_entries  = [e for e in entries if int(e["sigs"].get("best_aggregate_score") or 0) >= 5]
+        nosig_entries  = [e for e in entries if int(e["sigs"].get("best_aggregate_score") or 0) < 5]
         picks_entries.sort(key=lambda e: min(p["priority"] for p in e["sigs"]["picks"]))
 
         # Top Pick
         _add_heading(doc, "Top Pick  —  Highest Probability Signal", level=2)
         if not picks_entries:
-            _add_note(doc, "No confirmed signals fire on today's slate. Wait for tomorrow. Discipline > action.", color_hex="C62828")
+            _add_note(doc, "No published picks (best aggregated score < 5 across the slate). Wait for tomorrow. Discipline > action.", color_hex="C62828")
         else:
             _add_matchup_block(doc, picks_entries[0]["game"], streaks, starters,
                                picks_entries[0]["sigs"])
