@@ -3521,7 +3521,12 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
         if ol:
             lines.append(ol)
 
-        sig_label = ", ".join(e["sigs"].get("signals") or []) or "No Signal"
+        best_sc = int((e.get("sigs") or {}).get("best_aggregate_score") or 0)
+        sig_label = (
+            ", ".join(e["sigs"].get("signals") or [])
+            if best_sc >= 5
+            else "No Signal"
+        )
 
         # ML line
         ml_pick = _best_pick_for_market(e.get("graded") or [], "ML")
@@ -3533,7 +3538,7 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
         else:
             winner = e.get("winner") or ""
             lines.append(
-                f"  BET LINE: {winner} ML{' ' * max(0, 9-len(winner))} | SIGNAL: No Signal  | "
+                f"  BET LINE: {winner} ML{' ' * max(0, 9-len(winner))} | SIGNAL: {sig_label:<10} | "
                 f"RESULT: WIN  | P&L: N/A"
             )
 
@@ -3559,12 +3564,12 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
                 )
             else:
                 lines.append(
-                    f"  BET LINE: {outcome_bet:<12} | SIGNAL: No Signal  | "
+                    f"  BET LINE: {outcome_bet:<12} | SIGNAL: {sig_label:<10} | "
                     f"RESULT: {outcome_res:<4} | P&L: N/A"
                 )
         else:
             lines.append(
-                "  BET LINE: TOTAL N/A     | SIGNAL: No Signal  | RESULT: —    | P&L: N/A"
+                f"  BET LINE: TOTAL N/A     | SIGNAL: {sig_label:<10} | RESULT: —    | P&L: N/A"
             )
 
         # RUNLINE line (spread) — show when data available
@@ -3608,12 +3613,12 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
                 outcome_bet = f"{g.get('away_abbr','')} {arl:+g}"
                 outcome_res = "WIN"
             lines.append(
-                f"  BET LINE: {outcome_bet:<12} | SIGNAL: No Signal  | "
+                f"  BET LINE: {outcome_bet:<12} | SIGNAL: {sig_label:<10} | "
                 f"RESULT: {outcome_res:<4} | P&L: N/A"
             )
         else:
             lines.append(
-                "  BET LINE: RUNLINE N/A   | SIGNAL: No Signal  | RESULT: —    | P&L: N/A"
+                f"  BET LINE: RUNLINE N/A   | SIGNAL: {sig_label:<10} | RESULT: —    | P&L: N/A"
             )
 
         if e["sigs"].get("data_flags"):
@@ -3769,7 +3774,8 @@ def build_primary_brief(games, streaks, starters, game_date,
             "starter": starter_line(game, starters),
             "streak":  streak_line(game, streaks),
         }
-        if sigs["picks"]:
+        best_score = int(sigs.get("best_aggregate_score") or 0)
+        if best_score >= 5:
             all_picks.append(entry)
         else:
             # No published "bets to avoid" — treat no-pick games (incl. internal avoid flags) as no-signal slate
@@ -4632,7 +4638,12 @@ def build_docx_brief(
             _add_score_line(doc, e)
             _add_odds_line(doc, g)
 
-            sig_label = ", ".join(e["sigs"].get("signals") or []) or "No Signal"
+            best_sc = int((e.get("sigs") or {}).get("best_aggregate_score") or 0)
+            sig_label = (
+                ", ".join(e["sigs"].get("signals") or [])
+                if best_sc >= 5
+                else "No Signal"
+            )
 
             # ML bet line
             ml_pick = _best_pick_for_market(e.get("graded") or [], "ML")

@@ -939,90 +939,77 @@ def scored_game_to_eval_dict(scored: ScoredGame, session: str) -> dict[str, Any]
     ]
 
     picks: list[dict[str, Any]] = []
-    total_pick: dict[str, Any] | None = None
-
-    lhp_rl = next((s for s in scored.signals_fired if s.signal_id == "LHP_FADE_RL"), None)
-    fired_sorted = sorted(
-        (
-            s
-            for s in scored.signals_fired
-            if s.confidence_score >= FULL_STAKE_THRESHOLD
-            and s.signal_id != "LHP_FADE_RL"  # rendered under LHP_FADE as ALT
-        ),
-        key=lambda s: (-s.confidence_score, SIGNAL_PRIORITY.get(s.signal_id, 99)),
-    )
-    for s in fired_sorted:
-        pr = SIGNAL_PRIORITY.get(s.signal_id, 9)
-        if s.bet_side == "away_ml":
-            pick = {
-                "bet": f"{ids.away_team_abbr} ML",
-                "market": "ML",
-                "odds": s.odds,
-                "reason": s.edge_basis,
-                "priority": pr,
-                "confidence_score": s.confidence_score,
-                "score_basis": s.score_basis,
-                "signal_id": s.signal_id,
-                "bet_side": "away_ml",
-            }
-            # LHP_FADE: show RL as an alternative line (not a separate pick card).
-            if s.signal_id == "LHP_FADE" and lhp_rl is not None:
-                rl_line = mkt.away_rl_line
-                bet = (
-                    f"{ids.away_team_abbr} {rl_line:+g}"
-                    if rl_line is not None
-                    else f"{ids.away_team_abbr} +1.5"
-                )
-                pick["alt"] = {
-                    "bet": bet,
-                    "odds": lhp_rl.odds,
-                    "confidence_score": lhp_rl.confidence_score,
-                    "note": "Higher hit rate (66%) at lower ROI per unit.",
-                    "signal_id": "LHP_FADE_RL",
-                    "bet_side": "away_rl",
+    # NO SIGNAL policy is driven by aggregated scoring only:
+    # if best_aggregate_score < 5 → no pick; otherwise show a card for best_side.
+    best_score = int(scored.best_aggregate_score or 0)
+    if best_score >= 5 and scored.best_side:
+        lhp_rl = next((s for s in scored.signals_fired if s.signal_id == "LHP_FADE_RL"), None)
+        active_sorted = sorted(
+            (s for s in (scored.active_bets or []) if s.signal_id != "LHP_FADE_RL"),
+            key=lambda s: (-int(s.confidence_score or 0), SIGNAL_PRIORITY.get(s.signal_id, 99)),
+        )
+        if active_sorted:
+            pr = min(SIGNAL_PRIORITY.get(s.signal_id, 9) for s in active_sorted)
+            top = max(active_sorted, key=lambda s: int(s.confidence_score or 0))
+            # Combine reasons in score order (keeps primary driver first).
+            reason = " ".join((s.edge_basis or "").strip() for s in active_sorted if (s.edge_basis or "").strip())
+            if scored.best_side == "away_ml":
+                pick = {
+                    "bet": f"{ids.away_team_abbr} ML",
+                    "market": "ML",
+                    "odds": _fmt_odds(mkt.away_ml_current),
+                    "reason": reason or (top.edge_basis or ""),
+                    "priority": pr,
+                    "confidence_score": int(top.confidence_score or 0),
+                    "score_basis": top.score_basis,
+                    "signal_id": top.signal_id,
+                    "bet_side": "away_ml",
                 }
-            # S1H2: show RL as informational only (no score).
-            if s.signal_id == "S1H2" and mkt.rl_available and mkt.away_rl_odds is not None:
-                rl_line = mkt.away_rl_line
-                bet = (
-                    f"{ids.away_team_abbr} {rl_line:+g}"
-                    if rl_line is not None
-                    else f"{ids.away_team_abbr} +1.5"
-                )
-                pick["info"] = {
-                    "bet": bet,
-                    "odds": _fmt_odds(mkt.away_rl_odds),
-                    "note": "RL at breakeven — ML is the preferred bet.",
-                }
-            picks.append(pick)
-        elif s.bet_side == "over_total":
-            tline = mkt.total_current
-            bet_txt = f"OVER {tline}" if tline is not None else "OVER"
-            if total_pick is None:
-                total_pick = {
+                # LHP_FADE: show RL as an alternative line (not a separate pick card).
+                if any(s.signal_id == "LHP_FADE" for s in active_sorted) and lhp_rl is not None:
+                    rl_line = mkt.away_rl_line
+                    bet = (
+                        f"{ids.away_team_abbr} {rl_line:+g}"
+                        if rl_line is not None
+                        else f"{ids.away_team_abbr} +1.5"
+                    )
+                    pick["alt"] = {
+                        "bet": bet,
+                        "odds": lhp_rl.odds,
+                        "confidence_score": int(lhp_rl.confidence_score or 0),
+                        "note": "Higher hit rate (66%) at lower ROI per unit.",
+                        "signal_id": "LHP_FADE_RL",
+                        "bet_side": "away_rl",
+                    }
+                # S1H2: show RL as informational only (no score).
+                if any(s.signal_id == "S1H2" for s in active_sorted) and mkt.rl_available and mkt.away_rl_odds is not None:
+                    rl_line = mkt.away_rl_line
+                    bet = (
+                        f"{ids.away_team_abbr} {rl_line:+g}"
+                        if rl_line is not None
+                        else f"{ids.away_team_abbr} +1.5"
+                    )
+                    pick["info"] = {
+                        "bet": bet,
+                        "odds": _fmt_odds(mkt.away_rl_odds),
+                        "note": "RL at breakeven — ML is the preferred bet.",
+                    }
+                picks.append(pick)
+            elif scored.best_side == "over_total":
+                tline = mkt.total_current
+                bet_txt = f"OVER {tline}" if tline is not None else "OVER"
+                pick = {
                     "bet": bet_txt,
                     "market": "TOTAL",
-                    "odds": s.odds,
-                    "reason": s.edge_basis,
+                    "odds": _fmt_odds(mkt.over_odds_current),
+                    "reason": reason or (top.edge_basis or ""),
                     "priority": pr,
-                    "confidence_score": s.confidence_score,
-                    "score_basis": s.score_basis,
-                    "signal_id": s.signal_id,
+                    "confidence_score": int(top.confidence_score or 0),
+                    "score_basis": top.score_basis,
+                    "signal_id": top.signal_id,
                     "bet_side": "over_total",
                 }
-                picks.append(total_pick)
-            else:
-                total_pick["reason"] += " " + s.edge_basis
-                total_pick["priority"] = min(total_pick["priority"], pr)
-                if s.confidence_score > int(total_pick.get("confidence_score") or 0):
-                    total_pick["confidence_score"] = s.confidence_score
-                    total_pick["score_basis"] = s.score_basis
-                    total_pick["signal_id"] = s.signal_id
-                elif s.confidence_score == int(total_pick.get("confidence_score") or 0):
-                    tid = str(total_pick.get("signal_id") or "")
-                    total_pick["signal_id"] = (
-                        f"{tid}+{s.signal_id}" if tid and tid != s.signal_id else s.signal_id
-                    )
+                picks.append(pick)
 
     watch = False
     watch_reason = None
