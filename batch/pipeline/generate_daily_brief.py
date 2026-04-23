@@ -1322,9 +1322,30 @@ def _insert_bet_ledger_from_latest(
     latest: dict[tuple[int, str, str], tuple[datetime.datetime, sqlite3.Row]],
 ) -> int:
     inserted = 0
+    # One opinion = one bet: if (game_pk, market_type) already has any staked bet, skip.
+    # Also: totals are disabled temporarily (skip market_type == 'total').
+    already_staked: set[tuple[int, str]] = set()
+    try:
+        rows = conn.execute(
+            "SELECT game_pk, market_type FROM bet_ledger WHERE game_date=? AND stake_units>0",
+            (game_date,),
+        ).fetchall()
+        for rr in rows:
+            try:
+                already_staked.add((int(rr[0]), str(rr[1] or "")))
+            except Exception:
+                continue
+    except Exception:
+        # Best-effort; fall back to unique index behavior only.
+        pass
     for (_gpk, _mt, _st), (_dt, r) in latest.items():
         sig_type = (r["signal_type"] or "").strip()
         if sig_type not in ("top", "next", "avoid"):
+            continue
+        mt = str(r["market_type"] or "")
+        if mt == "total":
+            continue
+        if (int(r["game_pk"]), mt) in already_staked:
             continue
         stake = 0.0 if sig_type == "avoid" else 1.0
         odds_val = None if sig_type == "avoid" else r["odds"]
@@ -1339,7 +1360,7 @@ def _insert_bet_ledger_from_latest(
                 (
                     game_date,
                     int(r["game_pk"]),
-                    r["market_type"],
+                    mt,
                     r["bet"],
                     odds_val,
                     stake,
@@ -1352,6 +1373,8 @@ def _insert_bet_ledger_from_latest(
             )
             if getattr(cur, "rowcount", 0) == 1:
                 inserted += 1
+                if stake > 0:
+                    already_staked.add((int(r["game_pk"]), mt))
         except sqlite3.OperationalError:
             continue
     return inserted
