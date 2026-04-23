@@ -2915,6 +2915,51 @@ def group_signals(signals: list) -> dict[str, list[str]]:
     }
 
 
+def generate_why_line(signals: list) -> str:
+    if not signals:
+        return "No clear edge."
+
+    sigs = sorted(signals, key=lambda x: int(getattr(x, "confidence_score", 0) or 0), reverse=True)
+
+    label_map = {
+        "S1+H2": "streak fade",
+        "S1H2": "streak fade",
+        "S1": "streak pressure",
+        "MV-F": "wind fade conditions",
+        "MV-B": "wind boost for scoring",
+        "H3b": "over conditions from wind",
+        "LHP_FADE": "lefty/righty mismatch",
+        "LHP_FADE_RL": "run line matchup edge",
+        "NF4": "pitching mismatch",
+    }
+
+    top: list[str] = []
+    for s in sigs:
+        sid = str(getattr(s, "signal_id", "") or "")
+        label = label_map.get(sid, sid.lower())
+        if label and label not in top:
+            top.append(label)
+        if len(top) == 3:
+            break
+
+    if not top:
+        return "No clear edge."
+
+    # Match example tone: if the top driver is very strong, prefix "strong".
+    try:
+        top_score = int(getattr(sigs[0], "confidence_score", 0) or 0)
+    except Exception:
+        top_score = 0
+    if top_score >= 8 and not top[0].startswith("strong "):
+        top[0] = "strong " + top[0]
+
+    if len(top) == 1:
+        return f"WHY: {top[0].capitalize()} driving the edge."
+    if len(top) == 2:
+        return f"WHY: {top[0].capitalize()} with support from {top[1]}."
+    return f"WHY: {top[0].capitalize()} with support from {top[1]} and {top[2]}."
+
+
 def format_bet_block(scored_game: object) -> str:
     """
     ASCII pick card from a ``ScoredGame`` (primary / additional brief rows).
@@ -2948,6 +2993,8 @@ def format_bet_block(scored_game: object) -> str:
     if not signal_lines.strip():
         signal_lines = "(none)"
 
+    why_line = generate_why_line(list(getattr(scored_game, "active_bets", []) or []))
+
     pick = getattr(scored_game, "top_pick", None)
     best_side = getattr(scored_game, "best_side", None)
     if pick is not None and getattr(pick, "bet_side", None):
@@ -2958,6 +3005,8 @@ def format_bet_block(scored_game: object) -> str:
     return f"""
 ┌─────────────────────────────────────────────────────────┐
 │  BET:     {bet_txt:<18}  [{tier_txt} · {confidence}%]
+│
+│  {why_line}
 │
 │  SIGNAL:
 {signal_lines}
