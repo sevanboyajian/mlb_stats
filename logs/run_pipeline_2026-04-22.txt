@@ -1,0 +1,45 @@
+[run_pipeline] force-unlock: clearing existing runner_lock (acquired_at_utc=2026-04-22T09:12:19Z pid=10468 host=SB919759)
+[run_pipeline] db=C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\data\mlb_stats.db
+[run_pipeline] mode=loop poll_seconds=60 ghost=False stale_minutes=30 timeout_minutes=30 sleep_until_due=True scope_job_date_et='2026-04-22' exit_when_no_pending=True
+[run_pipeline] sleep-until-due: next pending at 2026-04-22 21:10 ET (~180s)
+
+[job] id=842 type=group_brief job_date_et=2026-04-22 game_group_id=9 scheduled_time=2026-04-22 21:10 ET
+[job] command='python batch/pipeline/generate_daily_brief.py --session primary --date 2026-04-22 --as-of "2026-04-22 21:10" --game-group-id 9'
+[job] context: group_id=9 window=[2026-04-22 21:10 ET -> 2026-04-22 21:12 ET]
+[job] start_et=2026-04-22 21:10:22 ET (claimed)
+[job] end_et=2026-04-22 21:10:26 ET status=complete rc=0
+[run_pipeline] pipeline_job_runs INSERT failed job_id=842 type='group_brief' status='complete': IntegrityError("CHECK constraint failed: status IN ('queued','running','success','failed','skipped','timeout')")
+[run_pipeline] CRITICAL: no pipeline_job_runs row for successful job_id=842 — check DB permissions / schema (pipeline_jobs will still sync).
+[run_pipeline] sleep-until-due: next pending at 2026-04-22 21:12 ET (~120s)
+
+[job] id=851 type=ledger_snapshot job_date_et=2026-04-22 game_group_id=9 scheduled_time=2026-04-22 21:12 ET
+[job] command='python batch/pipeline/daily_results_report.py --date 2026-04-22'
+[job] context: group_id=9 window=[2026-04-22 21:10 ET -> 2026-04-22 21:40 ET]
+[job] start_et=2026-04-22 21:12:26 ET (claimed)
+[job] end_et=2026-04-22 21:12:26 ET status=complete rc=0
+[run_pipeline] pipeline_job_runs INSERT failed job_id=851 type='ledger_snapshot' status='complete': IntegrityError("CHECK constraint failed: status IN ('queued','running','success','failed','skipped','timeout')")
+[run_pipeline] CRITICAL: no pipeline_job_runs row for successful job_id=851 — check DB permissions / schema (pipeline_jobs will still sync).
+[run_pipeline] sleep-until-due: next pending at 2026-04-22 21:45 ET (~1980s)
+
+[job] id=852 type=schedule_next_day_globals job_date_et=2026-04-22 game_group_id=0 scheduled_time=2026-04-22 21:45 ET
+[job] command='python batch/jobs/schedule_pipeline_day.py --globals-only --date-et 2026-04-23'
+[job] start_et=2026-04-22 21:45:26 ET (claimed)
+[job] end_et=2026-04-22 21:45:26 ET status=complete rc=0
+[run_pipeline] pipeline_job_runs INSERT failed job_id=852 type='schedule_next_day_globals' status='complete': IntegrityError("CHECK constraint failed: status IN ('queued','running','success','failed','skipped','timeout')")
+[run_pipeline] CRITICAL: no pipeline_job_runs row for successful job_id=852 — check DB permissions / schema (pipeline_jobs will still sync).
+[run_pipeline] sleep-until-due: next pending at 2026-04-22 21:46 ET (~60s)
+
+[job] id=853 type=daily_backup job_date_et=2026-04-22 game_group_id=0 scheduled_time=2026-04-22 21:46 ET
+[job] command='python batch/utils/daily_backup.py'
+[job] start_et=2026-04-22 21:46:26 ET (claimed)
+[job] end_et=2026-04-22 21:47:48 ET status=complete rc=0
+[run_pipeline] pipeline_job_runs INSERT failed job_id=853 type='daily_backup' status='complete': IntegrityError("CHECK constraint failed: status IN ('queued','running','success','failed','skipped','timeout')")
+[run_pipeline] CRITICAL: no pipeline_job_runs row for successful job_id=853 — check DB permissions / schema (pipeline_jobs will still sync).
+
+[job] id=908 type=email_runlog_eod job_date_et=2026-04-22 game_group_id=0 scheduled_time=2026-04-22 21:47 ET
+[job] command='python batch/jobs/email_run_log.py --date 2026-04-22 --kind eod'
+[job] start_et=2026-04-22 21:47:48 ET (claimed)
+[job] end_et=2026-04-22 21:47:50 ET status=complete rc=0
+[run_pipeline] pipeline_job_runs INSERT failed job_id=908 type='email_runlog_eod' status='complete': IntegrityError("CHECK constraint failed: status IN ('queued','running','success','failed','skipped','timeout')")
+[run_pipeline] CRITICAL: no pipeline_job_runs row for successful job_id=908 — check DB permissions / schema (pipeline_jobs will still sync).
+[run_pipeline] no pending pipeline_jobs; exiting (--exit-when-no-pending).

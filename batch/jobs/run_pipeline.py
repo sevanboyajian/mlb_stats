@@ -1185,6 +1185,15 @@ def _insert_pipeline_job_run_full(
     """
     if not run_cols or "started_at_utc" not in run_cols:
         return None
+    # Some older DBs have a CHECK constraint on pipeline_job_runs.status using
+    # ('queued','running','success','failed','skipped','timeout') while pipeline_jobs
+    # uses ('pending','running','complete','failed','timeout','skipped').
+    # Normalize here so the run audit insert never breaks the runner.
+    st = (run_status or "").strip().lower()
+    if st == "complete":
+        run_status = "success"
+    elif st == "pending":
+        run_status = "queued"
     dur: float | None = None
     if "duration_seconds" in run_cols:
         dur = _duration_seconds_utc(started_at_utc, finished_at_utc)
