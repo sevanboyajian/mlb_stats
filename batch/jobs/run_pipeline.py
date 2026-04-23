@@ -10,8 +10,9 @@ CHANGE LOG (latest first)
 ────────────────────────
 2026-04-22  Auditing: log ``pipeline_job_runs`` INSERT failures (were silent); warn if the runs
             table is unreadable; if CREATE fails but the table exists, reuse it. CRITICAL line
-            when a successful subprocess did not get a run row. Log ``[job] start`` only after a
-            successful claim (avoids “started” lines on dependency SKIP).
+            when a successful subprocess did not get a run row. Log ``[job] start_et`` only after a
+            successful claim (avoids “started” lines on dependency SKIP). Console ``start_et`` /
+            ``end_et`` lines use America/New_York; DB timestamps stay UTC ``…Z``.
 2026-04-22  ``_group_brief_cli_suffix``: pass ``--game-group-id`` for ``group_brief`` so
             ``brief_log`` duplicate checks and bet_ledger materialization are not skipped after
             the first same-session group run.
@@ -166,6 +167,29 @@ class _TeeTextIO:
 
 def _utc_now_iso_z() -> str:
     return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _utc_iso_z_to_et_log_str(utc_iso_z: str) -> str:
+    """
+    Format a UTC instant (``…Z`` from ``_utc_now_iso_z``) for console logs in America/New_York.
+    DB columns still store UTC Z; this is display-only.
+    """
+    raw = (utc_iso_z or "").strip()
+    if not raw:
+        return ""
+    try:
+        from zoneinfo import ZoneInfo
+
+        if raw.endswith("Z"):
+            d = dt.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        else:
+            d = dt.datetime.fromisoformat(raw)
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=dt.timezone.utc)
+        et = d.astimezone(ZoneInfo("America/New_York"))
+        return et.strftime("%Y-%m-%d %H:%M:%S ET")
+    except Exception:
+        return f"{raw} (ET parse failed)"
 
 
 def _ensure_runner_lock_table(con: sqlite3.Connection) -> None:
@@ -1887,14 +1911,17 @@ def run_loop(
                     print(f"[job] SKIP — job_id={job_id} not pending (already claimed or state changed)")
                     continue
 
-                print(f"[job] start={start_iso} (claimed)")
+                print(f"[job] start_et={_utc_iso_z_to_et_log_str(start_iso)} (claimed)")
                 progressed = True
                 jd_et = str(job.get("job_date_et") or "")
     
                 if not command:
                     end_iso = _utc_now_iso_z()
                     msg = f"no command mapping for job_type={job_type!r}"
-                    print(f"[job] end={end_iso} failure (no command) — {msg}")
+                    print(
+                        f"[job] end_et={_utc_iso_z_to_et_log_str(end_iso)} "
+                        f"failure (no command) — {msg}"
+                    )
                     _handle_job_failure(
                         con,
                         cols,
@@ -1917,7 +1944,10 @@ def run_loop(
                     msg = f"exception: {exc!s}\n{tb}"
                     if len(msg) > 8000:
                         msg = msg[-8000:]
-                    print(f"[job] end={end_iso} failure exception={exc!r}")
+                    print(
+                        f"[job] end_et={_utc_iso_z_to_et_log_str(end_iso)} "
+                        f"failure exception={exc!r}"
+                    )
                     _handle_job_failure(
                         con,
                         cols,
@@ -1935,7 +1965,10 @@ def run_loop(
                 end_iso = _utc_now_iso_z()
     
                 if rc == 0:
-                    print(f"[job] end={end_iso} status=complete rc=0")
+                    print(
+                        f"[job] end_et={_utc_iso_z_to_et_log_str(end_iso)} "
+                        f"status=complete rc=0"
+                    )
                     run_id = _insert_pipeline_job_run_full(
                         con,
                         run_cols,
@@ -1970,7 +2003,9 @@ def run_loop(
                     if len(tail) > 4000:
                         tail = tail[-4000:]
                     msg = f"rc={rc} {tail}".strip() if tail else f"rc={rc}"
-                    print(f"[job] end={end_iso} failure rc={rc}")
+                    print(
+                        f"[job] end_et={_utc_iso_z_to_et_log_str(end_iso)} failure rc={rc}"
+                    )
                     if tail:
                         print(f"[job] error_tail={tail}")
                     _handle_job_failure(
