@@ -18,6 +18,15 @@ from batch.pipeline.dressed_game_blocks import (
     SignalFinding,
     dress_full_game_row,
 )
+from batch.pipeline.edge_utils import (
+    EDGE_MAX,
+    EDGE_MIN,
+    EDGE_STRONG,
+    american_to_implied_prob,
+    compute_edge,
+    fractional_kelly,
+    score_to_model_prob,
+)
 
 # ── Tier helpers (ScoredGame policy) ───────────────────────────────────────
 # Higher index = less confident. min_tier returns the worse (less confident) tier.
@@ -807,19 +816,46 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
             best_score = total
             best_side = side
 
-    # --- Tier logic ---
-    if best_score >= 10:
-        tier = "Tier1"
-        stake = 1.0
-    elif best_score >= 7:
-        tier = "Tier2"
-        stake = 0.5
-    elif best_score >= 5:
-        tier = "Tier3"
-        stake = 0.0
+    # --- EDGE MODEL INTEGRATION ---
+    # 1) Map side → odds (totals disabled for now)
+    home_ml = g.market.home_ml_current
+    away_ml = g.market.away_ml_current
+    if best_side == "away_ml":
+        odds = away_ml
+    elif best_side == "home_ml":
+        odds = home_ml
     else:
+        odds = None
+
+    # 2) Convert to probabilities
+    model_p = score_to_model_prob(int(best_score))
+    implied_p = american_to_implied_prob(int(odds) if odds is not None else None)
+    edge = compute_edge(model_p, implied_p)
+
+    # 3) Decide whether to bet (dog filter: odds >= +120 require edge >= 0.07)
+    if edge is None:
+        edge_ok = False
+    elif odds is not None and int(odds) >= 120:
+        edge_ok = (edge >= 0.07) and (edge <= EDGE_MAX)
+    else:
+        edge_ok = (edge >= EDGE_MIN) and (edge <= EDGE_MAX)
+
+    # 4) Size the bet (fractional Kelly)
+    stake_frac = 0.0
+    if edge_ok and odds is not None:
+        stake_frac = fractional_kelly(model_p, int(odds), fraction=0.25)
+
+    # 5) Override tier / stake based on edge (caps are unit-sized for now)
+    if not edge_ok:
         tier = None
         stake = 0.0
+    else:
+        if edge >= EDGE_STRONG:
+            tier = "Tier1"
+            stake = min(0.5, stake_frac)
+        else:
+            tier = "Tier2"
+            stake = min(0.25, stake_frac)
 
     # --- Build outputs ---
     active_bets: list[SignalFinding] = []
@@ -830,8 +866,12 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
         if relevant:
             top_pick = max(relevant, key=lambda s: int(s.confidence_score or 0))
 
-    # Customer briefs: gaps + venue/odds notes only (no per-signal / AGG debug lines)
-    data_flags = list(g.completeness.gaps) + extra_flags
+    # Customer briefs: gaps + venue/odds notes, plus calibration line for analysis
+    implied_txt = f"{implied_p:.3f}" if implied_p is not None else "NA"
+    edge_txt = f"{edge:.3f}" if edge is not None else "NA"
+    data_flags = list(g.completeness.gaps) + extra_flags + [
+        f"CALIB score={int(best_score)} model_p={model_p:.3f} implied_p={implied_txt} edge={edge_txt}"
+    ]
 
     return ScoredGame(
         game=g,
