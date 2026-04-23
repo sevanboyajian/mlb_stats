@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import shutil
 from pathlib import Path
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
@@ -53,20 +54,29 @@ def main() -> int:
 
         jd = dt.date.today().isoformat()
 
-    log_path = (_REPO_ROOT / "logs" / f"run_pipeline_{jd}.txt").resolve()
-    if not log_path.is_file():
+    base_log_path = (_REPO_ROOT / "logs" / f"run_pipeline_{jd}.txt").resolve()
+    if not base_log_path.is_file():
         ok, msg = send_report_email(
             None,
             f"MLB pipeline run log ({args.kind}) — {jd} (missing)",
             to_raw,
-            body=f"Expected log file not found:\n{log_path}\n",
+            body=f"Expected log file not found:\n{base_log_path}\n",
         )
         # Still non-fatal for the pipeline job; return success even if email fails.
         return 0 if ok else 0
 
+    # Attach a phase-specific snapshot so filenames clearly differentiate morning vs eod.
+    # Keep the snapshot file on disk (useful for debugging when an email is missing).
+    snap_log_path = (_REPO_ROOT / "logs" / f"run_pipeline_{jd}_{args.kind}.txt").resolve()
+    try:
+        shutil.copyfile(str(base_log_path), str(snap_log_path))
+    except Exception:
+        # If copy fails (file locked, permissions), fall back to attaching the base log.
+        snap_log_path = base_log_path
+
     subject = f"MLB pipeline run log ({args.kind}) — {jd}"
-    body = f"Attached: {log_path.name}\nPath: {log_path}\n"
-    ok, msg = send_report_email(str(log_path), subject, to_raw, body=body)
+    body = f"Attached: {snap_log_path.name}\nPath: {snap_log_path}\n"
+    ok, msg = send_report_email(str(snap_log_path), subject, to_raw, body=body)
     print(f"[email_run_log] {'OK' if ok else 'WARN'} {msg}")
     return 0
 

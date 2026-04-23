@@ -2216,6 +2216,17 @@ def print_pipeline_status(db_path: str) -> None:
 
 
 def main() -> None:
+    # ── Console encoding guard (Windows cp1252) ───────────────────────────
+    # Some environments default to cp1252 and crash on unicode box drawing.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
     p = argparse.ArgumentParser(description="Run due pipeline_jobs in scheduled order (single-threaded).")
     p.add_argument(
         "--explain-deps",
@@ -2293,6 +2304,15 @@ def main() -> None:
     log_path = str(args.log_file).strip() if args.log_file else ""
     if not log_path and args.job_date_et:
         log_path = str((_REPO_ROOT / "logs" / f"run_pipeline_{str(args.job_date_et).strip()}.txt").resolve())
+    if not log_path:
+        # Best-effort default: always log to today's ET date even if caller didn't pass --job-date-et.
+        try:
+            from zoneinfo import ZoneInfo
+
+            et_today = dt.datetime.now(ZoneInfo("America/New_York")).date().isoformat()
+        except Exception:
+            et_today = dt.date.today().isoformat()
+        log_path = str((_REPO_ROOT / "logs" / f"run_pipeline_{et_today}.txt").resolve())
     _log_fh = None
     if log_path:
         try:
