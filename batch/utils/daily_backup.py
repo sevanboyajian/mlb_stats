@@ -33,6 +33,14 @@ from core.db.connection import get_db_path
 BACKUP_DIR = REPO_ROOT / "backups" / "daily"
 LOG_PATH = REPO_ROOT / "logs" / "backup.log"
 
+try:
+    from zoneinfo import ZoneInfo as _ZI
+
+    _ET = _ZI("America/New_York")
+except Exception:
+    # EDT/EST fallback: good enough for MLB season runs if tzdata missing.
+    _ET = timezone.utc
+
 
 def _reconfigure_stdio_utf8() -> None:
     """Avoid UnicodeEncodeError on Windows terminals (cp1252)."""
@@ -124,8 +132,44 @@ def _retention_keep_last_2() -> None:
         _log(f"retention exception={exc!s}")
 
 
+def _parse_date_et(s: str) -> str | None:
+    s = (s or "").strip()
+    if not s:
+        return None
+    try:
+        # YYYY-MM-DD
+        datetime.fromisoformat(s)
+    except Exception:
+        return None
+    return s
+
+
+def _stamp_for_backup(*, date_et: str | None) -> str:
+    """
+    Backup filename stamp.
+
+    Important: when the pipeline runs at ~21:46 ET, that's after midnight UTC. If we used
+    naive local/UTC dates, we'd stamp the "next day" and overwrite/skip expected daily files.
+    So we default to *Eastern* date unless explicitly overridden via --date-et.
+    """
+    if date_et:
+        try:
+            return datetime.fromisoformat(date_et).strftime("%Y%m%d")
+        except Exception:
+            pass
+    return datetime.now(tz=_ET).strftime("%Y%m%d")
+
+
 def main() -> int:
     _reconfigure_stdio_utf8()
+    date_et = None
+    if len(sys.argv) >= 3 and sys.argv[1] == "--date-et":
+        date_et = _parse_date_et(sys.argv[2])
+        if date_et is None:
+            _log(f"FAIL bad_args date_et={sys.argv[2]!r}")
+            print(f"FAIL invalid --date-et value: {sys.argv[2]!r} (expected YYYY-MM-DD)")
+            return 2
+
     src = Path(get_db_path()).resolve()
     if not src.exists():
         _log(f"FAIL db_missing={src}")
@@ -145,7 +189,7 @@ def main() -> int:
         return 3
 
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d")
+    stamp = _stamp_for_backup(date_et=date_et)
     dst = (BACKUP_DIR / f"mlb_backup_{stamp}.db").resolve()
 
     ok, detail = _sqlite_cli_backup(sqlite3_exe, src, dst)

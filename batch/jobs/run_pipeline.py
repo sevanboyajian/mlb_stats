@@ -764,7 +764,7 @@ def _build_command(job: dict) -> str:
             if job_date
             else f"python batch/jobs/schedule_pipeline_day.py --globals-only --date-et {_default_tomorrow_date_et()}"
         ),
-        "daily_backup": "python batch/utils/daily_backup.py",
+        "daily_backup": f"python batch/utils/daily_backup.py --date-et {job_date}" if job_date else "python batch/utils/daily_backup.py",
         "email_runlog_morning": (
             f"python batch/jobs/email_run_log.py --date {job_date} --kind morning"
             if job_date
