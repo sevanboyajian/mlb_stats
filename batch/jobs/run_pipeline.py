@@ -8,6 +8,10 @@ Polls pipeline_jobs and runs due jobs (single-threaded) in scheduled_time order.
 
 CHANGE LOG (latest first)
 ────────────────────────
+2026-04-22  Auditing: log ``pipeline_job_runs`` INSERT failures (were silent); warn if the runs
+            table is unreadable; if CREATE fails but the table exists, reuse it. CRITICAL line
+            when a successful subprocess did not get a run row. Log ``[job] start`` only after a
+            successful claim (avoids “started” lines on dependency SKIP).
 2026-04-22  ``_group_brief_cli_suffix``: pass ``--game-group-id`` for ``group_brief`` so
             ``brief_log`` duplicate checks and bet_ledger materialization are not skipped after
             the first same-session group run.
@@ -1109,11 +1113,24 @@ def _ensure_pipeline_job_runs(con: sqlite3.Connection) -> set[str]:
             """
         )
         con.commit()
-    except Exception:
+    except Exception as exc:
         try:
             con.rollback()
         except Exception:
             pass
+        # Table may already exist (race / partial run); still return columns for INSERTs.
+        cols = _table_columns(con, "pipeline_job_runs")
+        if cols:
+            print(f"[run_pipeline] note: pipeline_job_runs CREATE skipped ({exc!r}); using existing table.")
+            if "duration_seconds" not in cols:
+                try:
+                    con.execute("ALTER TABLE pipeline_job_runs ADD COLUMN duration_seconds REAL")
+                    con.commit()
+                except Exception:
+                    pass
+                cols = _table_columns(con, "pipeline_job_runs")
+            return cols
+        print(f"[run_pipeline] WARNING: pipeline_job_runs missing and CREATE failed: {exc!r}")
         return set()
 
     cols = _table_columns(con, "pipeline_job_runs")
@@ -1168,11 +1185,15 @@ def _insert_pipeline_job_run_full(
         )
         con.commit()
         return int(cur.lastrowid) if cur.lastrowid else None
-    except Exception:
+    except Exception as exc:
         try:
             con.rollback()
         except Exception:
             pass
+        print(
+            f"[run_pipeline] pipeline_job_runs INSERT failed job_id={job_id} "
+            f"type={job_type!r} status={run_status!r}: {exc!r}"
+        )
         return None
 
 
@@ -1792,6 +1813,11 @@ def run_loop(
 
         cols = _ensure_pipeline_jobs_extras(con, cols)
         run_cols = _ensure_pipeline_job_runs(con)
+        if not run_cols or "started_at_utc" not in run_cols:
+            print(
+                "[run_pipeline] WARNING: pipeline_job_runs is not writable — "
+                "run rows will not be inserted; job status sync may still update pipeline_jobs."
+            )
 
         print(f"[run_pipeline] db={db_path}")
         print(
@@ -1841,27 +1867,27 @@ def run_loop(
                     f"\n[job] id={job_id} type={job_type} job_date_et={job.get('job_date_et')!s} "
                     f"game_group_id={gid!s} scheduled_time={scheduled_time}"
                 )
-                print(f"[job] start={start_iso}")
                 print(f"[job] command={command!r}")
                 ctx = _job_group_context(job)
                 if ctx:
                     print(f"[job] context: {ctx}")
-    
+
                 ok, dep_msg = _deps_complete(con, job)
                 if not ok:
                     print(f"[job] SKIP — {dep_msg}")
                     continue
-    
+
                 if ghost:
                     progressed = True
                     print("[job] GHOST MODE — would set status=running, execute command, then set complete/failed")
                     continue
-    
+
                 # Claim job: single UPDATE … AND status='pending' (SQLite-atomic; avoids duplicate execution).
                 if not _claim_pending_job(con, cols, job_id=job_id, started_at=start_iso):
                     print(f"[job] SKIP — job_id={job_id} not pending (already claimed or state changed)")
                     continue
-    
+
+                print(f"[job] start={start_iso} (claimed)")
                 progressed = True
                 jd_et = str(job.get("job_date_et") or "")
     
@@ -1910,7 +1936,7 @@ def run_loop(
     
                 if rc == 0:
                     print(f"[job] end={end_iso} status=complete rc=0")
-                    _insert_pipeline_job_run_full(
+                    run_id = _insert_pipeline_job_run_full(
                         con,
                         run_cols,
                         job_id=job_id,
@@ -1921,6 +1947,11 @@ def run_loop(
                         run_status="complete",
                         error_message="",
                     )
+                    if run_id is None:
+                        print(
+                            f"[run_pipeline] CRITICAL: no pipeline_job_runs row for successful "
+                            f"job_id={job_id} — check DB permissions / schema (pipeline_jobs will still sync)."
+                        )
                     _sync_pipeline_jobs_from_run(
                         con,
                         cols,
