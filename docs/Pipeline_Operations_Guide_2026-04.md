@@ -15,6 +15,11 @@ cd C:\path\to\mlb_stats
 
 - **Eastern slate date:** `job_date_et` / `--date-et` values are **`YYYY-MM-DD`** in **America/New_York** semantics for scheduling.
 
+- **MLB Scout Admin (cloud / execution):** the Admin “Runner & console” does not hard-code a subprocess. Set
+  `MLB_ADMIN_EXECUTION_MODE=local` (default), `cloud` + `MLB_PIPELINE_CONTROL_URL`, or `db_only` — see
+  `online/services/execution_backend.py` for the HTTP contract to implement on a worker in front of
+  the same `pipeline_jobs` / `run_pipeline` engine.
+
 ---
 
 ## Big picture
@@ -158,5 +163,6 @@ Upstream **`failed`** / **`timeout`** can still count as “resolved” so the s
 
 - `docs/Generate_Daily_Brief_Guide_2026-04.md` — brief sessions and **`--sync-bet-ledger-only`**
 - `docs/MLB_Scout_Daily_Operations_Guide_2026-04.md` — Streamlit Scout + Admin
-- `online/app/mlb_scout_admin.py` — operator UI (pipeline tables, `--status` / `--explain-deps`, ingestion triggers)
+- `online/app/mlb_scout_admin.py` — operator UI (pipeline tables, `runner_lock`, **Start/Stop** `run_pipeline` with **live log tail**,
+  `--status` / `--explain-deps`, single-row `pipeline_jobs` DB fixes, ingestion triggers)
 - `README.md` — tree and setup

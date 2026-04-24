@@ -77,15 +77,6 @@ def clear_runner_lock(con: sqlite3.Connection) -> bool:
         return False
 
 
-def _jobs_where(
-    status_sql: str,
-    job_date_et: str | None,
-) -> tuple[str, tuple]:
-    if job_date_et:
-        return f"status = {status_sql} AND job_date_et = ?", (job_date_et,)
-    return f"status = {status_sql}", ()
-
-
 def fetch_pipeline_jobs(
     con: sqlite3.Connection,
     *,
@@ -201,3 +192,99 @@ def fetch_brief_log_recent(con: sqlite3.Connection, limit: int = 25) -> pd.DataF
         )
     except Exception:
         return pd.DataFrame()
+
+
+_ALLOWED_JOB_STATUS: tuple[str, ...] = (
+    "pending",
+    "running",
+    "complete",
+    "failed",
+    "timeout",
+    "skipped",
+)
+
+
+def fetch_pipeline_job_by_id(
+    con: sqlite3.Connection, job_id: int
+) -> dict[str, Any] | None:
+    try:
+        r = con.execute(
+            "SELECT * FROM pipeline_jobs WHERE job_id = ?",
+            (int(job_id),),
+        ).fetchone()
+        return dict(r) if r else None
+    except Exception:
+        return None
+
+
+def fetch_pipeline_jobs_all_columns(
+    con: sqlite3.Connection,
+    *,
+    job_date_et: str | None = None,
+    limit: int = 800,
+) -> pd.DataFrame:
+    if job_date_et:
+        try:
+            return pd.read_sql_query(
+                f"""
+                SELECT * FROM pipeline_jobs
+                WHERE job_date_et = ?
+                ORDER BY scheduled_time_et, job_id
+                LIMIT {int(limit)}
+                """,
+                con,
+                params=(job_date_et,),
+            )
+        except Exception:
+            return pd.DataFrame()
+    try:
+        return pd.read_sql_query(
+            f"""
+            SELECT * FROM pipeline_jobs
+            ORDER BY job_id DESC
+            LIMIT {int(limit)}
+            """,
+            con,
+        )
+    except Exception:
+        return pd.DataFrame()
+
+
+def update_pipeline_job_row(
+    con: sqlite3.Connection,
+    *,
+    job_id: int,
+    status: str,
+    error_message: str | None = None,
+    retry_count: int | None = None,
+    clear_timestamps_for_retry: bool = False,
+) -> str | None:
+    """
+    Update one ``pipeline_jobs`` row (operator tool). Returns None on success, else error string.
+    """
+    st = (status or "").strip()
+    if st not in _ALLOWED_JOB_STATUS:
+        return f"Invalid status: {st!r}"
+
+    set_clauses: list[str] = ["status = ?", "error_message = ?"]
+    pvals2: list[Any] = [st, (error_message if error_message is not None else None)]
+    if retry_count is not None:
+        set_clauses.append("retry_count = ?")
+        pvals2.append(int(retry_count))
+    if clear_timestamps_for_retry and st == "pending":
+        set_clauses.extend(["started_at = NULL", "completed_at = NULL"])
+    if clear_timestamps_for_retry and st == "running":
+        set_clauses.append("completed_at = NULL")
+
+    sql = f"UPDATE pipeline_jobs SET {', '.join(set_clauses)} WHERE job_id = ?"
+    pvals2.append(int(job_id))
+    try:
+        con.execute(sql, pvals2)
+        con.commit()
+    except Exception as exc:
+        try:
+            con.rollback()
+        except Exception:
+            pass
+        return str(exc)
+    return None
