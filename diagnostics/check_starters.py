@@ -5,8 +5,9 @@ check_starters.py
 Quick diagnostic — shows what the MLB Stats API is returning for
 probable pitchers for today's games.
 
-Run:  python check_starters.py
-      python check_starters.py --date 2026-04-05
+Run:
+  python diagnostics/check_starters.py
+  python diagnostics/check_starters.py --date 2026-04-05
 """
 
 # CHANGE LOG (latest first)
@@ -94,7 +95,7 @@ def main():
         print("  No starters announced yet.")
         print("  This is normal early in the day — teams typically file")
         print("  probable pitchers 2-4 hours before first pitch.")
-        print("  Re-run load_weather.py closer to game time.")
+        print("  Re-run: python batch/ingestion/load_weather.py closer to game time.")
     else:
         print()
         print("  Starters are available. If load_weather.py still shows")

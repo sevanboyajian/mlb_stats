@@ -2,7 +2,7 @@
 """
 check_odds_ready.py — Pre-brief odds readiness check.
 
-Run this AFTER load_odds.py and BEFORE generate_daily_brief.py.
+Run this AFTER `batch/ingestion/load_odds.py` and BEFORE `batch/pipeline/generate_daily_brief.py`.
 Ensures every scheduled game for today has closing-line moneyline
 odds in the DB before the brief attempts to evaluate signals.
 
@@ -17,12 +17,12 @@ Handles two distinct failure modes:
 
 USAGE
 ─────
-    python check_odds_ready.py                    # check today
-    python check_odds_ready.py --date 2026-03-27  # check specific date
-    python check_odds_ready.py --fix              # auto-fix closing flag if possible
-    python check_odds_ready.py --warn             # warn on missing, don't exit
-    python check_odds_ready.py --preview          # show signal preview after odds check
-    python check_odds_ready.py --fix --preview    # fix + preview (recommended pre-brief)
+    python diagnostics/check_odds_ready.py                    # check today
+    python diagnostics/check_odds_ready.py --date 2026-03-27  # check specific date
+    python diagnostics/check_odds_ready.py --fix              # auto-fix closing flag if possible
+    python diagnostics/check_odds_ready.py --warn             # warn on missing, don't exit
+    python diagnostics/check_odds_ready.py --preview          # show signal preview after odds check
+    python diagnostics/check_odds_ready.py --fix --preview    # fix + preview (recommended pre-brief)
 
 EXIT CODES
 ──────────
@@ -65,7 +65,7 @@ def _reconfigure_stdio_utf8() -> None:
 def get_connection(db_path: str) -> sqlite3.Connection:
     if not os.path.exists(db_path):
         print(f"\n  ✗  Database not found: {db_path}")
-        print("     Run from your mlb_stats folder.")
+        print("     Fix by setting MLB_DB_PATH (env) or config/.env, or pass --db.")
         sys.exit(2)
     con = db_connect(db_path)
     con.row_factory = sqlite3.Row
@@ -113,7 +113,8 @@ def check_odds_ready(game_date: str, auto_fix: bool, warn_only: bool, db_path: s
 
     if not games:
         print(f"\n  ⚠  No scheduled games found for {game_date}.")
-        print("     Run: python load_mlb_stats.py (or load_today.py) first.")
+        print("     Run: python batch/ingestion/load_today.py --date YYYY-MM-DD")
+        print("     Or:  python batch/ingestion/load_mlb_stats.py  (schedule + boxscores)")
         return 1
 
     print(f"\n  Checking odds readiness for {game_date} ({len(games)} games)...")
@@ -238,8 +239,9 @@ def check_odds_ready(game_date: str, auto_fix: bool, warn_only: bool, db_path: s
         print(f"  ✗  {len(no_rows)} game(s) have no odds: {', '.join(games_missing)}")
         print()
         print("  Options:")
-        print("    1. Re-run load_odds.py and wait 30–60 min for books to post lines")
-        print("    2. Run generate_daily_brief.py --warn-missing to proceed anyway")
+        print("    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game")
+        print("       Then wait 30–60 min for books to post lines and rerun this check")
+        print("    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing")
         print("       (those games will show N/A odds and skip signal evaluation)")
         print()
 
@@ -253,14 +255,14 @@ def check_odds_ready(game_date: str, auto_fix: bool, warn_only: bool, db_path: s
         print(f"     {', '.join(games_fixable)}")
         print()
         print("  Fix options:")
-        print("    A. Re-run:  python load_odds.py --pregame --markets game")
+        print("    A. Re-run:  python batch/ingestion/load_odds.py --pregame --markets game")
         print("       (subsequent pull will set is_closing_line=1 automatically)")
         print()
         print("    B. Auto-fix now:")
-        print("       python check_odds_ready.py --fix")
+        print("       python diagnostics/check_odds_ready.py --fix")
         print()
         print("    C. Proceed anyway:")
-        print("       python generate_daily_brief.py --warn-missing")
+        print("       python batch/pipeline/generate_daily_brief.py --warn-missing")
         print()
 
         if warn_only:
@@ -480,8 +482,8 @@ def show_signal_preview(con: sqlite3.Connection, game_date: str) -> None:
 
         if not any_confirmed:
             print("  ⚠  No starters confirmed for any game.")
-            print("     Run: python load_weather.py  (refreshes starters from MLB API)")
-            print("     Or run: python load_mlb_stats.py if load_weather.py not yet deployed")
+            print("     Run: python batch/ingestion/load_weather.py  (refreshes starters from MLB API)")
+            print("     Or:  python batch/ingestion/load_mlb_stats.py  (also seeds starters)")
         else:
             tbd = sum(1 for r in starter_rows
                       if not r['home_name'] or not r['away_name'])
@@ -492,7 +494,7 @@ def show_signal_preview(con: sqlite3.Connection, game_date: str) -> None:
     except Exception as e:
         print(f"  ⚠  Starter data unavailable: {e}")
         print("     game_probable_pitchers table may not exist yet.")
-        print("     Deploy updated load_mlb_stats.py and run it to create the table.")
+        print("     Run: python batch/ingestion/load_mlb_stats.py  (creates table if missing)")
 
     print("  ─────────────────────────────────────────────────────────────────────")
     print()

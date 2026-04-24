@@ -24,6 +24,7 @@ What it shows:
 import os
 import sqlite3
 import sys
+from datetime import date, datetime, timezone, timedelta
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.abspath(os.path.join(_SCRIPT_DIR, ".."))
@@ -62,6 +63,49 @@ print()
 
 con = db_connect(db_path)
 con.row_factory = sqlite3.Row
+
+def _table_exists(c: sqlite3.Connection, name: str) -> bool:
+    try:
+        r = c.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            (name,),
+        ).fetchone()
+        return bool(r)
+    except Exception:
+        return False
+
+
+def _table_columns(c: sqlite3.Connection, name: str) -> set[str]:
+    try:
+        return {r[1] for r in c.execute(f"PRAGMA table_info({name})").fetchall()}
+    except Exception:
+        return set()
+
+
+def _safe_date_range(c: sqlite3.Connection, table: str, date_col: str) -> tuple[str | None, str | None]:
+    """Return (min_date, max_date) as strings if available; else (None, None)."""
+    try:
+        row = c.execute(
+            f"SELECT MIN({date_col}) AS mn, MAX({date_col}) AS mx FROM {table}"
+        ).fetchone()
+        if not row:
+            return None, None
+        return (row["mn"] if isinstance(row, sqlite3.Row) else row[0],
+                row["mx"] if isinstance(row, sqlite3.Row) else row[1])
+    except Exception:
+        return None, None
+
+
+def _is_stale_iso_date(d: str | None, *, days: int = 14) -> bool:
+    """True if ISO YYYY-MM-DD is older than N days from today."""
+    if not d:
+        return True
+    try:
+        dt0 = date.fromisoformat(str(d)[:10])
+        return (date.today() - dt0).days > int(days)
+    except Exception:
+        return True
+
 
 # ── 1. Table list and row counts ──────────────────────────────
 TABLES = [
@@ -263,9 +307,21 @@ else:
 player_count = con.execute("SELECT COUNT(*) FROM players").fetchone()[0]
 print(f"  Players loaded   : {player_count:,}")
 
-# Team count
-team_count = con.execute("SELECT COUNT(*) FROM teams").fetchone()[0]
-print(f"  Teams loaded     : {team_count}  (should be 30)")
+# Team count (use active teams if available)
+try:
+    team_cols = _table_columns(con, "teams")
+    if "active" in team_cols:
+        active_team_count = con.execute("SELECT COUNT(*) FROM teams WHERE active=1").fetchone()[0]
+        total_team_count = con.execute("SELECT COUNT(*) FROM teams").fetchone()[0]
+        note = "" if active_team_count == 30 else "  <-- unexpected"
+        print(f"  Teams loaded     : {active_team_count} active / {total_team_count} total  (active should be 30){note}")
+    else:
+        team_count = con.execute("SELECT COUNT(*) FROM teams").fetchone()[0]
+        note = "" if team_count == 30 else "  <-- unexpected"
+        print(f"  Teams loaded     : {team_count}  (should be 30){note}")
+except Exception:
+    team_count = con.execute("SELECT COUNT(*) FROM teams").fetchone()[0]
+    print(f"  Teams loaded     : {team_count}  (should be 30)")
 
 # ── 6. Ingest log summary ─────────────────────────────────────
 total  = con.execute("SELECT COUNT(*) FROM ingest_log").fetchone()[0]
@@ -279,7 +335,7 @@ print(f"  Total attempts : {total:,}")
 print(f"  Successful     : {ok:,}")
 print(f"  Errors         : {errors:,}")
 if errors > 0:
-    print(f"  --> Run: python load_mlb_stats.py --retry-errors")
+    print("  --> Run: python batch/ingestion/load_mlb_stats.py --retry-errors")
 
 # Show recent errors if any
 if errors > 0:
@@ -492,6 +548,79 @@ if total_today > 0:
     except Exception:
         print(f"  Picks logged     : brief_picks table not available")
 
+# ── Ops / ledger recency (avoid “old assets” confusion) ────────────────
+print()
+print("  OPS DATA RECENCY")
+print("  " + "-" * 50)
+
+try:
+    # brief_log
+    if _table_exists(con, "brief_log"):
+        cols = _table_columns(con, "brief_log")
+        # Prefer generated_at (has timestamp), fall back to game_date
+        if "generated_at" in cols:
+            row = con.execute("SELECT MAX(generated_at) AS mx FROM brief_log").fetchone()
+            mx = (row["mx"] if row else None)
+            tag = "STALE" if _is_stale_iso_date(str(mx)[:10] if mx else None, days=14) else "OK"
+            print(f"  brief_log         : last={mx or '—'}  [{tag}]")
+        elif "game_date" in cols:
+            mn, mx = _safe_date_range(con, "brief_log", "game_date")
+            tag = "STALE" if _is_stale_iso_date(mx, days=14) else "OK"
+            print(f"  brief_log         : {mn or '—'} → {mx or '—'}  [{tag}]")
+        else:
+            print("  brief_log         : (date columns not found)")
+    else:
+        print("  brief_log         : (missing)")
+
+    # brief_picks
+    if _table_exists(con, "brief_picks"):
+        cols = _table_columns(con, "brief_picks")
+        if "recorded_at" in cols:
+            row = con.execute("SELECT MAX(recorded_at) AS mx FROM brief_picks").fetchone()
+            mx = (row["mx"] if row else None)
+            tag = "STALE" if _is_stale_iso_date(str(mx)[:10] if mx else None, days=14) else "OK"
+            print(f"  brief_picks       : last={mx or '—'}  [{tag}]")
+        elif "game_date" in cols:
+            mn, mx = _safe_date_range(con, "brief_picks", "game_date")
+            tag = "STALE" if _is_stale_iso_date(mx, days=14) else "OK"
+            print(f"  brief_picks       : {mn or '—'} → {mx or '—'}  [{tag}]")
+        else:
+            print("  brief_picks       : (date columns not found)")
+    else:
+        print("  brief_picks       : (missing)")
+
+    # daily_pnl (legacy / deprecated)
+    if _table_exists(con, "daily_pnl"):
+        cols = _table_columns(con, "daily_pnl")
+        date_col = "game_date" if "game_date" in cols else None
+        if date_col:
+            mn, mx = _safe_date_range(con, "daily_pnl", date_col)
+            tag = "LEGACY"
+            print(f"  daily_pnl         : {mn or '—'} → {mx or '—'}  [{tag}]")
+        else:
+            print("  daily_pnl         : (legacy; date column not found)")
+    else:
+        print("  daily_pnl         : (missing; legacy)")
+
+    if _table_exists(con, "bet_ledger"):
+        cols = _table_columns(con, "bet_ledger")
+        # Prefer placed_at (when bet was taken), fall back to game_date.
+        if "placed_at" in cols:
+            row = con.execute("SELECT MAX(placed_at) AS mx FROM bet_ledger").fetchone()
+            mx = (row["mx"] if row else None)
+            tag = "STALE" if _is_stale_iso_date(str(mx)[:10] if mx else None, days=21) else "OK"
+            print(f"  bet_ledger        : last={mx or '—'}  [{tag}]")
+        elif "game_date" in cols:
+            mn, mx = _safe_date_range(con, "bet_ledger", "game_date")
+            tag = "STALE" if _is_stale_iso_date(mx, days=21) else "OK"
+            print(f"  bet_ledger        : {mn or '—'} → {mx or '—'}  [{tag}]")
+        else:
+            print("  bet_ledger        : (date columns not found)")
+    else:
+        print("  bet_ledger        : (missing)")
+except Exception as _e:
+    print(f"  (recency check unavailable: {_e})")
+
 # ── 7g. Paper account season balance ─────────────────────────
 try:
     season_year = date.today().year
@@ -502,25 +631,52 @@ try:
     if season_row:
         season_start = season_row["season_start"]
         season_end   = season_row["postseason_start"] or f"{season_year}-10-01"
-        pnl_rows = con.execute("""
-            SELECT SUM(pnl_dollars) AS total,
-                   SUM(CASE WHEN result='WIN'  THEN 1 ELSE 0 END) AS wins,
-                   SUM(CASE WHEN result='LOSS' THEN 1 ELSE 0 END) AS losses,
-                   COUNT(*) AS bets
-            FROM daily_pnl
-            WHERE game_date >= ? AND game_date < ?
-        """, (season_start, season_end)).fetchone()
+        if _table_exists(con, "bet_ledger"):
+            # bet_ledger is the source of truth. Only include settled bets (result present).
+            # pnl_units is in "units" (1.0 ~= $100 in reports); show both units and dollars.
+            ledg_cols = _table_columns(con, "bet_ledger")
+            if "pnl_units" in ledg_cols and "result" in ledg_cols and "game_date" in ledg_cols:
+                row = con.execute(
+                    """
+                    SELECT
+                        SUM(CASE WHEN result IS NOT NULL THEN pnl_units ELSE 0 END) AS pnl_units,
+                        SUM(CASE WHEN lower(result)='win'  THEN 1 ELSE 0 END) AS wins,
+                        SUM(CASE WHEN lower(result)='loss' THEN 1 ELSE 0 END) AS losses,
+                        SUM(CASE WHEN lower(result)='push' THEN 1 ELSE 0 END) AS pushes,
+                        SUM(CASE WHEN result IS NOT NULL THEN 1 ELSE 0 END) AS settled_bets,
+                        SUM(CASE WHEN result IS NULL THEN 1 ELSE 0 END) AS open_bets
+                    FROM bet_ledger
+                    WHERE game_date >= ? AND game_date < ?
+                    """,
+                    (season_start, season_end),
+                ).fetchone()
 
-        if pnl_rows and pnl_rows["bets"]:
-            total  = pnl_rows["total"] or 0.0
-            wins   = pnl_rows["wins"]  or 0
-            losses = pnl_rows["losses"] or 0
-            bank   = 500.0 + total
-            sign   = "+" if total >= 0 else ""
-            print(f"  Paper account    : Bank ${bank:.2f}  "
-                  f"({sign}${total:.2f} season  W:{wins} L:{losses})")
+                settled = int(row["settled_bets"] or 0) if row else 0
+                open_bets = int(row["open_bets"] or 0) if row else 0
+                pnl_units = float(row["pnl_units"] or 0.0) if row else 0.0
+                wins = int(row["wins"] or 0) if row else 0
+                losses = int(row["losses"] or 0) if row else 0
+                pushes = int(row["pushes"] or 0) if row else 0
+
+                base_bank_dollars = 500.0
+                unit_dollars = 100.0
+                bank = base_bank_dollars + pnl_units * unit_dollars
+                sign_units = "+" if pnl_units >= 0 else ""
+                sign_dol = "+" if (pnl_units * unit_dollars) >= 0 else ""
+
+                if settled or open_bets:
+                    extra = f"  (open:{open_bets})" if open_bets else ""
+                    print(
+                        f"  Paper account    : Bank ${bank:.2f}  "
+                        f"({sign_dol}${pnl_units * unit_dollars:.2f} season; "
+                        f"{sign_units}{pnl_units:.2f}u  W:{wins} L:{losses} P:{pushes} settled:{settled}){extra}"
+                    )
+                else:
+                    print("  Paper account    : $500.00  (no bet_ledger rows this season)")
+            else:
+                print("  Paper account    : bet_ledger missing required columns (game_date/result/pnl_units)")
         else:
-            print(f"  Paper account    : $500.00  (no bets recorded yet this season)")
+            print("  Paper account    : bet_ledger table not available")
     else:
         print(f"  Paper account    : seasons table has no entry for {season_year}")
 except Exception as e:
