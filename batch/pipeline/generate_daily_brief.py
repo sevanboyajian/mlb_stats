@@ -3931,6 +3931,38 @@ def build_primary_brief(games, streaks, starters, game_date,
             # No published "bets to avoid" — treat no-pick games (incl. internal avoid flags) as no-signal slate
             no_signal.append(entry)
 
+    # ── Daily bet cap: keep top N by edge (stake>0) ──────────────────────
+    max_bets_per_day = 5
+    bet_entries: list[dict] = []
+    lean_entries: list[dict] = []
+    for e in all_picks:
+        sg = (e.get("sigs") or {}).get("_scored_game")
+        if sg is None:
+            lean_entries.append(e)
+            continue
+        try:
+            st = float(getattr(sg, "stake_multiplier", 0.0) or 0.0)
+        except Exception:
+            st = 0.0
+        if st > 0:
+            bet_entries.append(e)
+        else:
+            lean_entries.append(e)
+
+    def _edge_val(entry: dict) -> float:
+        sg = (entry.get("sigs") or {}).get("_scored_game")
+        try:
+            return float(getattr(sg, "edge", 0.0) or 0.0) if sg is not None else 0.0
+        except Exception:
+            return 0.0
+
+    bet_entries.sort(key=_edge_val, reverse=True)
+    kept_bets = bet_entries[:max_bets_per_day]
+    skipped_bets = bet_entries[max_bets_per_day:]
+
+    # We'll still show lean/no-bet games, but only keep the top N actual bets.
+    all_picks = kept_bets + lean_entries
+
     # ── ACTION SUMMARY (stake > 0 only) ──────────────────────────────────
     bets_list: list[str] = []
     for e in all_picks:
@@ -3960,6 +3992,9 @@ def build_primary_brief(games, streaks, starters, game_date,
     if bets_list:
         lines.extend(["  " + b for b in bets_list])
         lines.append("")
+
+    if skipped_bets:
+        lines.append(color_text("  (Note: additional edges existed but were skipped due to the 5-bets/day cap.)\n", "dim"))
 
     # Sort picks by priority (lower = higher priority)
     all_picks.sort(key=lambda e: min(p["priority"] for p in e["sigs"]["picks"]))

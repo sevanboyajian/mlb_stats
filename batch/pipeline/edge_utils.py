@@ -103,7 +103,8 @@ def score_to_model_prob(score: int) -> float:
 def compute_edge(model_p: float, implied_p: float | None) -> float | None:
     if implied_p is None:
         return None
-    return float(model_p) - float(implied_p)
+    edge = float(model_p) - float(implied_p)
+    return min(edge, 0.12)
 
 
 def fractional_kelly(model_p: float, odds: int, fraction: float = 0.25) -> float:
@@ -122,7 +123,7 @@ def fractional_kelly(model_p: float, odds: int, fraction: float = 0.25) -> float
     return kelly * float(fraction)
 
 
-EDGE_MIN = 0.05
+EDGE_MIN = 0.07
 EDGE_STRONG = 0.06
 EDGE_MAX = 0.15
 

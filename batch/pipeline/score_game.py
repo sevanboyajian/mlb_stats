@@ -706,6 +706,9 @@ class ScoredGame:
     aggregated_by_side: dict[str, int] = field(default_factory=dict)
     best_side: str | None = None
     best_aggregate_score: int = 0
+    model_p: float | None = None
+    implied_p: float | None = None
+    edge: float | None = None
 
 
 def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> ScoredGame:
@@ -789,8 +792,12 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
 
     aggregated_scores: dict[str, int] = {}
     for side, sigs in buckets.items():
-        total = sum(int(s.confidence_score or 0) for s in sigs)
-        aggregated_scores[side] = total
+        non_wind_total = sum(
+            int(s.confidence_score or 0) for s in sigs if s.signal_id not in WIND_SIGNAL_IDS
+        )
+        wind_present = any((s.signal_id in WIND_SIGNAL_IDS) and bool(s.fires) for s in sigs)
+        wind_bonus = 1 if wind_present else 0
+        aggregated_scores[side] = int(non_wind_total) + int(wind_bonus)
 
     # --- Pick best side ---
     best_side: str | None = None
@@ -825,9 +832,16 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
     implied_p = american_to_implied_prob(int(odds) if odds is not None else None)
     edge = compute_edge(model_p, implied_p)
 
-    # 3) Decide whether to bet — EDGE is final authority.
-    # No other variable (CLV, env_ceiling, signal fires, etc.) may override this gate.
-    edge_ok = (edge is not None) and (edge >= EDGE_MIN)
+    # 3) Decide whether to bet — EDGE is necessary, plus minimum signal diversity.
+    # Diversity rule: need at least one matchup-based and one context-based driver.
+    matchup_ids = {"LHP_FADE", "LHP_FADE_RL", "NF4"}
+    context_ids = {"S1H2", "S1+H2", "S1"}
+    fired_best = [s for s in buckets.get(best_side or "", []) if bool(s.fires)] if best_side else []
+    has_matchup = any(s.signal_id in matchup_ids for s in fired_best)
+    has_context = any(s.signal_id in context_ids for s in fired_best)
+    diversity_ok = bool(has_matchup and has_context)
+
+    edge_ok = (edge is not None) and (edge >= EDGE_MIN) and diversity_ok
 
     # 4) Size the bet (fractional Kelly)
     stake_frac = 0.0
@@ -879,6 +893,9 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
         aggregated_by_side=aggregated_scores,
         best_side=best_side,
         best_aggregate_score=int(best_score),
+        model_p=float(model_p) if model_p is not None else None,
+        implied_p=float(implied_p) if implied_p is not None else None,
+        edge=float(edge) if edge is not None else None,
     )
 
 
