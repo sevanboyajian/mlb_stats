@@ -3,8 +3,8 @@ check_db.py
 ────────────────────────────────────────────────────────────────
 Quick health check for mlb_stats.db.
 
-Usage (run from the same folder as mlb_stats.db):
-    python check_db.py
+Usage (run from repo root or anywhere):
+    python diagnostics/check_db.py
 
 What it shows:
   1. Whether the database file exists and its size
@@ -93,13 +93,17 @@ for t in TABLES:
             status = ""
         print(f"  {t:<28} {n:>10}  {status}")
     except sqlite3.OperationalError:
-        print(f"  {t:<28}       MISSING  <-- run create_db.py")
+        print(f"  {t:<28}       MISSING  <-- initialize DB schema (core/db/schema.sql)")
         all_tables_exist = False
 
 print()
 
 if not all_tables_exist:
-    print("  Some tables are missing.  Run create_db.py to rebuild the schema.")
+    print("  Some tables are missing.")
+    print("  Initialize the DB by applying the schema, e.g.:")
+    print('    sqlite3 "<path-to-mlb_stats.db>" < core/db/schema.sql')
+    print("  Then rerun the loaders (from repo root), e.g.:")
+    print("    python batch/ingestion/load_mlb_stats.py --start 2024-03-20 --end 2024-03-21")
     print()
     con.close()
     sys.exit(1)
@@ -152,14 +156,14 @@ if missing:
     print(f"  Missing seasons: {missing}")
     print("  To backfill, run:")
     for y in missing:
-        print(f"    python load_mlb_stats.py --season {y} --no-pbp")
+        print(f"    python batch/ingestion/load_mlb_stats.py --season {y} --no-pbp")
 
 print()
 
 # ── 3. Play-by-play coverage ──────────────────────────────────
 pbp_count = con.execute("SELECT COUNT(*) FROM play_by_play").fetchone()[0]
 if pbp_count == 0:
-    print("  PLAY-BY-PLAY: empty (expected — load with: python load_mlb_stats.py --season YYYY)")
+    print("  PLAY-BY-PLAY: empty (expected — load with: python batch/ingestion/load_mlb_stats.py --season YYYY)")
 else:
     pbp_seasons = con.execute(
         "SELECT g.season, COUNT(*) FROM play_by_play pbp "
@@ -183,7 +187,7 @@ missing_cols = new_cols - venue_cols
 
 if missing_cols:
     print(f"  ⚠  Migration not yet run — missing columns: {sorted(missing_cols)}")
-    print(f"     Run: python add_stadium_data.py")
+    print("     Run: python batch/ingestion/add_stadium_data.py")
 else:
     total_v  = con.execute("SELECT COUNT(*) FROM venues").fetchone()[0]
     seeded   = con.execute(
@@ -194,7 +198,7 @@ else:
     print(f"  Venue rows      : {total_v}")
     print(f"  Seeded (wind)   : {seeded}")
     if unseeded:
-        print(f"  ⚠  Unseeded     : {unseeded}  — run: python add_stadium_data.py --update")
+        print(f"  ⚠  Unseeded     : {unseeded}  — run: python batch/ingestion/add_stadium_data.py --update")
 
     if seeded > 0:
         # Wind effect distribution
@@ -377,7 +381,7 @@ if total_today > 0:
 
     if missing_list:
         print(f"  Missing odds     : {', '.join(missing_list)}")
-        print(f"                     --> python load_odds.py --pregame --markets game")
+        print("                     --> python batch/ingestion/load_odds.py --pregame --markets game")
 
     # ── 7c. Weather ───────────────────────────────────────────
     weather_rows = con.execute("""
@@ -407,7 +411,7 @@ if total_today > 0:
     if with_wind < total_today:
         no_wind = [r["matchup"] for r in weather_rows if r["wind_mph"] is None]
         print(f"  No wind data     : {', '.join(no_wind)}")
-        print(f"                     --> python load_weather.py")
+        print("                     --> python batch/ingestion/load_weather.py")
 
     # ── 7d. Starters ─────────────────────────────────────────
     try:
