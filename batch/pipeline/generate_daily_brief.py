@@ -1778,6 +1778,7 @@ def grade_bet_ledger(conn: sqlite3.Connection, game_date: str | None = None) -> 
         SELECT
             bl.id,
             bl.game_pk,
+            g.game_date_et AS game_date_et,
             bl.market_type,
             bl.bet,
             bl.odds_taken,
@@ -1801,6 +1802,81 @@ def grade_bet_ledger(conn: sqlite3.Connection, game_date: str | None = None) -> 
 
     if not rows:
         return 0
+
+    # ── Calibration log (CSV append-only) ────────────────────────────────
+    # For each graded staked bet, append: date, game_pk, bet_type, score, model_p, implied_p, edge, result.
+    # Uses score_game via evaluate_signals() on the same slate date (Final games included).
+    import csv
+    from pathlib import Path
+
+    from batch.pipeline.edge_utils import american_to_implied_prob, score_to_model_prob
+
+    cal_path = Path(_REPO_ROOT) / "data" / "calibration_log.csv"
+    cal_path.parent.mkdir(parents=True, exist_ok=True)
+    _wrote_header = cal_path.exists() is False
+
+    # Cache per game_pk so we only score each game once during grading.
+    _scored_cache: dict[int, object] = {}
+
+    def _get_scored_for_game_pk(gpk: int, gd: str) -> object | None:
+        if gpk in _scored_cache:
+            return _scored_cache[gpk]
+        try:
+            as_of = _now_et()  # non-None → load_games includes Final rows
+            games = load_games(conn, gd, verbose=False, as_of_dt=as_of)
+            gmap = {int(g["game_pk"]): g for g in games if g.get("game_pk") is not None}
+            game = gmap.get(int(gpk))
+            if not game:
+                _scored_cache[gpk] = None
+                return None
+            team_ids = list({game["home_team_id"], game["away_team_id"]})
+            streaks = load_streaks(conn, gd, team_ids, verbose=False)
+            starters = load_starters(conn, gd, verbose=False)
+            sigs = evaluate_signals(conn, game, streaks, "primary", starters)
+            sg = sigs.get("_scored_game")
+            _scored_cache[gpk] = sg
+            return sg
+        except Exception:
+            _scored_cache[gpk] = None
+            return None
+
+    def _append_cal_row(*, gd: str, gpk: int, bet_type: str, odds_taken: int | None, result_str: str) -> None:
+        nonlocal _wrote_header
+        sg = _get_scored_for_game_pk(gpk, gd)
+        if sg is None:
+            return
+        try:
+            score = int(getattr(sg, "best_aggregate_score", 0) or 0)
+        except Exception:
+            score = 0
+        model_p = float(score_to_model_prob(score))
+        implied_p = american_to_implied_prob(int(odds_taken) if odds_taken is not None else None)
+        edge = (model_p - implied_p) if implied_p is not None else None
+        res_u = (result_str or "").strip().lower()
+        if res_u == "win":
+            res_val = 1
+        elif res_u == "loss":
+            res_val = 0
+        else:
+            # ignore pushes/avoids/no-result for calibration
+            return
+        with cal_path.open("a", newline="", encoding="utf-8") as fh:
+            w = csv.writer(fh)
+            if _wrote_header:
+                w.writerow(["date", "game_pk", "bet_type", "score", "model_p", "implied_p", "edge", "result"])
+                _wrote_header = False
+            w.writerow(
+                [
+                    gd,
+                    int(gpk),
+                    bet_type,
+                    int(score),
+                    f"{model_p:.3f}",
+                    (f"{implied_p:.3f}" if implied_p is not None else "NA"),
+                    (f"{edge:.3f}" if edge is not None else "NA"),
+                    int(res_val),
+                ]
+            )
 
     updated = 0
     for r in rows:
@@ -1938,6 +2014,18 @@ def grade_bet_ledger(conn: sqlite3.Connection, game_date: str | None = None) -> 
             (res, float(round(pnl, 4)), r["id"]),
         )
         updated += 1
+        # Append calibration row for staked bets only.
+        try:
+            if (r["odds_taken"] is not None) and (market in ("moneyline", "spread", "runline", "total")):
+                _append_cal_row(
+                    gd=str(r.get("game_date_et") or game_date or ""),
+                    gpk=int(r["game_pk"]),
+                    bet_type=str(r["market_type"] or ""),
+                    odds_taken=int(r["odds_taken"]) if r["odds_taken"] is not None else None,
+                    result_str=str(res),
+                )
+        except Exception:
+            pass
 
     if updated:
         conn.commit()

@@ -282,21 +282,14 @@ def _eval_mv_f(g: FullyDressedGame, s1h2_fired: bool) -> SignalFinding:
     env = g.environment
     mph = _mph(g)
     wind_ok = _wind_eligible(g) and env.wind_in
-    price_ok = mkt.home_ml_current is not None and bool(mkt.home_in_fade_band)
-    env_ok = env.env_ceiling != "NoSignal"
     comp_ok = not g.completeness.mvf_blocked
-    fires = wind_ok and price_ok and env_ok and comp_ok and (not s1h2_fired)
+    fires = wind_ok and comp_ok and (not s1h2_fired)
 
-    clv_txt = (
-        f"CLV gate: only bet if away ML implied is ≥{gdb.MV_F_CLV_GATE}pp "
-        f"below morning open."
-    )
+    clv_txt = "CLV note: monitor the current line vs morning open."
     if mkt.clv_available and mkt.clv_away_delta is not None:
         clv_txt += f" Current vs open (away implied delta): {mkt.clv_away_delta:+.2f}pp."
     clv_txt += (
-        f" CLV≥+{gdb.MV_F_CLV_GATE}pp fires: SBRO +24.0% ROI, OW +10.6% ROI. "
-        f"CLV<+{gdb.MV_F_CLV_GATE}pp fires: SBRO −9.4% ROI. "
-        f"Compare current away ML to opening line at bet time."
+        f" Historically, CLV-positive entries performed better; treat CLV as a soft modifier only."
     )
 
     if fires:
@@ -441,8 +434,7 @@ def _eval_mv_b(g: FullyDressedGame, game_month: int) -> SignalFinding:
             f"MV-B — Wind OUT {mph:.0f} mph at {venue_name} "
             f"(wind_effect={wind_effect}, PF {pf:.0f}). "
             f"Home dog implied {home_impl_s} ({home_ml_s}). "
-            f"CLV gate: only bet if line has moved toward OVER since open (CLV>0). "
-            f"CLV>0 fires: +12.2% ROI. CLV≤0: -18.1% ROI."
+            f"CLV note: line movement is a soft modifier only (not a gate)."
         )
     else:
         reason = (
@@ -463,12 +455,8 @@ def _eval_mv_b(g: FullyDressedGame, game_month: int) -> SignalFinding:
 def _eval_s1(g: FullyDressedGame, home_streak: int, s1h2_fired: bool) -> SignalFinding:
     gdb = _gdb()
     mkt = g.market
-    s1_price_ok = mkt.home_ml_current is not None and (
-        gdb.S1_PRICE_HIGH <= mkt.home_ml_current <= gdb.S1_PRICE_LOW
-    )
     fires = (
         home_streak >= gdb.S1_STANDALONE_MIN
-        and s1_price_ok
         and not g.completeness.s1h2_blocked
         and (not s1h2_fired)
     )
@@ -483,7 +471,7 @@ def _eval_s1(g: FullyDressedGame, home_streak: int, s1h2_fired: bool) -> SignalF
     else:
         reason = (
             f"S1 blocked: streak={hs} s1h2_active={s1h2_fired} s1h2_blocked={g.completeness.s1h2_blocked} "
-            f"price_ok={s1_price_ok} home_ml={mkt.home_ml_current!r}"
+            f"home_ml={mkt.home_ml_current!r}"
         )
     return SignalFinding(
         signal_id="S1",
@@ -610,8 +598,7 @@ def _compute_confidence_score(
     signal_id: str,
     fdg: FullyDressedGame,
     game_month: int,
-    clv_available: bool,
-    clv_positive: bool,
+    clv_delta_pp: float | None,
     second_signal: bool,
     hostile: bool,
 ) -> tuple[int, str]:
@@ -624,11 +611,12 @@ def _compute_confidence_score(
     mods: list[tuple[str, int]] = []
 
     if signal_id == "MV-F":
-        if clv_available and clv_positive:
-            mods.append(("CLV gate met", +1))
-        elif not clv_available:
-            base = 6
-            mods.append(("CLV unavailable — base reduced", 0))
+        # CLV is a soft modifier only (no blocking): negative → -1, positive → +1 (optional).
+        if clv_delta_pp is not None:
+            if float(clv_delta_pp) < 0:
+                mods.append(("CLV negative (market faded)", -1))
+            elif float(clv_delta_pp) > 0:
+                mods.append(("CLV positive (market confirmed)", +1))
 
     if signal_id == "MV-B":
         w = float(fdg.environment.wind_mph or 0)
@@ -777,17 +765,13 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
     for sig in all_signals:
         hostile = _is_hostile_environment(g, sig)
 
-        clv_avail = mkt.clv_available
-        clv_pos = (
-            mkt.clv_away_delta is not None and mkt.clv_away_delta >= gdb.MV_F_CLV_GATE
-        ) if clv_avail else False
+        clv_delta_pp = float(mkt.clv_away_delta) if (mkt.clv_available and mkt.clv_away_delta is not None) else None
 
         score, basis = _compute_confidence_score(
             signal_id=sig.signal_id,
             fdg=g,
             game_month=game_month,
-            clv_available=clv_avail,
-            clv_positive=clv_pos,
+            clv_delta_pp=clv_delta_pp,
             second_signal=False,
             hostile=hostile,
         )
@@ -815,6 +799,15 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
         if total > best_score:
             best_score = total
             best_side = side
+
+    # --- env_ceiling penalty (soft, never blocks) ---
+    env_penalty = 0
+    ec = (g.environment.env_ceiling or "").strip()
+    if ec == "NoSignal":
+        env_penalty = -2
+    elif ec == "Tier2":
+        env_penalty = -1
+    best_score = int(best_score) + int(env_penalty)
 
     # --- EDGE MODEL INTEGRATION ---
     # 1) Map side → odds (totals disabled for now)
