@@ -408,9 +408,7 @@ def evaluate_signals(g: dict, streaks: dict) -> list:
         })
 
     # S1 standalone (priority 4)
-    s1_price_ok = (home_ml is not None
-                   and S1_PRICE_HIGH <= home_ml <= S1_PRICE_LOW)
-    if (home_streak >= S1_STANDALONE_MIN and not s1h2 and s1_price_ok):
+    if (home_streak >= S1_STANDALONE_MIN and not s1h2):
         picks.append({
             "signal": "S1", "priority": 4,
             "bet_label": f"{away_abbr} ML", "market": "ML",

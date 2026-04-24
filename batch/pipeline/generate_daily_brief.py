@@ -363,6 +363,13 @@ def build_docx_from_text(session: str, game_date: str, brief_text: str) -> "Docu
     """
     doc = Document()
     text = brief_text or ""
+    # Strip ANSI escape codes (terminal-only) from Word output.
+    try:
+        import re
+
+        text = re.sub(r"\x1b\[[0-9;]*m", "", text)
+    except Exception:
+        pass
 
     # Base style (match older docs: default font, compact spacing)
     try:
@@ -463,6 +470,16 @@ def build_docx_from_text(session: str, game_date: str, brief_text: str) -> "Docu
         _add_line(s, size_pt=9)
 
     return doc
+
+
+def strip_ansi(text: str) -> str:
+    """Remove ANSI escape sequences (terminal-only formatting)."""
+    try:
+        import re
+
+        return re.sub(r"\x1b\[[0-9;]*m", "", text or "")
+    except Exception:
+        return text or ""
 
 # ── DB location (env / config/.env / cwd fallback via get_db_path) ───────
 DB_PATH = Path(get_db_path())
@@ -3071,6 +3088,19 @@ def generate_why_line(signals: list) -> str:
     return f"WHY: {top[0].capitalize()} with support from {top[1]} and {top[2]}."
 
 
+def color_text(text: str, color: str) -> str:
+    colors = {
+        "green": "\033[92m",
+        "yellow": "\033[93m",
+        "red": "\033[91m",
+        "dim": "\033[2m",
+        "reset": "\033[0m",
+    }
+    c = colors.get(color, "")
+    r = colors["reset"] if c else ""
+    return f"{c}{text}{r}"
+
+
 def format_bet_block(scored_game: object) -> str:
     """
     ASCII pick card from a ``ScoredGame`` (primary / additional brief rows).
@@ -3113,9 +3143,18 @@ def format_bet_block(scored_game: object) -> str:
     else:
         bet_txt = str(best_side or "unknown").upper()
 
+    if stake > 0:
+        head = color_text("🔥 BET:", "green")
+        head_line = f"│  {head}  {bet_txt:<18}  [{tier_txt} · {confidence}%]"
+        stake_line = color_text(f"│  STAKE: {stake:.2f}u  ← PLAY THIS", "green")
+    else:
+        head = color_text("❌ NO BET:", "dim")
+        head_line = f"│  {head}  {bet_txt:<18}  [{confidence}%]"
+        stake_line = color_text("│  STAKE: 0.00u  ← SKIP", "dim")
+
     return f"""
 ┌─────────────────────────────────────────────────────────┐
-│  BET:     {bet_txt:<18}  [{tier_txt} · {confidence}%]
+{head_line}
 │
 │  {why_line}
 │
@@ -3123,7 +3162,7 @@ def format_bet_block(scored_game: object) -> str:
 {signal_lines}
 │
 │  MODEL SCORE: {best_score}
-│  STAKE: {stake:.1f}u
+{stake_line}
 └─────────────────────────────────────────────────────────┘
 """.strip()
 
@@ -3891,6 +3930,36 @@ def build_primary_brief(games, streaks, starters, game_date,
         else:
             # No published "bets to avoid" — treat no-pick games (incl. internal avoid flags) as no-signal slate
             no_signal.append(entry)
+
+    # ── ACTION SUMMARY (stake > 0 only) ──────────────────────────────────
+    bets_list: list[str] = []
+    for e in all_picks:
+        sg = (e.get("sigs") or {}).get("_scored_game")
+        if sg is None:
+            continue
+        try:
+            st = float(getattr(sg, "stake_multiplier", 0.0) or 0.0)
+        except Exception:
+            st = 0.0
+        if st <= 0:
+            continue
+        # Prefer readable bet label from the scored object
+        bs = getattr(getattr(sg, "top_pick", None), "bet_side", None) or getattr(sg, "best_side", None)
+        bet_side = str(bs or "").strip()
+        if bet_side == "away_ml":
+            bet_lbl = f"{(sg.game.identifiers.away_team_abbr or 'AWAY')} ML"
+        elif bet_side == "home_ml":
+            bet_lbl = f"{(sg.game.identifiers.home_team_abbr or 'HOME')} ML"
+        else:
+            bet_lbl = bet_side.upper() if bet_side else "BET"
+        bets_list.append(f"- {bet_lbl} ({st:.2f}u)")
+
+    lines.append(section("🔥  ACTION SUMMARY"))
+    lines.append(f"\n  Bets Today: {len(bets_list)}")
+    lines.append(f"  Games Evaluated: {len(games)}\n")
+    if bets_list:
+        lines.extend(["  " + b for b in bets_list])
+        lines.append("")
 
     # Sort picks by priority (lower = higher priority)
     all_picks.sort(key=lambda e: min(p["priority"] for p in e["sigs"]["picks"]))
@@ -5487,6 +5556,7 @@ def main():
         )
 
     # ── Output ───────────────────────────────────────────────────────────
+    # Console: allow ANSI. Files/Word: strip ANSI.
     print(brief_text)
 
     output_file = None
@@ -5499,7 +5569,7 @@ def main():
             output_file = str(OUTPUT_DIR / f"{default_stem}.txt")
 
         with open(output_file, "w", encoding="utf-8") as fh:
-            fh.write(brief_text)
+            fh.write(strip_ansi(brief_text))
         print(f"\n  ✓ Brief saved to: {output_file}")
 
     # ── Word output (default) ─────────────────────────────────────────────
@@ -5515,7 +5585,7 @@ def main():
                     if output_file
                     else str(OUTPUT_DIR / f"{default_stem}.docx")
                 )
-                doc = build_docx_from_text(session, today, brief_text)
+                doc = build_docx_from_text(session, today, strip_ansi(brief_text))
                 doc.save(docx_path)
                 print(f"  ✓ Word brief saved to: {docx_path}")
                 _maybe_email_report_docx(docx_path=docx_path, slate_date=today, session=session)

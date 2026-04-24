@@ -825,13 +825,9 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
     implied_p = american_to_implied_prob(int(odds) if odds is not None else None)
     edge = compute_edge(model_p, implied_p)
 
-    # 3) Decide whether to bet (dog filter: odds >= +120 require edge >= 0.07)
-    if edge is None:
-        edge_ok = False
-    elif odds is not None and int(odds) >= 120:
-        edge_ok = (edge >= 0.07) and (edge <= EDGE_MAX)
-    else:
-        edge_ok = (edge >= EDGE_MIN) and (edge <= EDGE_MAX)
+    # 3) Decide whether to bet — EDGE is final authority.
+    # No other variable (CLV, env_ceiling, signal fires, etc.) may override this gate.
+    edge_ok = (edge is not None) and (edge >= EDGE_MIN)
 
     # 4) Size the bet (fractional Kelly)
     stake_frac = 0.0
