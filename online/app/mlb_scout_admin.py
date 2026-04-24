@@ -62,6 +62,7 @@ from online.services.admin_pipeline import (
     open_db,
     update_pipeline_job_row,
 )
+from online.services.admin_slate_groups import build_slate_by_group_dataframe
 from online.services.admin_shell import run_repo_python
 from online.services.execution_backend import get_execution_backend
 
@@ -133,48 +134,96 @@ def _show_df(df: pd.DataFrame, height: int = 360) -> None:
     st.dataframe(df, use_container_width=True, height=height, hide_index=True)
 
 
-def page_dashboard() -> None:
-    _panel("Dashboard", "Pipeline snapshot and runner lock (read-only + lock clear in Runner page).")
-    slate = st.session_state.get("admin_job_date_et") or _today_et_iso()
-    st.caption(f"Eastern slate focus: **{slate}** (change in sidebar)")
+def _render_slate_rail(
+    con,
+    game_date_et: str,
+    *,
+    group_window_min: int = 30,
+) -> None:
+    """Right column: games grouped by first-pitch cluster, sorted in ET time order."""
+    st.markdown(
+        "<div style='font-size:15px;font-weight:600;letter-spacing:0.02em;margin:0 0 4px;'>Slate (ET, by group)</div>",
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        f"Regular season · {game_date_et} · {group_window_min}m cluster (schedule default)"
+    )
+    try:
+        df = build_slate_by_group_dataframe(
+            con,
+            game_date_et,
+            group_window_min=group_window_min,
+        )
+    except Exception as exc:
+        st.warning(f"Slate: {exc}")
+        return
+    if df.empty:
+        st.info("No games for this date.")
+        return
+    d = df.rename(
+        columns={
+            "group": "Grp",
+            "time_et": "ET",
+            "matchup": "Matchup",
+            "game_pk": "pk",
+        }
+    )
+    h = min(640, 48 + 28 * max(1, len(d)))
+    _show_df(d, height=h)
 
+
+def page_dashboard() -> None:
+    slate = st.session_state.get("admin_job_date_et") or _today_et_iso()
     try:
         con, dbp = open_db(st.session_state.get("admin_db_path") or None)
     except Exception as exc:
         st.error(f"Database: {exc}")
         return
 
+    col_main, col_rail = st.columns([2.35, 1.0], gap="large")
+    with col_rail:
+        _render_slate_rail(con, slate)
     try:
-        lock = fetch_runner_lock(con)
-        pending = count_pending(con, slate)
-        df_run = fetch_last_job_runs(con, 8)
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.metric("Pending (scoped)", pending)
-        with c2:
-            st.metric("DB", Path(dbp).name)
-        with c3:
-            if lock:
-                st.warning(f"runner_lock: pid={lock.get('pid')} host={lock.get('host')}")
-            else:
-                st.success("runner_lock: clear")
+        with col_main:
+            _panel(
+                "Dashboard",
+                "Pipeline snapshot and runner lock (read-only + lock clear in Runner page).",
+            )
+            st.caption(
+                f"Eastern slate focus: **{slate}** (change in sidebar)"
+            )
 
-        st.subheader("Recent pipeline_job_runs")
-        _show_df(df_run, 280)
+            lock = fetch_runner_lock(con)
+            pending = count_pending(con, slate)
+            df_run = fetch_last_job_runs(con, 8)
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.metric("Pending (scoped)", pending)
+            with c2:
+                st.metric("DB", Path(dbp).name)
+            with c3:
+                if lock:
+                    st.warning(
+                        f"runner_lock: pid={lock.get('pid')} host={lock.get('host')}"
+                    )
+                else:
+                    st.success("runner_lock: clear")
 
-        st.subheader("Non-complete jobs (scoped)")
-        df = fetch_pipeline_jobs_multi_status(
-            con,
-            ("pending", "running", "failed", "timeout", "skipped"),
-            job_date_et=slate,
-        )
-        _show_df(df, 400)
+            st.subheader("Recent pipeline_job_runs")
+            _show_df(df_run, 280)
+
+            st.subheader("Non-complete jobs (scoped)")
+            df = fetch_pipeline_jobs_multi_status(
+                con,
+                ("pending", "running", "failed", "timeout", "skipped"),
+                job_date_et=slate,
+            )
+            _show_df(df, 400)
     finally:
         con.close()
 
 
 def page_pipeline() -> None:
-    _panel("Pipeline", "Browse `pipeline_jobs`, run explain-deps, fix single rows in the DB.")
     slate = st.session_state.get("admin_job_date_et") or _today_et_iso()
     try:
         con, dbp = open_db(st.session_state.get("admin_db_path") or None)
@@ -182,288 +231,306 @@ def page_pipeline() -> None:
         st.error(f"Database: {exc}")
         return
 
+    col_main, col_rail = st.columns([2.35, 1.0], gap="large")
+    with col_rail:
+        _render_slate_rail(con, slate)
     try:
-        st.caption(f"Database: `{dbp}`")
-        scope_all = st.checkbox("Show all dates (ignore slate filter)", value=False, key="pl_scope")
-        jd = None if scope_all else slate
+        with col_main:
+            _panel("Pipeline", "Browse `pipeline_jobs`, run explain-deps, fix single rows in the DB.")
+            st.caption(f"Database: `{dbp}`")
+            scope_all = st.checkbox("Show all dates (ignore slate filter)", value=False, key="pl_scope")
+            jd = None if scope_all else slate
 
-        tabs = st.tabs(
-            [
-                "Slate (wide)",
-                "Pending",
-                "Running",
-                "Complete",
-                "Skipped",
-                "Failed / timeout",
-                "Last runs",
-            ]
-        )
-        with tabs[0]:
-            st.caption("Up to 800 rows for the current slate; use sidebar `job_date_et` or clear scope above.")
-            _show_df(fetch_pipeline_jobs_all_columns(con, job_date_et=jd, limit=800), 480)
-        with tabs[1]:
-            _show_df(fetch_pipeline_jobs(con, status="pending", job_date_et=jd))
-        with tabs[2]:
-            _show_df(fetch_pipeline_jobs(con, status="running", job_date_et=jd))
-        with tabs[3]:
-            _show_df(fetch_pipeline_jobs(con, status="complete", job_date_et=jd))
-        with tabs[4]:
-            _show_df(fetch_pipeline_jobs(con, status="skipped", job_date_et=jd))
-        with tabs[5]:
-            _show_df(fetch_pipeline_jobs_multi_status(con, ("failed", "timeout"), job_date_et=jd))
-        with tabs[6]:
-            _show_df(fetch_last_job_runs(con, 20))
-
-        st.divider()
-        st.subheader("Explain dependencies")
-        ed = st.text_input("job_date_et", value=slate, key="explain_deps_date")
-        if st.button("Run explain-deps", type="primary", key="btn_explain"):
-            extra = []
-            if st.session_state.get("admin_db_path"):
-                extra = ["--db", str(st.session_state["admin_db_path"])]
-            rc, out = run_repo_python(
-                "batch/jobs/run_pipeline.py",
-                ["--explain-deps", ed.strip()] + extra,
-                timeout=120,
+            tabs = st.tabs(
+                [
+                    "Slate (wide)",
+                    "Pending",
+                    "Running",
+                    "Complete",
+                    "Skipped",
+                    "Failed / timeout",
+                    "Last runs",
+                ]
             )
-            st.code(out or "(no output)", language="text")
-            if rc != 0:
-                st.error(f"Exit code {rc}")
+            with tabs[0]:
+                st.caption("Up to 800 rows for the current slate; use sidebar `job_date_et` or clear scope above.")
+                _show_df(fetch_pipeline_jobs_all_columns(con, job_date_et=jd, limit=800), 480)
+            with tabs[1]:
+                _show_df(fetch_pipeline_jobs(con, status="pending", job_date_et=jd))
+            with tabs[2]:
+                _show_df(fetch_pipeline_jobs(con, status="running", job_date_et=jd))
+            with tabs[3]:
+                _show_df(fetch_pipeline_jobs(con, status="complete", job_date_et=jd))
+            with tabs[4]:
+                _show_df(fetch_pipeline_jobs(con, status="skipped", job_date_et=jd))
+            with tabs[5]:
+                _show_df(fetch_pipeline_jobs_multi_status(con, ("failed", "timeout"), job_date_et=jd))
+            with tabs[6]:
+                _show_df(fetch_last_job_runs(con, 20))
 
-        st.divider()
-        st.subheader("Fix one job (`pipeline_jobs`)")
-        st.caption(
-            "Use to clear stuck `running` rows (→ `pending`), reset retries, or mark terminal states. "
-            "Prefer fixing **one** row; invalid transitions can confuse the runner."
-        )
-        jfix = st.number_input("job_id", min_value=1, step=1, value=1, key="fix_job_id")
-        row = fetch_pipeline_job_by_id(con, int(jfix))
-        if not row:
-            st.warning("No row for that job_id.")
-        else:
-            st.json(dict(row))
+            st.divider()
+            st.subheader("Explain dependencies")
+            ed = st.text_input("job_date_et", value=slate, key="explain_deps_date")
+            if st.button("Run explain-deps", type="primary", key="btn_explain"):
+                extra = []
+                if st.session_state.get("admin_db_path"):
+                    extra = ["--db", str(st.session_state["admin_db_path"])]
+                rc, out = run_repo_python(
+                    "batch/jobs/run_pipeline.py",
+                    ["--explain-deps", ed.strip()] + extra,
+                    timeout=120,
+                )
+                st.code(out or "(no output)", language="text")
+                if rc != 0:
+                    st.error(f"Exit code {rc}")
 
-        n_status = st.selectbox(
-            "New status",
-            ["pending", "running", "complete", "failed", "timeout", "skipped"],
-            key="fix_status",
-            disabled=row is None,
-        )
-        n_err = st.text_input(
-            "error_message (blank = NULL)",
-            value=(row or {}).get("error_message") or "",
-            key="fix_err",
-            disabled=row is None,
-        )
-        n_retry = st.number_input(
-            "retry_count (set)",
-            value=int((row or {}).get("retry_count") or 0) if row else 0,
-            min_value=0,
-            max_value=1_000_000,
-            step=1,
-            key="fix_retry",
-            disabled=row is None,
-        )
-        clear_ts = st.checkbox(
-            "When status is `pending`, clear `started_at` and `completed_at` (re-queue)",
-            value=True,
-            key="fix_clear_ts",
-            disabled=row is None,
-        )
-        if st.button("Apply UPDATE", type="primary", key="fix_apply", disabled=row is None):
-            uerr: str | None
-            uerr = update_pipeline_job_row(
-                con,
-                job_id=int(jfix),
-                status=n_status,
-                error_message=(n_err.strip() or None),
-                retry_count=int(n_retry),
-                clear_timestamps_for_retry=bool(clear_ts and n_status == "pending"),
+            st.divider()
+            st.subheader("Fix one job (`pipeline_jobs`)")
+            st.caption(
+                "Use to clear stuck `running` rows (→ `pending`), reset retries, or mark terminal states. "
+                "Prefer fixing **one** row; invalid transitions can confuse the runner."
             )
-            if uerr:
-                st.error(uerr)
+            jfix = st.number_input("job_id", min_value=1, step=1, value=1, key="fix_job_id")
+            row = fetch_pipeline_job_by_id(con, int(jfix))
+            if not row:
+                st.warning("No row for that job_id.")
             else:
-                st.success("Updated.")
-                st.rerun()
+                st.json(dict(row))
+
+            n_status = st.selectbox(
+                "New status",
+                ["pending", "running", "complete", "failed", "timeout", "skipped"],
+                key="fix_status",
+                disabled=row is None,
+            )
+            n_err = st.text_input(
+                "error_message (blank = NULL)",
+                value=(row or {}).get("error_message") or "",
+                key="fix_err",
+                disabled=row is None,
+            )
+            n_retry = st.number_input(
+                "retry_count (set)",
+                value=int((row or {}).get("retry_count") or 0) if row else 0,
+                min_value=0,
+                max_value=1_000_000,
+                step=1,
+                key="fix_retry",
+                disabled=row is None,
+            )
+            clear_ts = st.checkbox(
+                "When status is `pending`, clear `started_at` and `completed_at` (re-queue)",
+                value=True,
+                key="fix_clear_ts",
+                disabled=row is None,
+            )
+            if st.button("Apply UPDATE", type="primary", key="fix_apply", disabled=row is None):
+                uerr: str | None
+                uerr = update_pipeline_job_row(
+                    con,
+                    job_id=int(jfix),
+                    status=n_status,
+                    error_message=(n_err.strip() or None),
+                    retry_count=int(n_retry),
+                    clear_timestamps_for_retry=bool(clear_ts and n_status == "pending"),
+                )
+                if uerr:
+                    st.error(uerr)
+                else:
+                    st.success("Updated.")
+                    st.rerun()
     finally:
         con.close()
 
 
 def page_runner() -> None:
-    _panel(
-        "Runner & console",
-        "Execution is pluggable (local / cloud / db_only). `pipeline_jobs` and `runner_lock` are always the DB view.",
-    )
     dbp = (st.session_state.get("admin_db_path") or "").strip()
     extra_db: list[str] = ["--db", dbp] if dbp else []
     slate = (st.session_state.get("admin_job_date_et") or _today_et_iso()).strip()
     be = get_execution_backend(admin_db_path=dbp or None)
-    st.info(f"**Execution backend:** {be.name}  ·  `kind={be.kind}`")
-
-    st.subheader("Live console (execution plane)")
-    tstat = be.status()
-    log_hint = tstat.get("log_path")
-    st.caption(
-        (f"Log: `{log_hint}`" if log_hint else "Log path from control plane (or use text below).")
-    )
-    if tstat.get("running"):
-        pid = tstat.get("pid")
-        spid = f"pid ` {pid} `" if pid is not None else "active"
-        st.success(
-            f"**RUNNING** — {spid} (since {tstat.get('started_at', '—')})  ·  {tstat.get('message', '')}"
-        )
-    else:
-        st.info(tstat.get("message", "Not running (or not reported by the execution backend)."))
-
-    if be.supports_start_stop:
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            once_mode = st.checkbox("--once (single pass, no sleep-until-due)", value=False, key="rn_once")
-        with c2:
-            exit_no = st.checkbox(
-                "--exit-when-no-pending",
-                value=True,
-                key="rn_exit",
-                disabled=once_mode,
-            )
-        with c3:
-            force_on_start = st.checkbox(
-                "--force-unlock on start",
-                value=True,
-                key="rn_force",
-            )
-
-        if st.button("Start pipeline (remote / local per backend)", type="primary", key="rn_start"):
-            run_args: list[str] = list(extra_db)
-            if force_on_start:
-                run_args.append("--force-unlock")
-            if once_mode:
-                run_args.append("--once")
-            else:
-                run_args.extend(
-                    [
-                        "--sleep-until-due",
-                        "--job-date-et",
-                        slate,
-                    ]
-                )
-                if exit_no:
-                    run_args.append("--exit-when-no-pending")
-            ok, msg = be.start(run_args)
-            if ok:
-                st.success(msg)
-            else:
-                st.error(msg)
-            time.sleep(0.3)
-            st.rerun()
-
-        c4, c5 = st.columns(2)
-        with c4:
-            if st.button("Stop (execution plane)", type="primary", key="rn_stop"):
-                _ok, msg, warns = be.stop()
-                st.success(msg)
-                for w in warns:
-                    st.warning(w)
-                if st.session_state.get("clear_lock_on_stop", True) and be.kind == "local":
-                    try:
-                        con0, _ = open_db(dbp or None)
-                        if clear_runner_lock(con0):
-                            st.info("Cleared `runner_lock` in DB after stop (local backend).")
-                        con0.close()
-                    except OSError as exc:
-                        st.warning(f"Lock clear: {exc}")
-                time.sleep(0.2)
-                st.rerun()
-        with c5:
-            st.checkbox(
-                "Also clear `runner_lock` in DB after stop (local subprocess only)",
-                value=True,
-                key="clear_lock_on_stop",
-                disabled=(be.kind != "local"),
-            )
-    else:
-        st.caption("Start/Stop is disabled in this **execution** mode. Use your cloud scheduler, worker, or k8s.")
-
-    frag = getattr(st, "fragment", None)
-    use_manual = True
-    if callable(frag):
-        try:
-
-            @frag(run_every=2)
-            def _auto_console() -> None:
-                st.code(
-                    be.read_console(tail_lines=5000) or "(no console text yet)",
-                    language="text",
-                )
-
-            _auto_console()
-            use_manual = False
-        except TypeError:
-            use_manual = True
-    if use_manual:
-        st.caption("Auto-refresh needs Streamlit with `@st.fragment(run_every=…)`; use **Refresh**.")
-        if st.button("Refresh console", key="rn_refresh_cons"):
-            st.rerun()
-        st.code(
-            be.read_console(tail_lines=5000) or "(no console text yet)",
-            language="text",
-        )
-
-    st.divider()
-    st.subheader("Database lock (CLI runner)")
-
+    con = None
     try:
-        con, path = open_db(dbp or None)
+        con, _ = open_db(dbp or None)
     except Exception as exc:
-        st.error(f"Database: {exc}")
-        return
+        st.warning(f"Database: {exc}")
 
-    try:
-        lock = fetch_runner_lock(con)
-        if lock:
-            st.write("Current **runner_lock** row:", lock)
+    col_main, col_rail = st.columns([2.35, 1.0], gap="large")
+    with col_rail:
+        if con is not None:
+            _render_slate_rail(con, slate)
         else:
-            st.success("No `runner_lock` row (unlocked).")
+            st.caption("Slate (ET, by group)")
+            st.info("Set **Optional --db path** in the sidebar to see games for this date.")
+    with col_main:
+        _panel(
+            "Runner & console",
+            "Execution is pluggable (local / cloud / db_only). `pipeline_jobs` and `runner_lock` are always the DB view.",
+        )
+        st.info(f"**Execution backend:** {be.name}  ·  `kind={be.kind}`")
 
-        if st.button("Clear runner_lock (DB write)", key="pl_clear_rl"):
-            if clear_runner_lock(con):
-                st.success("runner_lock cleared.")
-                st.rerun()
-            else:
-                st.error("Could not clear runner_lock.")
-    finally:
-        con.close()
-
-    if be.kind == "local":
-        st.divider()
-        st.subheader("Read-only: `run_pipeline.py --status` (this machine only)")
-        if st.button("Run `run_pipeline.py --status`", key="pl_run_status"):
-            rc, out = run_repo_python(
-                "batch/jobs/run_pipeline.py", ["--status"] + extra_db, timeout=120
+        st.subheader("Live console (execution plane)")
+        tstat = be.status()
+        log_hint = tstat.get("log_path")
+        st.caption(
+            (f"Log: `{log_hint}`" if log_hint else "Log path from control plane (or use text below).")
+        )
+        if tstat.get("running"):
+            pid = tstat.get("pid")
+            spid = f"pid ` {pid} `" if pid is not None else "active"
+            st.success(
+                f"**RUNNING** — {spid} (since {tstat.get('started_at', '—')})  ·  {tstat.get('message', '')}"
             )
-            st.code(out, language="text")
-            if rc != 0:
-                st.error(f"Exit code {rc}")
+        else:
+            st.info(tstat.get("message", "Not running (or not reported by the execution backend)."))
+
+        if be.supports_start_stop:
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                once_mode = st.checkbox("--once (single pass, no sleep-until-due)", value=False, key="rn_once")
+            with c2:
+                exit_no = st.checkbox(
+                    "--exit-when-no-pending",
+                    value=True,
+                    key="rn_exit",
+                    disabled=once_mode,
+                )
+            with c3:
+                force_on_start = st.checkbox(
+                    "--force-unlock on start",
+                    value=True,
+                    key="rn_force",
+                )
+
+            if st.button("Start pipeline (remote / local per backend)", type="primary", key="rn_start"):
+                run_args: list[str] = list(extra_db)
+                if force_on_start:
+                    run_args.append("--force-unlock")
+                if once_mode:
+                    run_args.append("--once")
+                else:
+                    run_args.extend(
+                        [
+                            "--sleep-until-due",
+                            "--job-date-et",
+                            slate,
+                        ]
+                    )
+                    if exit_no:
+                        run_args.append("--exit-when-no-pending")
+                ok, msg = be.start(run_args)
+                if ok:
+                    st.success(msg)
+                else:
+                    st.error(msg)
+                time.sleep(0.3)
+                st.rerun()
+
+            c4, c5 = st.columns(2)
+            with c4:
+                if st.button("Stop (execution plane)", type="primary", key="rn_stop"):
+                    _ok, msg, warns = be.stop()
+                    st.success(msg)
+                    for w in warns:
+                        st.warning(w)
+                    if st.session_state.get("clear_lock_on_stop", True) and be.kind == "local":
+                        try:
+                            con0, _ = open_db(dbp or None)
+                            if clear_runner_lock(con0):
+                                st.info("Cleared `runner_lock` in DB after stop (local backend).")
+                            con0.close()
+                        except OSError as exc:
+                            st.warning(f"Lock clear: {exc}")
+                    time.sleep(0.2)
+                    st.rerun()
+            with c5:
+                st.checkbox(
+                    "Also clear `runner_lock` in DB after stop (local subprocess only)",
+                    value=True,
+                    key="clear_lock_on_stop",
+                    disabled=(be.kind != "local"),
+                )
+        else:
+            st.caption("Start/Stop is disabled in this **execution** mode. Use your cloud scheduler, worker, or k8s.")
+
+        frag = getattr(st, "fragment", None)
+        use_manual = True
+        if callable(frag):
+            try:
+
+                @frag(run_every=2)
+                def _auto_console() -> None:
+                    st.code(
+                        be.read_console(tail_lines=5000) or "(no console text yet)",
+                        language="text",
+                    )
+
+                _auto_console()
+                use_manual = False
+            except TypeError:
+                use_manual = True
+        if use_manual:
+            st.caption("Auto-refresh needs Streamlit with `@st.fragment(run_every=…)`; use **Refresh**.")
+            if st.button("Refresh console", key="rn_refresh_cons"):
+                st.rerun()
+            st.code(
+                be.read_console(tail_lines=5000) or "(no console text yet)",
+                language="text",
+            )
+
         st.divider()
-        st.subheader("Task Scheduler hint (workstation, ET date)")
-        st.markdown(
-            "Use **Start in** = repo root. Example **Arguments** for PowerShell "
-            "(computes today's ET date, then runs the sleeper):"
-        )
-        ps_cmd = (
-            "-NoProfile -Command \""
-            "$tz=[System.TimeZoneInfo]::FindSystemTimeZoneById('Eastern Standard Time'); "
-            "$d=[System.TimeZoneInfo]::ConvertTime([datetime]::UtcNow,$tz).ToString('yyyy-MM-dd'); "
-            "python batch/jobs/run_pipeline.py --sleep-until-due --job-date-et $d "
-            "--exit-when-no-pending --force-unlock"
-        )
-        if dbp:
-            ps_cmd += " --db \"" + str(dbp).replace('"', '`"') + '"'
-        ps_cmd += '"'
-        st.code(ps_cmd, language="powershell")
-    else:
-        st.caption("Subprocess / Task Scheduler hints are for **local** mode only. In cloud, wire logs and control to your provider (see `execution_backend.py`).")
-    st.caption(f"ET slate in sidebar: **{slate}**")
+        st.subheader("Database lock (CLI runner)")
+
+        if con is None:
+            st.error(
+                "No database connection — set **Optional --db path** in the sidebar."
+            )
+        else:
+            lock = fetch_runner_lock(con)
+            if lock:
+                st.write("Current **runner_lock** row:", lock)
+            else:
+                st.success("No `runner_lock` row (unlocked).")
+
+            if st.button("Clear runner_lock (DB write)", key="pl_clear_rl"):
+                if clear_runner_lock(con):
+                    st.success("runner_lock cleared.")
+                    st.rerun()
+                else:
+                    st.error("Could not clear runner_lock.")
+
+        if be.kind == "local":
+            st.divider()
+            st.subheader("Read-only: `run_pipeline.py --status` (this machine only)")
+            if st.button("Run `run_pipeline.py --status`", key="pl_run_status"):
+                rc, out = run_repo_python(
+                    "batch/jobs/run_pipeline.py", ["--status"] + extra_db, timeout=120
+                )
+                st.code(out, language="text")
+                if rc != 0:
+                    st.error(f"Exit code {rc}")
+            st.divider()
+            st.subheader("Task Scheduler hint (workstation, ET date)")
+            st.markdown(
+                "Use **Start in** = repo root. Example **Arguments** for PowerShell "
+                "(computes today's ET date, then runs the sleeper):"
+            )
+            ps_cmd = (
+                "-NoProfile -Command \""
+                "$tz=[System.TimeZoneInfo]::FindSystemTimeZoneById('Eastern Standard Time'); "
+                "$d=[System.TimeZoneInfo]::ConvertTime([datetime]::UtcNow,$tz).ToString('yyyy-MM-dd'); "
+                "python batch/jobs/run_pipeline.py --sleep-until-due --job-date-et $d "
+                "--exit-when-no-pending --force-unlock"
+            )
+            if dbp:
+                ps_cmd += " --db \"" + str(dbp).replace('"', '`"') + '"'
+            ps_cmd += '"'
+            st.code(ps_cmd, language="powershell")
+        else:
+            st.caption("Subprocess / Task Scheduler hints are for **local** mode only. In cloud, wire logs and control to your provider (see `execution_backend.py`).")
+        st.caption(f"ET slate in sidebar: **{slate}**")
+
+    if con is not None:
+        con.close()
 
 
 def page_ingestion() -> None:
