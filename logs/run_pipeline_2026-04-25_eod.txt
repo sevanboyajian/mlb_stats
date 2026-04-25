@@ -1,0 +1,62 @@
+
+============================================================================
+  PIPELINE DEPS EXPLAIN  job_date_et=2026-04-25
+============================================================================
+  Database: C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\data\mlb_stats.db
+
+  Rules: each dependency is satisfied if at least one matching row has a resolved status: complete, skipped, failed, or timeout. Only pending/running block. Matching is slate-wide (no game_group_id filter): one rep odds_pull can cover a block.
+
+-- Upstream job_types for this slate ------------------------------------
+  [NO] daily_backup: 1 row(s) on slate | blocked - need a row in resolved status (complete, skipped, failed, timeout); counts: pending=1 | examples: job_id=1022 gid=0 status=pending
+  [OK] early_peek: 1 row(s) on slate | OK <- 993(gid=0)
+  [OK] load_today: 1 row(s) on slate | OK <- 989(gid=0)
+  [OK] load_weather: 1 row(s) on slate | OK <- 990(gid=0)
+  [NO] odds_pull: 5 row(s) on slate | blocked - need a row in resolved status (complete, skipped, failed, timeout); counts: pending=5 | examples: job_id=996 gid=1 status=pending; job_id=997 gid=2 status=pending; job_id=998 gid=3 status=pending; job_id=999 gid=4 status=pending; job_id=1000 gid=5 status=pending
+  [NO] schedule_next_day_globals: 1 row(s) on slate | blocked - need a row in resolved status (complete, skipped, failed, timeout); counts: pending=1 | examples: job_id=1021 gid=0 status=pending
+
+-- Each job on slate (35 row(s)) --------------------------------------
+job_id   type                    gid   status     deps_ok   detail                                                                  
+  ------------------------------------------------------------------------------------------------------------------------------------
+988      stats_pull              0     complete   yes       ready (deps)                                                            
+989      load_today              0     complete   yes       ready (deps)                                                            
+990      load_weather            0     complete   yes       ready (deps)                                                            
+991      day_setup               0     complete   yes       ready (deps)                                                            
+992      prior_report            0     complete   yes       ready (deps)                                                            
+993      early_peek              0     complete   yes       ready (deps)                                                            
+994      email_runlog_morning    0     complete   yes       ready (deps)                                                            
+1021     schedule_next_day_glob  0     pending    yes       ready (deps)                                                            
+1022     daily_backup            0     pending    no        deps not complete (job_date_et=2026-04-25): schedule_next_day_globals   
+1023     email_runlog_eod        0     pending    no        deps not complete (job_date_et=2026-04-25): daily_backup                
+996      odds_pull               1     pending    yes       ready (deps)                                                            
+1001     odds_check              1     pending    no        deps not complete (job_date_et=2026-04-25): odds_pull                   
+1006     weather                 1     pending    yes       ready (deps)                                                            
+1011     group_brief             1     pending    no        deps not complete (job_date_et=2026-04-25): odds_pull                   
+1016     ledger_snapshot         1     pending    no        deps not complete (job_date_et=2026-04-25): odds_pull                   
+997      odds_pull               2     pending    yes       ready (deps)                                                            
+1002     odds_check              2     pending    no        deps not complete (job_date_et=2026-04-25): odds_pull                   
+1007     weather                 2     pending    yes       ready (deps)                                                            
+1012     group_brief             2     pending    no        deps not complete (job_date_et=2026-04-25): odds_pull                   
+1017     ledger_snapshot         2     pending    no        deps not complete (job_date_et=2026-04-25): odds_pull                   
+998      odds_pull               3     pending    yes       ready (deps)                                                            
+1003     odds_check              3     pending    no        deps not complete (job_date_et=2026-04-25): odds_pull                   
+1008     weather                 3     pending    yes       ready (deps)                                                            
+1013     group_brief             3     pending    no        deps not complete (job_date_et=2026-04-25): odds_pull                   
+1018     ledger_snapshot         3     pending    no        deps not complete (job_date_et=2026-04-25): odds_pull                   
+999      odds_pull               4     pending    yes       ready (deps)                                                            
+1004     odds_check              4     pending    no        deps not complete (job_date_et=2026-04-25): odds_pull                   
+1009     weather                 4     pending    yes       ready (deps)                                                            
+1014     group_brief             4     pending    no        deps not complete (job_date_et=2026-04-25): odds_pull                   
+1019     ledger_snapshot         4     pending    no        deps not complete (job_date_et=2026-04-25): odds_pull                   
+1000     odds_pull               5     pending    yes       ready (deps)                                                            
+1005     odds_check              5     pending    no        deps not complete (job_date_et=2026-04-25): odds_pull                   
+1010     weather                 5     pending    yes       ready (deps)                                                            
+1015     group_brief             5     pending    no        deps not complete (job_date_et=2026-04-25): odds_pull                   
+1020     ledger_snapshot         5     pending    no        deps not complete (job_date_et=2026-04-25): odds_pull                   
+
+============================================================================
+
+[run_pipeline] runner lock already held; exiting safely.
+[run_pipeline] force-unlock: clearing existing runner_lock (acquired_at_utc=2026-04-25T10:22:59Z pid=38824 host=SB919759)
+[run_pipeline] db=C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\data\mlb_stats.db
+[run_pipeline] mode=once poll_seconds=60 ghost=True stale_minutes=30 timeout_minutes=30 sleep_until_due=False scope_job_date_et='2026-04-25' exit_when_no_pending=False
+[run_pipeline] 2026-04-25T12:44:11Z no due jobs; exiting (--once).
