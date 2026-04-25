@@ -777,11 +777,11 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
 
     if os.getenv("DEBUG_SCORE_GAME") == "1":
         try:
-            gpk = int(g.identifiers.game_pk)
+            game_pk = int(g.identifiers.game_pk)
         except Exception:
-            gpk = -1
-        raw_sig = [f"{s.signal_id}({'Y' if s.fires else 'n'})" for s in all_signals]
-        print(f"[DEBUG] {gpk}: raw_signals={raw_sig}")
+            game_pk = -1
+        signals = [f"{s.signal_id}({'Y' if s.fires else 'n'})" for s in all_signals]
+        print(f"[DEBUG] {game_pk}: raw_signals={signals}")
 
     # --- Score all signals (no fires gate) ---
     scored_signals: list[SignalFinding] = []
@@ -805,12 +805,12 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
 
     if os.getenv("DEBUG_SCORE_GAME") == "1":
         try:
-            gpk = int(g.identifiers.game_pk)
+            game_pk = int(g.identifiers.game_pk)
         except Exception:
-            gpk = -1
-        fired = [f"{s.signal_id}:{int(s.confidence_score or 0)}" for s in scored_signals if bool(s.fires)]
-        total = sum(int(s.confidence_score or 0) for s in scored_signals if bool(s.fires))
-        print(f"[DEBUG] {gpk}: signals={fired} score_sum={total}")
+            game_pk = -1
+        signals = [f"{s.signal_id}:{int(s.confidence_score or 0)}" for s in scored_signals if bool(s.fires)]
+        score = sum(int(s.confidence_score or 0) for s in scored_signals if bool(s.fires))
+        print(f"[DEBUG] {game_pk}: signals={signals} score={score}")
 
     # --- Aggregate by bet side ---
     buckets: dict[str, list[SignalFinding]] = {}
