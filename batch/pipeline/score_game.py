@@ -825,6 +825,18 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
             continue
         buckets.setdefault(sig.bet_side, []).append(sig)
 
+    if os.getenv("DEBUG_SCORE_GAME") == "1":
+        try:
+            game_pk = int(g.identifiers.game_pk)
+        except Exception:
+            game_pk = -1
+        after: list[str] = []
+        for side in sorted(buckets.keys()):
+            for s in buckets[side]:
+                after.append(f"{s.signal_id}({side}):{int(s.confidence_score or 0)}")
+        signals = after
+        print(f"[DEBUG AFTER FILTER] {game_pk}: signals={signals}")
+
     aggregated_scores: dict[str, int] = {}
     for side, sigs in buckets.items():
         non_wind_total = sum(
