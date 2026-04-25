@@ -808,6 +808,11 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
             game_pk = int(g.identifiers.game_pk)
         except Exception:
             game_pk = -1
+        signals = [
+            f"{s.signal_id}({'Y' if s.fires else 'n'}):{int(s.confidence_score or 0)}"
+            for s in scored_signals
+        ]
+        print(f"[DEBUG BEFORE FILTER] {game_pk}: signals={signals}")
         score = sum(int(s.confidence_score or 0) for s in scored_signals if bool(s.fires))
         print(f"[DEBUG] {game_pk}: final_score={score}")
 
