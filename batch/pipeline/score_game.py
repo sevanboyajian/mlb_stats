@@ -852,85 +852,88 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
         else:
             evaluable = False
 
+        market_out: dict[str, Any]
         if not evaluable:
-            return {"evaluated": False, "best_side": None, "score": 0}
-
-        best_side_m: str | None = None
-        best_score_m = 0
-        for side in candidates:
-            sc = int(aggregated_scores.get(side, 0) or 0)
-            if sc > best_score_m:
-                best_score_m = sc
-                best_side_m = side
-
-        # Resolve odds and bet text per market
-        bet_txt = ""
-        odds_taken: int | None = None
-        if market == "ML":
-            if best_side_m == "away_ml":
-                odds_taken = g.market.away_ml_current
-                bet_txt = f"{g.identifiers.away_team_abbr} ML"
-            elif best_side_m == "home_ml":
-                odds_taken = g.market.home_ml_current
-                bet_txt = f"{g.identifiers.home_team_abbr} ML"
-        elif market == "TOTAL":
-            tline = g.market.total_current
-            if best_side_m == "over_total":
-                odds_taken = g.market.over_odds
-                bet_txt = f"OVER {tline}" if tline is not None else "OVER"
-            elif best_side_m == "under_total":
-                odds_taken = g.market.under_odds
-                bet_txt = f"UNDER {tline}" if tline is not None else "UNDER"
-        elif market == "RL":
-            rl_line = g.market.away_rl_line
-            if best_side_m == "away_rl":
-                odds_taken = g.market.away_rl_odds
-                bet_txt = (
-                    f"{g.identifiers.away_team_abbr} {rl_line:+g}"
-                    if rl_line is not None
-                    else f"{g.identifiers.away_team_abbr} +1.5"
-                )
-
-        # Compute edge only if we have odds
-        model_p_m = score_to_model_prob(int(best_score_m))
-        if model_p_m is not None and confidence_penalty > 0:
-            model_p_m = max(0.50, float(model_p_m) - float(confidence_penalty))
-        implied_p_m = american_to_implied_prob(int(odds_taken) if odds_taken is not None else None)
-        edge_m = compute_edge(float(model_p_m), implied_p_m)
-        edge_ok_m = (edge_m is not None) and (edge_m >= EDGE_MIN)
-
-        # Classification (skipped edge capture)
-        if model_p_m is None or implied_p_m is None:
-            eval_status = "NO_MODEL"
-        elif edge_m is not None and edge_m >= EDGE_MIN:
-            eval_status = "BET"
-        elif edge_m is not None and edge_m > 0:
-            eval_status = "SKIPPED_EDGE"
+            market_out = {"evaluated": False, "best_side": None, "score": 0}
         else:
-            eval_status = "NO_EDGE"
+            best_side_m: str | None = None
+            best_score_m = 0
+            for side in candidates:
+                sc = int(aggregated_scores.get(side, 0) or 0)
+                if sc > best_score_m:
+                    best_score_m = sc
+                    best_side_m = side
 
-        # Signals used for this market/side (do NOT apply any post-threshold filtering here)
-        fired_for_side = list(buckets.get(best_side_m or "", []) or [])
-        signal_ids_used = [s.signal_id for s in fired_for_side if bool(s.fires)]
-        # Dedup but keep stable order
-        seen: set[str] = set()
-        signal_ids_used = [x for x in signal_ids_used if not (x in seen or seen.add(x))]
-        signals_used = [signal_display_name(sid) for sid in signal_ids_used]
+            # Resolve odds and bet text per market
+            bet_txt = ""
+            odds_taken: int | None = None
+            if market == "ML":
+                if best_side_m == "away_ml":
+                    odds_taken = g.market.away_ml_current
+                    bet_txt = f"{g.identifiers.away_team_abbr} ML"
+                elif best_side_m == "home_ml":
+                    odds_taken = g.market.home_ml_current
+                    bet_txt = f"{g.identifiers.home_team_abbr} ML"
+            elif market == "TOTAL":
+                tline = g.market.total_current
+                if best_side_m == "over_total":
+                    odds_taken = g.market.over_odds
+                    bet_txt = f"OVER {tline}" if tline is not None else "OVER"
+                elif best_side_m == "under_total":
+                    odds_taken = g.market.under_odds
+                    bet_txt = f"UNDER {tline}" if tline is not None else "UNDER"
+            elif market == "RL":
+                rl_line = g.market.away_rl_line
+                if best_side_m == "away_rl":
+                    odds_taken = g.market.away_rl_odds
+                    bet_txt = (
+                        f"{g.identifiers.away_team_abbr} {rl_line:+g}"
+                        if rl_line is not None
+                        else f"{g.identifiers.away_team_abbr} +1.5"
+                    )
 
-        return {
-            "evaluated": True,
-            "best_side": best_side_m,
-            "score": int(best_score_m),
-            "bet": bet_txt,
-            "odds": odds_taken,
-            "model_p": float(model_p_m),
-            "implied_p": float(implied_p_m) if implied_p_m is not None else None,
-            "edge": float(edge_m) if edge_m is not None else None,
-            "edge_ok": bool(edge_ok_m),
-            "eval_status": eval_status,
-            "signal_ids": signal_ids_used,
-            "signals": signals_used,
-        }
+            # Compute edge only if we have odds
+            model_p_m = score_to_model_prob(int(best_score_m))
+            if model_p_m is not None and confidence_penalty > 0:
+                model_p_m = max(0.50, float(model_p_m) - float(confidence_penalty))
+            implied_p_m = american_to_implied_prob(int(odds_taken) if odds_taken is not None else None)
+            edge_m = compute_edge(float(model_p_m), implied_p_m)
+            edge_ok_m = (edge_m is not None) and (edge_m >= EDGE_MIN)
+
+            # Classification (skipped edge capture)
+            if model_p_m is None or implied_p_m is None:
+                eval_status = "NO_MODEL"
+            elif edge_m is not None and edge_m >= EDGE_MIN:
+                eval_status = "BET"
+            elif edge_m is not None and edge_m > 0:
+                eval_status = "SKIPPED_EDGE"
+            else:
+                eval_status = "NO_EDGE"
+
+            # Signals used for this market/side (do NOT apply any post-threshold filtering here)
+            fired_for_side = list(buckets.get(best_side_m or "", []) or [])
+            signal_ids_used = [s.signal_id for s in fired_for_side if bool(s.fires)]
+            # Dedup but keep stable order
+            seen: set[str] = set()
+            signal_ids_used = [x for x in signal_ids_used if not (x in seen or seen.add(x))]
+            signals_used = [signal_display_name(sid) for sid in signal_ids_used]
+
+            market_out = {
+                "evaluated": True,
+                "best_side": best_side_m,
+                "score": int(best_score_m),
+                "bet": bet_txt,
+                "odds": odds_taken,
+                "model_p": float(model_p_m),
+                "implied_p": float(implied_p_m) if implied_p_m is not None else None,
+                "edge": float(edge_m) if edge_m is not None else None,
+                "edge_ok": bool(edge_ok_m),
+                "eval_status": eval_status,
+                "signal_ids": signal_ids_used,
+                "signals": signals_used,
+            }
+
+        return market_out
 
     market_evals = {
         "ML": _eval_market("ML"),
