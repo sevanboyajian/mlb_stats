@@ -778,19 +778,21 @@ def build_data_completeness(
     no_ml = market.home_ml_current is None
     no_total = market.total_current is None
 
+    # Per-signal gating only (partial evaluation allowed):
+    # - wind unknown -> suppress wind-dependent signals only
+    # - missing ML -> suppress ML-dependent signals only
+    # - missing totals -> suppress total-dependent signals only
     mvf = no_ml or wind_unknown
     mvb = mvf
     h3b = no_total or wind_unknown
     s1h2 = no_ml
-    lhp = (
-        not matchup.away_sp.hand_confirmed
-        or not matchup.home_offense.stats_valid
-        or market.market_confidence == "none"
-    )
+    # Offense window <5 should reduce confidence, not block the model.
+    # Keep LHP blocked only for truly missing critical inputs (hand/odds).
+    lhp = (not matchup.away_sp.hand_confirmed) or (market.market_confidence == "none")
 
     gaps: list[str] = []
     if wind_unknown:
-        gaps.append("wind direction unknown (wind-dependent signals blocked)")
+        gaps.append("wind direction unknown (wind signals suppressed)")
     if no_ml:
         gaps.append("no current moneyline")
     if no_total:
@@ -798,7 +800,7 @@ def build_data_completeness(
     if not matchup.away_sp.hand_confirmed:
         gaps.append("away starter hand unknown")
     if not matchup.home_offense.stats_valid:
-        gaps.append("home rolling offense window < 5 games")
+        gaps.append("home rolling offense window < 5 games (confidence penalty)")
     if market.market_confidence == "none":
         gaps.append("no usable market odds")
     if not market.clv_available:
@@ -813,7 +815,9 @@ def build_data_completeness(
         or env.wind_source == "forecast"
     )
 
-    if wind_unknown or no_ml:
+    # "blocking" should be reserved for truly unusable market context (no odds),
+    # not for missing wind direction or partial rolling windows.
+    if market.market_confidence == "none" or (no_ml and no_total):
         tier = "blocking"
     elif degraded:
         tier = "degraded"

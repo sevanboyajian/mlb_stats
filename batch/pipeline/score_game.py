@@ -709,6 +709,7 @@ class ScoredGame:
     model_p: float | None = None
     implied_p: float | None = None
     edge: float | None = None
+    eval_status: str | None = None
     # Per-market evaluation to prevent cross-market signal leakage (ML/TOTAL/RL scored independently)
     market_evals: dict[str, dict[str, Any]] = field(default_factory=dict)
 
@@ -726,6 +727,14 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
     if env.is_wind_suppressed:
         note = (g.venue_wind_note or "")[:80]
         extra_flags.append(f"Wind signals suppressed at this venue ({note or env.roof_type})")
+
+    # Confidence penalty for missing features (keeps model alive under partial data).
+    # Applies at probability-layer (model_p), not as a hard block.
+    try:
+        missing_features = len(g.completeness.gaps or [])
+    except Exception:
+        missing_features = 0
+    confidence_penalty = float(missing_features) * 0.01
 
     # --- Prior tier / env-cap logic (kept for reference, no longer used) ---
     # top_pick = active_bets[0] if active_bets else None
@@ -866,9 +875,21 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
 
         # Compute edge only if we have odds
         model_p_m = score_to_model_prob(int(best_score_m))
+        if model_p_m is not None and confidence_penalty > 0:
+            model_p_m = max(0.50, float(model_p_m) - float(confidence_penalty))
         implied_p_m = american_to_implied_prob(int(odds_taken) if odds_taken is not None else None)
         edge_m = compute_edge(float(model_p_m), implied_p_m)
         edge_ok_m = (edge_m is not None) and (edge_m >= EDGE_MIN)
+
+        # Classification (skipped edge capture)
+        if model_p_m is None or implied_p_m is None:
+            eval_status = "NO_MODEL"
+        elif edge_m is not None and edge_m >= EDGE_MIN:
+            eval_status = "BET"
+        elif edge_m is not None and edge_m > 0:
+            eval_status = "SKIPPED_EDGE"
+        else:
+            eval_status = "NO_EDGE"
 
         # Signals used for this market/side (do NOT apply any post-threshold filtering here)
         fired_for_side = list(buckets.get(best_side_m or "", []) or [])
@@ -888,6 +909,7 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
             "implied_p": float(implied_p_m) if implied_p_m is not None else None,
             "edge": float(edge_m) if edge_m is not None else None,
             "edge_ok": bool(edge_ok_m),
+            "eval_status": eval_status,
             "signal_ids": signal_ids_used,
             "signals": signals_used,
         }
@@ -913,7 +935,7 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
         env_penalty = -2
     elif ec == "Tier2":
         env_penalty = -1
-    best_score = int(best_score) + int(env_penalty)
+    best_score = max(0, int(best_score) + int(env_penalty))
 
     # --- EDGE MODEL INTEGRATION ---
     # 1) Map side → odds (totals disabled for now)
@@ -928,6 +950,8 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
 
     # 2) Convert to probabilities
     model_p = score_to_model_prob(int(best_score))
+    if model_p is not None and confidence_penalty > 0:
+        model_p = max(0.50, float(model_p) - float(confidence_penalty))
     implied_p = american_to_implied_prob(int(odds) if odds is not None else None)
     edge = compute_edge(model_p, implied_p)
 
@@ -941,6 +965,16 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
     diversity_ok = bool(has_matchup and has_context)
 
     edge_ok = (edge is not None) and (edge >= EDGE_MIN) and diversity_ok
+
+    # Overall evaluation status (best-side ML only; totals/RL are per-market in market_evals)
+    if model_p is None or implied_p is None:
+        eval_status = "NO_MODEL"
+    elif edge is not None and edge >= EDGE_MIN:
+        eval_status = "BET"
+    elif edge is not None and edge > 0:
+        eval_status = "SKIPPED_EDGE"
+    else:
+        eval_status = "NO_EDGE"
 
     # 4) Size the bet (fractional Kelly)
     stake_frac = 0.0
@@ -995,6 +1029,7 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
         model_p=float(model_p) if model_p is not None else None,
         implied_p=float(implied_p) if implied_p is not None else None,
         edge=float(edge) if edge is not None else None,
+        eval_status=eval_status,
         market_evals=market_evals,
     )
 

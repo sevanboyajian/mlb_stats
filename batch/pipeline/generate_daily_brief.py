@@ -1172,6 +1172,7 @@ def ensure_bet_snapshots(conn: sqlite3.Connection) -> None:
             model_p        REAL,
             implied_p      REAL,
             edge           REAL,
+            eval_status    TEXT,
             signals_used   TEXT,               -- JSON list[str]
             placed_at      TEXT    NOT NULL    -- ET timestamp string
         )
@@ -1184,6 +1185,14 @@ def ensure_bet_snapshots(conn: sqlite3.Connection) -> None:
         """
     )
     conn.commit()
+    # Add columns for existing DBs (safe best-effort)
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(bet_snapshots)").fetchall()]
+        if cols and "eval_status" not in cols:
+            conn.execute("ALTER TABLE bet_snapshots ADD COLUMN eval_status TEXT")
+            conn.commit()
+    except Exception:
+        pass
 
 
 def save_bet_snapshot(
@@ -1245,13 +1254,21 @@ def save_bet_snapshot(
         bet_side = ""
 
     try:
+        eval_status = None
+        try:
+            if isinstance(scored_game, dict):
+                ev = scored_game.get("eval_status")
+                eval_status = (str(ev).strip() if ev is not None else None) or None
+        except Exception:
+            eval_status = None
+
         conn.execute(
             """
             INSERT OR REPLACE INTO bet_snapshots
                 (game_date, game_pk, market_type, bet_side, bet,
-                 odds_taken, score, model_p, implied_p, edge,
+                 odds_taken, score, model_p, implied_p, edge, eval_status,
                  signals_used, placed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(game_date),
@@ -1264,6 +1281,7 @@ def save_bet_snapshot(
                 float(model_p) if model_p is not None else None,
                 float(implied_p) if implied_p is not None else None,
                 float(edge) if edge is not None else None,
+                eval_status,
                 json.dumps(list(signals or [])),
                 placed_at_txt,
             ),
@@ -1357,7 +1375,7 @@ def backfill_missing_bet_snapshots_from_ledger(conn: sqlite3.Connection, game_da
             signals_used = []
 
         # Save snapshot using ledger bet/odds + brief_picks signals.
-        mm_stub = {"score": 0, "model_p": None, "implied_p": None, "edge": None, "best_side": ""}
+        mm_stub = {"score": 0, "model_p": None, "implied_p": None, "edge": None, "best_side": "", "eval_status": "BET"}
         save_bet_snapshot(
             conn,
             game_date,
@@ -3344,6 +3362,30 @@ def evaluate_signals(
         out["_scored_game"] = scored
         # Per-market evaluations (prevents cross-market signal leakage in prior reports)
         out["market_evals"] = getattr(scored, "market_evals", {}) or {}
+
+        # Snapshot ALL evaluated markets (BET / SKIPPED_EDGE / NO_EDGE / NO_MODEL).
+        # This must occur even when no bet is placed to capture skipped edges.
+        if PERSIST_WRITES:
+            try:
+                gpk = int(game.get("game_pk"))
+                gd = str(fdg.identifiers.game_date_et)
+                placed_at = _now_et().strftime("%Y-%m-%d %H:%M ET")
+                for mt, mm in (out["market_evals"] or {}).items():
+                    if not isinstance(mm, dict) or not mm.get("evaluated"):
+                        continue
+                    save_bet_snapshot(
+                        conn,
+                        gd,
+                        gpk,
+                        str(mt),
+                        str(mm.get("bet") or ""),
+                        int(mm["odds"]) if mm.get("odds") is not None else None,
+                        mm,
+                        list(mm.get("signals") or []),
+                        placed_at=placed_at,
+                    )
+            except Exception:
+                pass
         return out
     except Exception as e:
         return {
@@ -3862,7 +3904,7 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
         snap_rows = conn.execute(
             """
             SELECT game_pk, market_type, bet_side, bet, odds_taken, score, model_p, implied_p, edge,
-                   signals_used, placed_at
+                   eval_status, signals_used, placed_at
             FROM bet_snapshots
             WHERE game_date = ?
             """,
@@ -3871,6 +3913,33 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
         snapshots = {(int(r["game_pk"]), str(r["market_type"] or "").upper()): dict(r) for r in snap_rows}
     except Exception:
         snapshots = {}
+
+    # ── Skipped edge summary ─────────────────────────────────────────────
+    def _snap_status(s: dict) -> str:
+        st = str(s.get("eval_status") or "").strip()
+        if not st:
+            # Legacy snapshots (staked bets) before eval_status existed.
+            return "BET" if s.get("odds_taken") is not None else "NO_EDGE"
+        return st
+
+    skipped = [s for s in snapshots.values() if _snap_status(s) == "SKIPPED_EDGE"]
+    if skipped:
+        edges = [float(s["edge"]) for s in skipped if s.get("edge") is not None]
+        avg_edge = (sum(edges) / len(edges)) if edges else 0.0
+        best = max(skipped, key=lambda x: float(x.get("edge") or 0.0))
+        best_edge = float(best.get("edge") or 0.0)
+        best_bet = str(best.get("bet") or "")
+    else:
+        avg_edge = 0.0
+        best_edge = 0.0
+        best_bet = ""
+
+    lines.append(section("🟡  SKIPPED EDGE SUMMARY"))
+    lines.append(f"\n  Skipped Edges: {len(skipped)}")
+    lines.append(f"  Avg Edge: +{avg_edge*100:.1f}%")
+    if best_bet:
+        lines.append(f"  Max Skipped: +{best_edge*100:.1f}% ({best_bet})")
+    lines.append("")
 
     # ── Grading helpers ───────────────────────────────────────────────────
     def grade_ml(bet_side, hs, as_, odds):
@@ -4088,23 +4157,32 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
         if ol:
             lines.append(ol)
 
-        def _sig_from_snapshot(snap: dict | None) -> str:
+        def _signal_display_for_snapshot(snap: dict | None) -> str:
             if not snap:
                 return "No Signal"
-            try:
-                import json
-                raw = snap.get("signals_used") or "[]"
-                sigs = json.loads(raw) if isinstance(raw, str) else list(raw)
-                if not sigs:
+            status = _snap_status(snap)
+            edge = snap.get("edge")
+            if status == "BET":
+                try:
+                    import json
+                    raw = snap.get("signals_used") or "[]"
+                    sigs = json.loads(raw) if isinstance(raw, str) else list(raw)
+                    return ", ".join(str(x) for x in sigs) if sigs else "Signal Missing (BUG)"
+                except Exception:
                     return "Signal Missing (BUG)"
-                return ", ".join(str(x) for x in sigs)
-            except Exception:
-                return "Signal Missing (BUG)"
+            if status == "SKIPPED_EDGE":
+                try:
+                    return f"Weak Edge (+{float(edge)*100:.1f}%)" if edge is not None else "Weak Edge (+?.?%)"
+                except Exception:
+                    return "Weak Edge (+?.?%)"
+            if status == "NO_MODEL":
+                return "No Model"
+            return "No Edge"
 
         # ML line
         ml_snap = (e.get("snapshots") or {}).get("ML")
-        ml_sig = _sig_from_snapshot(ml_snap)
-        if ml_snap:
+        ml_sig = _signal_display_for_snapshot(ml_snap)
+        if ml_snap and _snap_status(ml_snap) == "BET":
             bet_txt = str(ml_snap.get("bet") or "")
             odds = ml_snap.get("odds_taken")
             side = "away" if bet_txt.startswith(g["away_abbr"]) else "home"
@@ -4124,11 +4202,28 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
             )
         else:
             winner = e.get("winner") or ""
-            line = (
-                f"  NO BET  {winner} ML{' ' * max(0, 9-len(winner))} | SIGNAL: {ml_sig:<22} | "
-                f"RESULT: WIN        | P&L: N/A"
-            )
-            lines.append(color_text(line, "dim"))
+            # Non-bet outcomes use eval_status for coloring/label if snapshot exists.
+            if ml_snap:
+                st = _snap_status(ml_snap)
+                bet_txt = str(ml_snap.get("bet") or f"{winner} ML")
+                edge = ml_snap.get("edge")
+                edge_txt = f" [Edge +{float(edge)*100:.1f}%]" if edge is not None else ""
+                if st == "SKIPPED_EDGE":
+                    prefix = color_text("⚠ SKIPPED", "yellow")
+                    line = f"  {prefix}  {bet_txt:<12}{edge_txt} | SIGNAL: {ml_sig}"
+                    lines.append(line)
+                elif st == "NO_MODEL":
+                    line = f"  ⚠ NO MODEL  {bet_txt:<12} | SIGNAL: {ml_sig}"
+                    lines.append(color_text(line, "dim"))
+                else:
+                    line = f"  … NO EDGE   {bet_txt:<12} | SIGNAL: {ml_sig}"
+                    lines.append(color_text(line, "dim"))
+            else:
+                line = (
+                    f"  NO BET  {winner} ML{' ' * max(0, 9-len(winner))} | SIGNAL: {ml_sig:<22} | "
+                    f"RESULT: WIN        | P&L: N/A"
+                )
+                lines.append(color_text(line, "dim"))
 
         # TOTAL line (always show the closing-line outcome side)
         tot = g.get("total_line")
@@ -4145,8 +4240,8 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
                 outcome_res = "PUSH"
 
             tot_snap = (e.get("snapshots") or {}).get("TOTAL")
-            tot_sig = _sig_from_snapshot(tot_snap)
-            if tot_snap:
+            tot_sig = _signal_display_for_snapshot(tot_snap)
+            if tot_snap and _snap_status(tot_snap) == "BET":
                 bet_txt = str(tot_snap.get("bet") or "")
                 odds = tot_snap.get("odds_taken")
                 bet = "over" if "OVER" in bet_txt.upper() else "under"
@@ -4165,11 +4260,24 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
                     f"RESULT: {_clean_result(res):<10} | P&L: {pnl_disp}"
                 )
             else:
-                line = (
-                    f"  NO BET  {outcome_bet:<12} | SIGNAL: {tot_sig:<22} | "
-                    f"RESULT: {outcome_res:<10} | P&L: N/A"
-                )
-                lines.append(color_text(line, "dim"))
+                if tot_snap:
+                    st = _snap_status(tot_snap)
+                    bet_txt = str(tot_snap.get("bet") or outcome_bet)
+                    edge = tot_snap.get("edge")
+                    edge_txt = f" [Edge +{float(edge)*100:.1f}%]" if edge is not None else ""
+                    if st == "SKIPPED_EDGE":
+                        prefix = color_text("⚠ SKIPPED", "yellow")
+                        lines.append(f"  {prefix}  {bet_txt:<12}{edge_txt} | SIGNAL: {tot_sig}")
+                    elif st == "NO_MODEL":
+                        lines.append(color_text(f"  ⚠ NO MODEL  {bet_txt:<12} | SIGNAL: {tot_sig}", "dim"))
+                    else:
+                        lines.append(color_text(f"  … NO EDGE   {bet_txt:<12} | SIGNAL: {tot_sig}", "dim"))
+                else:
+                    line = (
+                        f"  NO BET  {outcome_bet:<12} | SIGNAL: {tot_sig:<22} | "
+                        f"RESULT: {outcome_res:<10} | P&L: N/A"
+                    )
+                    lines.append(color_text(line, "dim"))
         else:
             tot_sig = "No Signal"
             line = f"  NO BET  TOTAL N/A     | SIGNAL: {tot_sig:<22} | RESULT: —         | P&L: N/A"
@@ -4184,8 +4292,8 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
         as_ = g.get("away_score")
 
         rl_snap = (e.get("snapshots") or {}).get("RL")
-        rl_sig = _sig_from_snapshot(rl_snap)
-        if rl_snap:
+        rl_sig = _signal_display_for_snapshot(rl_snap)
+        if rl_snap and _snap_status(rl_snap) == "BET":
             bet_txt = str(rl_snap.get("bet") or "")
             odds = rl_snap.get("odds_taken")
             team, line = _parse_runline_bet(bet_txt)
@@ -4219,11 +4327,24 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
             else:
                 outcome_bet = f"{g.get('away_abbr','')} {arl:+g}"
                 outcome_res = "WIN"
-            line = (
-                f"  NO BET  {outcome_bet:<12} | SIGNAL: {rl_sig:<22} | "
-                f"RESULT: {outcome_res:<10} | P&L: N/A"
-            )
-            lines.append(color_text(line, "dim"))
+            if rl_snap:
+                st = _snap_status(rl_snap)
+                bet_txt = str(rl_snap.get("bet") or outcome_bet)
+                edge = rl_snap.get("edge")
+                edge_txt = f" [Edge +{float(edge)*100:.1f}%]" if edge is not None else ""
+                if st == "SKIPPED_EDGE":
+                    prefix = color_text("⚠ SKIPPED", "yellow")
+                    lines.append(f"  {prefix}  {bet_txt:<12}{edge_txt} | SIGNAL: {rl_sig}")
+                elif st == "NO_MODEL":
+                    lines.append(color_text(f"  ⚠ NO MODEL  {bet_txt:<12} | SIGNAL: {rl_sig}", "dim"))
+                else:
+                    lines.append(color_text(f"  … NO EDGE   {bet_txt:<12} | SIGNAL: {rl_sig}", "dim"))
+            else:
+                line = (
+                    f"  NO BET  {outcome_bet:<12} | SIGNAL: {rl_sig:<22} | "
+                    f"RESULT: {outcome_res:<10} | P&L: N/A"
+                )
+                lines.append(color_text(line, "dim"))
         else:
             line = f"  NO BET  RUNLINE N/A   | SIGNAL: {rl_sig:<22} | RESULT: —         | P&L: N/A"
             lines.append(color_text(line, "dim"))
