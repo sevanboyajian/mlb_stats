@@ -9,6 +9,7 @@ Central signal scoring — all model signal if/else logic lives here.
 from __future__ import annotations
 
 import sqlite3
+import os
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -774,6 +775,14 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
     avoids = _eval_avoids(g)
     blocked = [f for f in all_signals if not f.fires]
 
+    if os.getenv("DEBUG_SCORE_GAME") == "1":
+        try:
+            gpk = int(g.identifiers.game_pk)
+        except Exception:
+            gpk = -1
+        raw_sig = [f"{s.signal_id}({'Y' if s.fires else 'n'})" for s in all_signals]
+        print(f"[DEBUG] {gpk}: raw_signals={raw_sig}")
+
     # --- Score all signals (no fires gate) ---
     scored_signals: list[SignalFinding] = []
     for sig in all_signals:
@@ -793,6 +802,15 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
         sig.confidence_score = int(score)
         sig.score_basis = basis
         scored_signals.append(sig)
+
+    if os.getenv("DEBUG_SCORE_GAME") == "1":
+        try:
+            gpk = int(g.identifiers.game_pk)
+        except Exception:
+            gpk = -1
+        fired = [f"{s.signal_id}:{int(s.confidence_score or 0)}" for s in scored_signals if bool(s.fires)]
+        total = sum(int(s.confidence_score or 0) for s in scored_signals if bool(s.fires))
+        print(f"[DEBUG] {gpk}: signals={fired} score_sum={total}")
 
     # --- Aggregate by bet side ---
     buckets: dict[str, list[SignalFinding]] = {}
