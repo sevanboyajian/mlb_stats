@@ -1195,6 +1195,8 @@ def save_bet_snapshot(
     odds: int | None,
     scored_game: object,
     signals: list,
+    *,
+    placed_at: str | None = None,
 ) -> None:
     """
     Persist a snapshot of the bet decision at placement time.
@@ -1208,6 +1210,175 @@ def save_bet_snapshot(
         return
 
     now_et_string = _now_et().strftime("%Y-%m-%d %H:%M ET")
+    placed_at_txt = str(placed_at or "").strip() or now_et_string
+
+    # ``scored_game`` is expected to be the per-market eval dict (mm) with keys:
+    # score, model_p, implied_p, edge, best_side.
+    try:
+        score = int(getattr(scored_game, "score", None) or scored_game.get("score") or 0)
+    except Exception:
+        score = 0
+    try:
+        model_p = getattr(scored_game, "model_p", None)
+        if model_p is None and isinstance(scored_game, dict):
+            model_p = scored_game.get("model_p")
+    except Exception:
+        model_p = None
+    try:
+        implied_p = getattr(scored_game, "implied_p", None)
+        if implied_p is None and isinstance(scored_game, dict):
+            implied_p = scored_game.get("implied_p")
+    except Exception:
+        implied_p = None
+    try:
+        edge = getattr(scored_game, "edge", None)
+        if edge is None and isinstance(scored_game, dict):
+            edge = scored_game.get("edge")
+    except Exception:
+        edge = None
+    try:
+        bet_side = getattr(scored_game, "best_side", None)
+        if bet_side is None and isinstance(scored_game, dict):
+            bet_side = scored_game.get("best_side")
+        bet_side = str(bet_side or "")
+    except Exception:
+        bet_side = ""
+
+    try:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO bet_snapshots
+                (game_date, game_pk, market_type, bet_side, bet,
+                 odds_taken, score, model_p, implied_p, edge,
+                 signals_used, placed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(game_date),
+                int(game_pk),
+                str(market_type or "").strip().upper(),
+                bet_side,
+                str(bet or ""),
+                int(odds) if odds is not None else None,
+                int(score),
+                float(model_p) if model_p is not None else None,
+                float(implied_p) if implied_p is not None else None,
+                float(edge) if edge is not None else None,
+                json.dumps(list(signals or [])),
+                placed_at_txt,
+            ),
+        )
+        conn.commit()
+    except Exception:
+        return
+
+
+def backfill_missing_bet_snapshots_from_ledger(conn: sqlite3.Connection, game_date: str) -> int:
+    """
+    If bet_ledger already has staked rows (older runs before snapshots existed),
+    reconstruct missing snapshots using the bet_ledger placed_at timestamp.
+    This does not change PRIOR display logic (PRIOR still reads snapshots only).
+    """
+    if conn is None or not PERSIST_WRITES:
+        return 0
+    try:
+        ensure_bet_snapshots(conn)
+    except Exception:
+        return 0
+
+    try:
+        rows = conn.execute(
+            """
+            SELECT game_pk, market_type, bet, odds_taken, placed_at
+            FROM bet_ledger
+            WHERE game_date = ?
+              AND stake_units > 0
+            """,
+            (game_date,),
+        ).fetchall()
+        rows = [dict(r) for r in rows]
+    except Exception:
+        return 0
+
+    if not rows:
+        return 0
+
+    import datetime
+
+    created = 0
+    for r in rows:
+        gpk = int(r["game_pk"])
+        mt_u = (r.get("market_type") or "").strip().lower()
+        market_type = "ML" if mt_u == "moneyline" else ("TOTAL" if mt_u == "total" else ("RL" if mt_u in ("spread", "runline") else None))
+        if market_type is None:
+            continue
+
+        # Skip only if snapshot exists with real content; otherwise overwrite.
+        try:
+            ex = conn.execute(
+                """
+                SELECT bet, odds_taken
+                FROM bet_snapshots
+                WHERE game_date=? AND game_pk=? AND market_type=?
+                LIMIT 1
+                """,
+                (game_date, gpk, market_type),
+            ).fetchone()
+            if ex:
+                bet_existing = (ex[0] or "").strip()
+                odds_existing = ex[1]
+                if bet_existing and odds_existing is not None:
+                    continue
+        except Exception:
+            pass
+
+        # Parse placed_at "YYYY-MM-DD HH:MM ET" (best-effort)
+        placed_at = str(r.get("placed_at") or "").strip()
+        as_of_dt = None
+        try:
+            raw = placed_at.replace(" ET", "").strip()
+            as_of_dt = datetime.datetime.strptime(raw, "%Y-%m-%d %H:%M").replace(tzinfo=_ET)
+        except Exception:
+            as_of_dt = _now_et()
+
+        try:
+            # Evaluate as-of that placed_at instant so snapshot matches bet-time context.
+            games = load_games(conn, game_date, verbose=False, as_of_dt=as_of_dt)
+            gmap = {int(g["game_pk"]): g for g in games if g.get("game_pk") is not None}
+            game = gmap.get(gpk)
+            if not game:
+                continue
+            team_ids = list({game["home_team_id"], game["away_team_id"]})
+            streaks = load_streaks(conn, game_date, team_ids, verbose=False)
+            starters = load_starters(conn, game_date, verbose=False)
+            sigs = evaluate_signals(conn, game, streaks, "primary", starters)
+            sg = sigs.get("_scored_game")
+            if sg is None:
+                continue
+            me = getattr(sg, "market_evals", {}) or {}
+            mm = me.get(market_type) or {}
+            if not mm.get("evaluated"):
+                continue
+            signals_used = [humanize_signal(str(x)) for x in (mm.get("signal_ids") or [])]
+            save_bet_snapshot(
+                conn,
+                game_date,
+                gpk,
+                market_type,
+                str(r.get("bet") or mm.get("bet") or ""),
+                int(r["odds_taken"]) if r.get("odds_taken") is not None else (int(mm["odds"]) if mm.get("odds") is not None else None),
+                mm,
+                signals_used,
+                placed_at=placed_at,
+            )
+            created += 1
+        except Exception:
+            continue
+
+    return created
+
+    now_et_string = _now_et().strftime("%Y-%m-%d %H:%M ET")
+    placed_at_txt = str(placed_at or "").strip() or now_et_string
 
     # Pull the required fields off the market-eval dict we store on ScoredGame
     try:
@@ -1246,7 +1417,7 @@ def save_bet_snapshot(
                 float(implied_p) if implied_p is not None else None,
                 float(edge) if edge is not None else None,
                 json.dumps(list(signals or [])),
-                now_et_string,
+                placed_at_txt,
             ),
         )
         conn.commit()
@@ -1504,6 +1675,7 @@ def _insert_bet_ledger_from_latest(
                 int(odds_taken) if odds_taken is not None else None,
                 mm,
                 [humanize_signal(str(x)) for x in signals_used],
+                placed_at=str(placed_at or ""),
             )
         except Exception:
             return
@@ -1531,10 +1703,17 @@ def _insert_bet_ledger_from_latest(
         mt = str(r["market_type"] or "")
         if mt == "total":
             continue
-        if (int(r["game_pk"]), mt) in already_staked:
-            continue
         stake = 0.0 if sig_type == "avoid" else 1.0
         odds_val = None if sig_type == "avoid" else r["odds"]
+
+        # If the staked ledger row already exists, still backfill the snapshot on reruns.
+        if stake > 0 and (int(r["game_pk"]), mt) in already_staked:
+            _store_snapshot_if_needed(
+                game_pk=int(r["game_pk"]),
+                market_type_raw=mt,
+                placed_at=str(r["recorded_at"] or ""),
+            )
+            continue
         try:
             cur = conn.execute(
                 """
@@ -3660,6 +3839,12 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
         lines.append(CAVEAT)
         return "\n".join(lines)
 
+    # Backfill snapshots from existing ledger rows if needed (older days before snapshots existed).
+    try:
+        backfill_missing_bet_snapshots_from_ledger(conn, game_date)
+    except Exception:
+        pass
+
     # Load snapshots (source of truth; PRIOR report does not recompute signals/scores)
     try:
         ensure_bet_snapshots(conn)
@@ -3682,6 +3867,8 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
     # ── Grading helpers ───────────────────────────────────────────────────
     def grade_ml(bet_side, hs, as_, odds):
         if hs is None or as_ is None:
+            return "— NO RESULT", 0.0
+        if odds in (None, 0):
             return "— NO RESULT", 0.0
         won = (bet_side == "home" and hs > as_) or (bet_side == "away" and as_ > hs)
         if won:
