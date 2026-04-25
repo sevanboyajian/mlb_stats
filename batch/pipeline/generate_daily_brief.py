@@ -1303,8 +1303,6 @@ def backfill_missing_bet_snapshots_from_ledger(conn: sqlite3.Connection, game_da
     if not rows:
         return 0
 
-    import datetime
-
     created = 0
     for r in rows:
         gpk = int(r["game_pk"])
@@ -1317,7 +1315,7 @@ def backfill_missing_bet_snapshots_from_ledger(conn: sqlite3.Connection, game_da
         try:
             ex = conn.execute(
                 """
-                SELECT bet, odds_taken
+                SELECT bet, odds_taken, signals_used
                 FROM bet_snapshots
                 WHERE game_date=? AND game_pk=? AND market_type=?
                 LIMIT 1
@@ -1327,53 +1325,51 @@ def backfill_missing_bet_snapshots_from_ledger(conn: sqlite3.Connection, game_da
             if ex:
                 bet_existing = (ex[0] or "").strip()
                 odds_existing = ex[1]
-                if bet_existing and odds_existing is not None:
+                sig_existing = (ex[2] or "").strip()
+                if bet_existing and odds_existing is not None and sig_existing and sig_existing != "[]":
                     continue
         except Exception:
             pass
 
-        # Parse placed_at "YYYY-MM-DD HH:MM ET" (best-effort)
         placed_at = str(r.get("placed_at") or "").strip()
-        as_of_dt = None
+        # Pull *actual* signal labels from brief_picks (source of truth for what the brief showed),
+        # rather than recomputing. Stored as a comma-separated string in brief_picks.signal.
+        signals_used: list[str] = []
         try:
-            raw = placed_at.replace(" ET", "").strip()
-            as_of_dt = datetime.datetime.strptime(raw, "%Y-%m-%d %H:%M").replace(tzinfo=_ET)
+            mt = market_type
+            row_sig = conn.execute(
+                """
+                SELECT signal
+                FROM brief_picks
+                WHERE game_date = ?
+                  AND game_pk = ?
+                  AND UPPER(market) = ?
+                  AND pick_rank > 0
+                ORDER BY recorded_at DESC, pick_rank ASC
+                LIMIT 1
+                """,
+                (game_date, gpk, mt),
+            ).fetchone()
+            if row_sig and row_sig[0]:
+                raw = str(row_sig[0])
+                signals_used = [s.strip() for s in raw.split(",") if s.strip()]
         except Exception:
-            as_of_dt = _now_et()
+            signals_used = []
 
-        try:
-            # Evaluate as-of that placed_at instant so snapshot matches bet-time context.
-            games = load_games(conn, game_date, verbose=False, as_of_dt=as_of_dt)
-            gmap = {int(g["game_pk"]): g for g in games if g.get("game_pk") is not None}
-            game = gmap.get(gpk)
-            if not game:
-                continue
-            team_ids = list({game["home_team_id"], game["away_team_id"]})
-            streaks = load_streaks(conn, game_date, team_ids, verbose=False)
-            starters = load_starters(conn, game_date, verbose=False)
-            sigs = evaluate_signals(conn, game, streaks, "primary", starters)
-            sg = sigs.get("_scored_game")
-            if sg is None:
-                continue
-            me = getattr(sg, "market_evals", {}) or {}
-            mm = me.get(market_type) or {}
-            if not mm.get("evaluated"):
-                continue
-            signals_used = [humanize_signal(str(x)) for x in (mm.get("signal_ids") or [])]
-            save_bet_snapshot(
-                conn,
-                game_date,
-                gpk,
-                market_type,
-                str(r.get("bet") or mm.get("bet") or ""),
-                int(r["odds_taken"]) if r.get("odds_taken") is not None else (int(mm["odds"]) if mm.get("odds") is not None else None),
-                mm,
-                signals_used,
-                placed_at=placed_at,
-            )
-            created += 1
-        except Exception:
-            continue
+        # Save snapshot using ledger bet/odds + brief_picks signals.
+        mm_stub = {"score": 0, "model_p": None, "implied_p": None, "edge": None, "best_side": ""}
+        save_bet_snapshot(
+            conn,
+            game_date,
+            gpk,
+            market_type,
+            str(r.get("bet") or ""),
+            int(r["odds_taken"]) if r.get("odds_taken") is not None else None,
+            mm_stub,
+            signals_used,
+            placed_at=placed_at,
+        )
+        created += 1
 
     return created
 
@@ -1628,11 +1624,20 @@ def _insert_bet_ledger_from_latest(
 
         try:
             ex = conn.execute(
-                "SELECT 1 FROM bet_snapshots WHERE game_date=? AND game_pk=? AND market_type=? LIMIT 1",
+                """
+                SELECT bet, odds_taken, signals_used
+                FROM bet_snapshots
+                WHERE game_date=? AND game_pk=? AND market_type=?
+                LIMIT 1
+                """,
                 (game_date, int(game_pk), market_type),
             ).fetchone()
             if ex:
-                return
+                bet_existing = (ex[0] or "").strip()
+                odds_existing = ex[1]
+                sig_existing = (ex[2] or "").strip()
+                if bet_existing and (odds_existing is not None) and sig_existing and sig_existing != "[]":
+                    return
         except Exception:
             pass
 
@@ -1663,9 +1668,10 @@ def _insert_bet_ledger_from_latest(
             model_p = mm.get("model_p")
             implied_p = mm.get("implied_p")
             edge = mm.get("edge")
-            signals_used = list(mm.get("signal_ids") or [])
+            # Use the *actual* evaluated signals used in scoring for this market.
+            # Do NOT apply any post-threshold filtering.
+            signals_used = list(mm.get("signals") or [])
 
-            # Called only when stake > 0 (see bet_ledger insert loop).
             save_bet_snapshot(
                 conn,
                 game_date,
@@ -1674,7 +1680,7 @@ def _insert_bet_ledger_from_latest(
                 bet,
                 int(odds_taken) if odds_taken is not None else None,
                 mm,
-                [humanize_signal(str(x)) for x in signals_used],
+                signals_used,
                 placed_at=str(placed_at or ""),
             )
         except Exception:
@@ -3486,6 +3492,8 @@ def color_text(text: str, color: str) -> str:
         "yellow": "\033[93m",
         "red": "\033[91m",
         "dim": "\033[2m",
+        "bold": "\033[1m",
+        "underline": "\033[4m",
         "reset": "\033[0m",
     }
     c = colors.get(color, "")
@@ -4087,9 +4095,11 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
                 import json
                 raw = snap.get("signals_used") or "[]"
                 sigs = json.loads(raw) if isinstance(raw, str) else list(raw)
-                return ", ".join(str(x) for x in sigs) if sigs else "No Signal"
+                if not sigs:
+                    return "Signal Missing (BUG)"
+                return ", ".join(str(x) for x in sigs)
             except Exception:
-                return "No Signal"
+                return "Signal Missing (BUG)"
 
         # ML line
         ml_snap = (e.get("snapshots") or {}).get("ML")
@@ -4100,16 +4110,25 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
             side = "away" if bet_txt.startswith(g["away_abbr"]) else "home"
             res, pnl_v = grade_ml(side, hs, as_, int(odds) if odds is not None else 0)
             pnl_disp = pnl_str(float(pnl_v))
+            lines.append("  ────────────────────────────")
+            lines.append(color_text("  🔥 ACTIONABLE BET", "bold"))
+            if "WIN" in str(res):
+                prefix = color_text("✔ BET", "green")
+            elif "LOSS" in str(res):
+                prefix = color_text("✘ BET", "red")
+            else:
+                prefix = color_text("• BET", "bold")
             lines.append(
-                f"  BET LINE: {bet_txt:<12} | SIGNAL: {ml_sig:<18} | "
-                f"RESULT: {_clean_result(res):<4} | P&L: {pnl_disp}"
+                f"  {prefix}  {bet_txt:<12} | SIGNAL: {ml_sig:<22} | "
+                f"RESULT: {_clean_result(res):<10} | P&L: {pnl_disp}"
             )
         else:
             winner = e.get("winner") or ""
-            lines.append(
-                f"  NO BET LINE: {winner} ML{' ' * max(0, 9-len(winner))} | SIGNAL: {ml_sig:<18} | "
-                f"RESULT: WIN  | P&L: N/A"
+            line = (
+                f"  NO BET  {winner} ML{' ' * max(0, 9-len(winner))} | SIGNAL: {ml_sig:<22} | "
+                f"RESULT: WIN        | P&L: N/A"
             )
+            lines.append(color_text(line, "dim"))
 
         # TOTAL line (always show the closing-line outcome side)
         tot = g.get("total_line")
@@ -4133,20 +4152,28 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
                 bet = "over" if "OVER" in bet_txt.upper() else "under"
                 res, pnl_v = grade_total(bet, hs, as_, tot, int(odds) if odds is not None else None)
                 pnl_disp = pnl_str(float(pnl_v))
+                lines.append("  ────────────────────────────")
+                lines.append(color_text("  🔥 ACTIONABLE BET", "bold"))
+                if "WIN" in str(res):
+                    prefix = color_text("✔ BET", "green")
+                elif "LOSS" in str(res):
+                    prefix = color_text("✘ BET", "red")
+                else:
+                    prefix = color_text("• BET", "bold")
                 lines.append(
-                    f"  BET LINE: {bet_txt:<12} | SIGNAL: {tot_sig:<18} | "
-                    f"RESULT: {_clean_result(res):<4} | P&L: {pnl_disp}"
+                    f"  {prefix}  {bet_txt:<12} | SIGNAL: {tot_sig:<22} | "
+                    f"RESULT: {_clean_result(res):<10} | P&L: {pnl_disp}"
                 )
             else:
-                lines.append(
-                    f"  NO BET LINE: {outcome_bet:<12} | SIGNAL: {tot_sig:<18} | "
-                    f"RESULT: {outcome_res:<4} | P&L: N/A"
+                line = (
+                    f"  NO BET  {outcome_bet:<12} | SIGNAL: {tot_sig:<22} | "
+                    f"RESULT: {outcome_res:<10} | P&L: N/A"
                 )
+                lines.append(color_text(line, "dim"))
         else:
             tot_sig = "No Signal"
-            lines.append(
-                f"  NO BET LINE: TOTAL N/A     | SIGNAL: {tot_sig:<18} | RESULT: —    | P&L: N/A"
-            )
+            line = f"  NO BET  TOTAL N/A     | SIGNAL: {tot_sig:<22} | RESULT: —         | P&L: N/A"
+            lines.append(color_text(line, "dim"))
 
         # RUNLINE line (spread) — show when data available
         hrl = g.get("home_rl")
@@ -4167,9 +4194,17 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
                 home_abbr=g.get("home_abbr") or "", away_abbr=g.get("away_abbr") or "",
                 odds=int(odds) if odds is not None else None,
             )
+            lines.append("  ────────────────────────────")
+            lines.append(color_text("  🔥 ACTIONABLE BET", "bold"))
+            if "WIN" in str(res):
+                prefix = color_text("✔ BET", "green")
+            elif "LOSS" in str(res):
+                prefix = color_text("✘ BET", "red")
+            else:
+                prefix = color_text("• BET", "bold")
             lines.append(
-                f"  BET LINE: {bet_txt:<12} | SIGNAL: {rl_sig:<18} | "
-                f"RESULT: {_clean_result(res):<4} | P&L: {pnl_str(float(pnl_v))}"
+                f"  {prefix}  {bet_txt:<12} | SIGNAL: {rl_sig:<22} | "
+                f"RESULT: {_clean_result(res):<10} | P&L: {pnl_str(float(pnl_v))}"
             )
         elif hrl is not None and arl is not None and hs is not None and as_ is not None:
             # No signal: print the side that covered at the closing line.
@@ -4184,14 +4219,14 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
             else:
                 outcome_bet = f"{g.get('away_abbr','')} {arl:+g}"
                 outcome_res = "WIN"
-            lines.append(
-                f"  NO BET LINE: {outcome_bet:<12} | SIGNAL: {rl_sig:<18} | "
-                f"RESULT: {outcome_res:<4} | P&L: N/A"
+            line = (
+                f"  NO BET  {outcome_bet:<12} | SIGNAL: {rl_sig:<22} | "
+                f"RESULT: {outcome_res:<10} | P&L: N/A"
             )
+            lines.append(color_text(line, "dim"))
         else:
-            lines.append(
-                f"  NO BET LINE: RUNLINE N/A   | SIGNAL: {rl_sig:<18} | RESULT: —    | P&L: N/A"
-            )
+            line = f"  NO BET  RUNLINE N/A   | SIGNAL: {rl_sig:<22} | RESULT: —         | P&L: N/A"
+            lines.append(color_text(line, "dim"))
 
         # Snapshot-driven: no recomputed data_flags in PRIOR.
         lines.append("")
@@ -4199,11 +4234,14 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
     # ════════════════════════════════════════════════════════════════════
     # BET LEDGER SUMMARY (P&L source of truth)
     # ════════════════════════════════════════════════════════════════════
-    lines.append(section("📈  BET LEDGER SUMMARY"))
+    lines.append(color_text("\n📈  BET LEDGER SUMMARY", "bold") + color_text("\n" + ("─" * 72), "underline"))
     lines.append(
-        f"\n  Staked plays: {bet_summary['bets']}   "
-        f"{bet_summary['wins']}W {bet_summary['losses']}L {bet_summary['pushes']}P   "
-        f"Units: {bet_summary['units']:+.2f}u   ROI: {bet_summary['roi']:.1f}%"
+        color_text(
+            f"\n  Staked plays: {bet_summary['bets']}   "
+            f"{bet_summary['wins']}W {bet_summary['losses']}L {bet_summary['pushes']}P   "
+            f"Units: {bet_summary['units']:+.2f}u   ROI: {bet_summary['roi']:.1f}%",
+            "bold",
+        )
     )
 
     # Optional grouping by market_type

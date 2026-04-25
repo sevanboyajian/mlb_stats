@@ -870,6 +870,14 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
         edge_m = compute_edge(float(model_p_m), implied_p_m)
         edge_ok_m = (edge_m is not None) and (edge_m >= EDGE_MIN)
 
+        # Signals used for this market/side (do NOT apply any post-threshold filtering here)
+        fired_for_side = list(buckets.get(best_side_m or "", []) or [])
+        signal_ids_used = [s.signal_id for s in fired_for_side if bool(s.fires)]
+        # Dedup but keep stable order
+        seen: set[str] = set()
+        signal_ids_used = [x for x in signal_ids_used if not (x in seen or seen.add(x))]
+        signals_used = [signal_display_name(sid) for sid in signal_ids_used]
+
         return {
             "evaluated": True,
             "best_side": best_side_m,
@@ -880,7 +888,8 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
             "implied_p": float(implied_p_m) if implied_p_m is not None else None,
             "edge": float(edge_m) if edge_m is not None else None,
             "edge_ok": bool(edge_ok_m),
-            "signal_ids": sorted({s.signal_id for s in buckets.get(best_side_m or "", []) if bool(s.fires)}),
+            "signal_ids": signal_ids_used,
+            "signals": signals_used,
         }
 
     market_evals = {
