@@ -716,6 +716,12 @@ class ScoredGame:
 
 
 def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> ScoredGame:
+    try:
+        game_pk = int(g.identifiers.game_pk)
+    except Exception:
+        game_pk = -1
+    print(f"[ENTER score_game] {game_pk}")
+
     gdb = _gdb()
     mkt = g.market
     env = g.environment
