@@ -721,8 +721,8 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
     except Exception:
         game_pk = -1
     print(f"[ENTER score_game] {game_pk}")
-    signals = [getattr(s, "signal_id", str(s)) for s in (getattr(g, "signals", None) or [])]
-    print(f"[DEBUG INSIDE SCORE] game={game_pk} signals={signals}")
+    incoming_signals = [getattr(s, "signal_id", str(s)) for s in (getattr(g, "signals", None) or [])]
+    print(f"[DEBUG INSIDE SCORE] game={game_pk} signals={incoming_signals}")
 
     gdb = _gdb()
     mkt = g.market
@@ -788,8 +788,8 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
             game_pk = int(g.identifiers.game_pk)
         except Exception:
             game_pk = -1
-        signals = [f"{s.signal_id}({'Y' if s.fires else 'n'})" for s in all_signals]
-        print(f"[DEBUG] {game_pk}: signals={signals}")
+        dbg_signals = [f"{s.signal_id}({'Y' if s.fires else 'n'})" for s in all_signals]
+        print(f"[DEBUG] {game_pk}: signals={dbg_signals}")
 
     # --- Score all signals (no fires gate) ---
     scored_signals: list[SignalFinding] = []
@@ -816,11 +816,11 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
             game_pk = int(g.identifiers.game_pk)
         except Exception:
             game_pk = -1
-        signals = [
+        dbg_signals = [
             f"{s.signal_id}({'Y' if s.fires else 'n'}):{int(s.confidence_score or 0)}"
             for s in scored_signals
         ]
-        print(f"[DEBUG BEFORE FILTER] {game_pk}: signals={signals}")
+        print(f"[DEBUG BEFORE FILTER] {game_pk}: signals={dbg_signals}")
         score = sum(int(s.confidence_score or 0) for s in scored_signals if bool(s.fires))
         print(f"[DEBUG] {game_pk}: final_score={score}")
 
@@ -842,8 +842,8 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
         for side in sorted(buckets.keys()):
             for s in buckets[side]:
                 after.append(f"{s.signal_id}({side}):{int(s.confidence_score or 0)}")
-        signals = after
-        print(f"[DEBUG AFTER FILTER] {game_pk}: signals={signals}")
+        dbg_signals = after
+        print(f"[DEBUG AFTER FILTER] {game_pk}: signals={dbg_signals}")
 
     aggregated_scores: dict[str, int] = {}
     for side, sigs in buckets.items():
@@ -1336,6 +1336,6 @@ def evaluate_signals_scored(
         except Exception:
             game_pk = -1
         pre = list(getattr(fdg, "signals", None) or [])
-        signals = [s.signal_id for s in pre]
-        print(f"[DEBUG BEFORE SCORE] game={game_pk} signals={signals}")
+        dbg_signals = [getattr(s, "signal_id", str(s)) for s in pre]
+        print(f"[DEBUG BEFORE SCORE] game={game_pk} signals={dbg_signals}")
     return score_game(fdg, fdg.home_streak, game_month)
