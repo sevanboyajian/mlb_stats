@@ -3333,14 +3333,16 @@ def evaluate_signals(
 
     starters = starters if starters is not None else {}
 
-    out: dict | None = None
-    eval_exc: BaseException | None = None
+    hid = int(game["home_team_id"])
+    aid = int(game["away_team_id"])
+    home_streak = int(streaks.get(hid, 0))
+    away_streak = int(streaks.get(aid, 0))
+
+    # --- Dress (may fail); never gate score_game on signals/picks ---
+    fdg = None
+    dress_exc: BaseException | None = None
     try:
         fdg = enrich_game(conn, game, starters)
-        hid = int(game["home_team_id"])
-        aid = int(game["away_team_id"])
-        home_streak = int(streaks.get(hid, 0))
-        away_streak = int(streaks.get(aid, 0))
         from dataclasses import replace as _dc_replace
 
         fdg = _dc_replace(
@@ -3351,48 +3353,25 @@ def evaluate_signals(
         )
         if debug_wind:
             print_wind_debug_for_game(game, fdg)
-        gd = fdg.identifiers.game_date_et
-        game_month = int(gd[5:7]) if len(gd) >= 7 else 0
-        scored = score_game(fdg, home_streak, game_month)
-        out = scored_game_to_eval_dict(scored, session)
-        out["output_tier"] = scored.output_tier
-        out["tier_basis"] = scored.tier_basis
-        out["stake_multiplier"] = scored.stake_multiplier
-        if verbose and scored.tier_basis:
-            ab = f"{fdg.identifiers.away_team_abbr}@{fdg.identifiers.home_team_abbr}"
-            print(f"  [verbose] score {ab}: tier={scored.output_tier!r} | {scored.tier_basis}")
-        out["_scored_game"] = scored
-        # Per-market evaluations (prevents cross-market signal leakage in prior reports)
-        out["market_evals"] = getattr(scored, "market_evals", {}) or {}
-
-        # Snapshot ALL evaluated markets (BET / SKIPPED_EDGE / NO_EDGE / NO_MODEL).
-        # This must occur even when no bet is placed to capture skipped edges.
-        if PERSIST_WRITES:
-            try:
-                gpk = int(game.get("game_pk"))
-                gd = str(fdg.identifiers.game_date_et)
-                placed_at = _now_et().strftime("%Y-%m-%d %H:%M ET")
-                for mt, mm in (out["market_evals"] or {}).items():
-                    if not isinstance(mm, dict) or not mm.get("evaluated"):
-                        continue
-                    save_bet_snapshot(
-                        conn,
-                        gd,
-                        gpk,
-                        str(mt),
-                        str(mm.get("bet") or ""),
-                        int(mm["odds"]) if mm.get("odds") is not None else None,
-                        mm,
-                        list(mm.get("signals") or []),
-                        placed_at=placed_at,
-                    )
-            except Exception:
-                pass
     except Exception as e:
-        eval_exc = e
+        dress_exc = e
+        fdg = None
 
-    if eval_exc is not None:
-        # No early return: degraded path — same shape as success, penalty via flags only.
+    # --- score_game ALWAYS runs once we have a dressed game (no if signals / if picks) ---
+    scored = None
+    score_exc: BaseException | None = None
+    if fdg is not None:
+        try:
+            gd = fdg.identifiers.game_date_et
+            game_month = int(gd[5:7]) if len(gd) >= 7 else 0
+            scored = score_game(fdg, home_streak, game_month)
+        except Exception as e:
+            score_exc = e
+            scored = None
+
+    out: dict | None = None
+
+    if dress_exc is not None:
         out = {
             "signals": [],
             "signal_ids": [],
@@ -3404,8 +3383,8 @@ def evaluate_signals(
             "watch": False,
             "watch_reason": None,
             "data_flags": [
-                f"Signal evaluation failed (dress/score): {eval_exc}",
-                "Score penalty: dress/score path failed — treat as no edge (aggregate held at 0).",
+                f"Dress pipeline failed (score_game not run): {dress_exc}",
+                "Score penalty: no dressed game — treat as no edge (aggregate held at 0).",
             ],
             "output_tier": None,
             "tier_basis": "",
@@ -3413,6 +3392,80 @@ def evaluate_signals(
             "_scored_game": None,
             "market_evals": {},
         }
+    elif score_exc is not None:
+        out = {
+            "signals": [],
+            "signal_ids": [],
+            "picks": [],
+            "signal_brief": "",
+            "best_aggregate_score": 0,
+            "avoid": False,
+            "avoid_reason": None,
+            "watch": False,
+            "watch_reason": None,
+            "data_flags": [
+                f"score_game() failed after successful dress: {score_exc}",
+                "Score penalty: scoring exception — treat as no edge (aggregate held at 0).",
+            ],
+            "output_tier": None,
+            "tier_basis": "",
+            "stake_multiplier": 0.0,
+            "_scored_game": None,
+            "market_evals": {},
+        }
+    elif scored is not None:
+        try:
+            out = scored_game_to_eval_dict(scored, session)
+            out["output_tier"] = scored.output_tier
+            out["tier_basis"] = scored.tier_basis
+            out["stake_multiplier"] = scored.stake_multiplier
+            if verbose and scored.tier_basis:
+                ab = f"{fdg.identifiers.away_team_abbr}@{fdg.identifiers.home_team_abbr}"
+                print(f"  [verbose] score {ab}: tier={scored.output_tier!r} | {scored.tier_basis}")
+            out["_scored_game"] = scored
+            out["market_evals"] = getattr(scored, "market_evals", {}) or {}
+
+            if PERSIST_WRITES:
+                try:
+                    gpk = int(game.get("game_pk"))
+                    gd = str(fdg.identifiers.game_date_et)
+                    placed_at = _now_et().strftime("%Y-%m-%d %H:%M ET")
+                    for mt, mm in (out["market_evals"] or {}).items():
+                        if not isinstance(mm, dict) or not mm.get("evaluated"):
+                            continue
+                        save_bet_snapshot(
+                            conn,
+                            gd,
+                            gpk,
+                            str(mt),
+                            str(mm.get("bet") or ""),
+                            int(mm["odds"]) if mm.get("odds") is not None else None,
+                            mm,
+                            list(mm.get("signals") or []),
+                            placed_at=placed_at,
+                        )
+                except Exception:
+                    pass
+        except Exception as e:
+            flags = list(getattr(scored, "data_flags", None) or [])
+            flags.append(f"Brief mapping failed after score_game (ScoredGame retained): {e}")
+            out = {
+                "signals": [],
+                "signal_ids": [],
+                "picks": [],
+                "signal_brief": "",
+                "best_aggregate_score": int(scored.best_aggregate_score or 0),
+                "avoid": False,
+                "avoid_reason": None,
+                "watch": False,
+                "watch_reason": None,
+                "data_flags": flags,
+                "output_tier": scored.output_tier,
+                "tier_basis": scored.tier_basis or "",
+                "stake_multiplier": float(scored.stake_multiplier or 0.0),
+                "_scored_game": scored,
+                "market_evals": getattr(scored, "market_evals", {}) or {},
+            }
 
     if out is None:
         raise RuntimeError("evaluate_signals: internal error (no result set)")
