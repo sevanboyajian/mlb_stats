@@ -144,6 +144,11 @@ class _TeeTextIO:
             pass
         try:
             self._b.write(s)
+            # Ensure log-on-disk is never empty if the process is interrupted.
+            try:
+                self._b.flush()
+            except Exception:
+                pass
         except Exception:
             pass
         return len(s)
@@ -2317,7 +2322,8 @@ def main() -> None:
     if log_path:
         try:
             Path(log_path).parent.mkdir(parents=True, exist_ok=True)
-            _log_fh = open(log_path, "a", encoding="utf-8", errors="replace")
+            # Line-buffered so each print lands in the file promptly.
+            _log_fh = open(log_path, "a", encoding="utf-8", errors="replace", buffering=1)
             sys.stdout = _TeeTextIO(sys.stdout, _log_fh)
             sys.stderr = _TeeTextIO(sys.stderr, _log_fh)
         except Exception as exc:
