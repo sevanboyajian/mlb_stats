@@ -709,6 +709,8 @@ class ScoredGame:
     model_p: float | None = None
     implied_p: float | None = None
     edge: float | None = None
+    # Per-market evaluation to prevent cross-market signal leakage (ML/TOTAL/RL scored independently)
+    market_evals: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> ScoredGame:
@@ -786,6 +788,8 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
     # --- Aggregate by bet side ---
     buckets: dict[str, list[SignalFinding]] = {}
     for sig in scored_signals:
+        if not bool(sig.fires):
+            continue
         if not sig.bet_side:
             continue
         buckets.setdefault(sig.bet_side, []).append(sig)
@@ -798,6 +802,92 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
         wind_present = any((s.signal_id in WIND_SIGNAL_IDS) and bool(s.fires) for s in sigs)
         wind_bonus = 1 if wind_present else 0
         aggregated_scores[side] = int(non_wind_total) + int(wind_bonus)
+
+    # --- Per-market evaluations (signals remain game-level; each market decides applicability) ---
+    def _eval_market(market: str) -> dict[str, Any]:
+        # candidate bet_side keys for this market
+        if market == "ML":
+            candidates = [k for k in aggregated_scores.keys() if k.endswith("_ml")]
+        elif market == "TOTAL":
+            candidates = [k for k in aggregated_scores.keys() if k.endswith("_total")]
+        elif market == "RL":
+            candidates = [k for k in aggregated_scores.keys() if k.endswith("_rl")]
+        else:
+            candidates = []
+
+        # Determine if this market is evaluable with current data (even if no signals fired)
+        if market == "ML":
+            evaluable = (g.market.home_ml_current is not None) and (g.market.away_ml_current is not None)
+        elif market == "TOTAL":
+            evaluable = (g.market.total_current is not None) and (g.market.over_odds is not None) and (g.market.under_odds is not None)
+        elif market == "RL":
+            evaluable = bool(g.market.rl_available) and (g.market.away_rl_odds is not None)
+        else:
+            evaluable = False
+
+        if not evaluable:
+            return {"evaluated": False, "best_side": None, "score": 0}
+
+        best_side_m: str | None = None
+        best_score_m = 0
+        for side in candidates:
+            sc = int(aggregated_scores.get(side, 0) or 0)
+            if sc > best_score_m:
+                best_score_m = sc
+                best_side_m = side
+
+        # Resolve odds and bet text per market
+        bet_txt = ""
+        odds_taken: int | None = None
+        if market == "ML":
+            if best_side_m == "away_ml":
+                odds_taken = g.market.away_ml_current
+                bet_txt = f"{g.identifiers.away_team_abbr} ML"
+            elif best_side_m == "home_ml":
+                odds_taken = g.market.home_ml_current
+                bet_txt = f"{g.identifiers.home_team_abbr} ML"
+        elif market == "TOTAL":
+            tline = g.market.total_current
+            if best_side_m == "over_total":
+                odds_taken = g.market.over_odds
+                bet_txt = f"OVER {tline}" if tline is not None else "OVER"
+            elif best_side_m == "under_total":
+                odds_taken = g.market.under_odds
+                bet_txt = f"UNDER {tline}" if tline is not None else "UNDER"
+        elif market == "RL":
+            rl_line = g.market.away_rl_line
+            if best_side_m == "away_rl":
+                odds_taken = g.market.away_rl_odds
+                bet_txt = (
+                    f"{g.identifiers.away_team_abbr} {rl_line:+g}"
+                    if rl_line is not None
+                    else f"{g.identifiers.away_team_abbr} +1.5"
+                )
+
+        # Compute edge only if we have odds
+        model_p_m = score_to_model_prob(int(best_score_m))
+        implied_p_m = american_to_implied_prob(int(odds_taken) if odds_taken is not None else None)
+        edge_m = compute_edge(float(model_p_m), implied_p_m)
+        edge_ok_m = (edge_m is not None) and (edge_m >= EDGE_MIN)
+
+        return {
+            "evaluated": True,
+            "best_side": best_side_m,
+            "score": int(best_score_m),
+            "bet": bet_txt,
+            "odds": odds_taken,
+            "model_p": float(model_p_m),
+            "implied_p": float(implied_p_m) if implied_p_m is not None else None,
+            "edge": float(edge_m) if edge_m is not None else None,
+            "edge_ok": bool(edge_ok_m),
+            "signal_ids": sorted({s.signal_id for s in buckets.get(best_side_m or "", []) if bool(s.fires)}),
+        }
+
+    market_evals = {
+        "ML": _eval_market("ML"),
+        "TOTAL": _eval_market("TOTAL"),
+        "RL": _eval_market("RL"),
+    }
 
     # --- Pick best side ---
     best_side: str | None = None
@@ -896,6 +986,7 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
         model_p=float(model_p) if model_p is not None else None,
         implied_p=float(implied_p) if implied_p is not None else None,
         edge=float(edge) if edge is not None else None,
+        market_evals=market_evals,
     )
 
 

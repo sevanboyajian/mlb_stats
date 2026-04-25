@@ -1857,18 +1857,25 @@ def grade_bet_ledger(conn: sqlite3.Connection, game_date: str | None = None) -> 
             _scored_cache[gpk] = None
             return None
 
-    def _append_cal_row(*, gd: str, gpk: int, bet_type: str, odds_taken: int | None, result_str: str) -> None:
+    def _append_cal_row(*, gd: str, gpk: int, bet_type: str, market_type: str, odds_taken: int | None, result_str: str) -> None:
         nonlocal _wrote_header
         sg = _get_scored_for_game_pk(gpk, gd)
         if sg is None:
             return
+        # Market-specific calibration: do NOT mix ML/TOTAL/RL in one dataset.
         try:
-            score = int(getattr(sg, "best_aggregate_score", 0) or 0)
+            me = getattr(sg, "market_evals", {}) or {}
+            mt = str(market_type or "").strip().upper()
+            mm = me.get(mt) or {}
+            score = int(mm.get("score") or 0)
+            model_p = float(mm.get("model_p") or score_to_model_prob(score))
+            implied_p = float(mm.get("implied_p")) if mm.get("implied_p") is not None else american_to_implied_prob(int(odds_taken) if odds_taken is not None else None)
+            edge = float(mm.get("edge")) if mm.get("edge") is not None else ((model_p - implied_p) if implied_p is not None else None)
         except Exception:
             score = 0
-        model_p = float(score_to_model_prob(score))
-        implied_p = american_to_implied_prob(int(odds_taken) if odds_taken is not None else None)
-        edge = (model_p - implied_p) if implied_p is not None else None
+            model_p = float(score_to_model_prob(score))
+            implied_p = american_to_implied_prob(int(odds_taken) if odds_taken is not None else None)
+            edge = (model_p - implied_p) if implied_p is not None else None
         res_u = (result_str or "").strip().lower()
         if res_u == "win":
             res_val = 1
@@ -1880,12 +1887,13 @@ def grade_bet_ledger(conn: sqlite3.Connection, game_date: str | None = None) -> 
         with cal_path.open("a", newline="", encoding="utf-8") as fh:
             w = csv.writer(fh)
             if _wrote_header:
-                w.writerow(["date", "game_pk", "bet_type", "score", "model_p", "implied_p", "edge", "result"])
+                w.writerow(["date", "game_pk", "market_type", "bet_type", "score", "model_p", "implied_p", "edge", "result"])
                 _wrote_header = False
             w.writerow(
                 [
                     gd,
                     int(gpk),
+                    str(market_type or "").strip().upper(),
                     bet_type,
                     int(score),
                     f"{model_p:.3f}",
@@ -2031,13 +2039,20 @@ def grade_bet_ledger(conn: sqlite3.Connection, game_date: str | None = None) -> 
             (res, float(round(pnl, 4)), r["id"]),
         )
         updated += 1
-        # Append calibration row for staked bets only.
         try:
-            if (r["odds_taken"] is not None) and (market in ("moneyline", "spread", "runline", "total")):
+            # Append calibration row for staked bets only.
+            if (
+                float(r.get("stake_units") or 0.0) > 0
+                and (r["odds_taken"] is not None)
+                and (market in ("moneyline", "spread", "runline", "total"))
+            ):
+                mt_u = (r.get("market_type") or "").strip().lower()
+                mlabel = "ML" if mt_u == "moneyline" else ("TOTAL" if mt_u == "total" else ("RL" if mt_u in ("spread", "runline") else str(r.get("market_type") or "").upper()))
                 _append_cal_row(
                     gd=str(r.get("game_date_et") or game_date or ""),
                     gpk=int(r["game_pk"]),
                     bet_type=str(r["market_type"] or ""),
+                    market_type=mlabel,
                     odds_taken=int(r["odds_taken"]) if r["odds_taken"] is not None else None,
                     result_str=str(res),
                 )
@@ -2966,6 +2981,8 @@ def evaluate_signals(
             ab = f"{fdg.identifiers.away_team_abbr}@{fdg.identifiers.home_team_abbr}"
             print(f"  [verbose] score {ab}: tier={scored.output_tier!r} | {scored.tier_basis}")
         out["_scored_game"] = scored
+        # Per-market evaluations (prevents cross-market signal leakage in prior reports)
+        out["market_evals"] = getattr(scored, "market_evals", {}) or {}
         return out
     except Exception as e:
         return {
@@ -3523,6 +3540,17 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
             return "✓ WIN", round(pnl, 2)
         return "✗ LOSS", -1.0
 
+    def _parse_runline_bet(bet_text: str) -> tuple[str | None, float | None]:
+        try:
+            parts = (bet_text or "").strip().split()
+            if len(parts) < 2:
+                return None, None
+            team = parts[0].strip().upper()
+            line = float(parts[1])
+            return team, line
+        except Exception:
+            return None, None
+
     # ── Retroactive signal evaluation + grading ───────────────────────────
     evaluated = []
     for g in games:
@@ -3535,18 +3563,50 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
         runs = (hs + as_) if (hs is not None and as_ is not None) else None
 
         graded = []
-        for p in sigs["picks"]:
-            if p["market"] == "ML":
-                side  = "away" if p["bet"].startswith(g["away_abbr"]) else "home"
-                odds  = aml if side == "away" else hml
-                res, pnl = grade_ml(side, hs, as_, odds or 0)
-            elif p["market"] == "TOTAL":
-                bet   = "over" if "OVER" in p["bet"].upper() else "under"
-                odds  = g.get("over_odds") if bet == "over" else g.get("under_odds")
-                res, pnl = grade_total(bet, hs, as_, tot, odds)
-            else:
-                res, pnl = "— UNKNOWN", 0.0
-            graded.append({**p, "result": res, "pnl": pnl})
+        me = sigs.get("market_evals") or {}
+        for market in ("ML", "TOTAL", "RL"):
+            mm = me.get(market) or {}
+            if not mm.get("evaluated"):
+                continue
+            bet_txt = str(mm.get("bet") or "").strip()
+            if not bet_txt:
+                continue
+            bet_placed = bool(mm.get("edge_ok"))
+            res = "—"
+            pnl = None
+            if bet_placed:
+                if market == "ML":
+                    side  = "away" if bet_txt.startswith(g["away_abbr"]) else "home"
+                    odds  = aml if side == "away" else hml
+                    res, pnl_v = grade_ml(side, hs, as_, odds or 0)
+                    pnl = pnl_v
+                elif market == "TOTAL":
+                    bet   = "over" if "OVER" in bet_txt.upper() else "under"
+                    odds  = g.get("over_odds") if bet == "over" else g.get("under_odds")
+                    res, pnl_v = grade_total(bet, hs, as_, tot, odds)
+                    pnl = pnl_v
+                elif market == "RL":
+                    team, line = _parse_runline_bet(bet_txt)
+                    odds = None
+                    if team and line is not None:
+                        if team.strip().upper() == (g.get("home_abbr") or "").strip().upper():
+                            odds = g.get("home_rl_odds")
+                        elif team.strip().upper() == (g.get("away_abbr") or "").strip().upper():
+                            odds = g.get("away_rl_odds")
+                    res, pnl_v = grade_runline(
+                        team or "", float(line) if line is not None else 0.0, hs, as_,
+                        home_abbr=g.get("home_abbr") or "", away_abbr=g.get("away_abbr") or "",
+                        odds=int(odds) if odds is not None else None,
+                    )
+                    pnl = pnl_v
+            graded.append({
+                "bet": bet_txt,
+                "market": market,
+                "priority": 1,
+                "result": res,
+                "pnl": pnl,
+                "bet_placed": bet_placed,
+            })
 
         ou_label = ""
         if tot is not None and runs is not None:
@@ -3691,24 +3751,34 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
         if ol:
             lines.append(ol)
 
-        best_sc = int((e.get("sigs") or {}).get("best_aggregate_score") or 0)
-        sig_label = (
-            ", ".join(e["sigs"].get("signals") or [])
-            if best_sc >= 5
-            else "No Signal"
-        )
+        me = (e.get("sigs") or {}).get("market_evals") or {}
+        def _sig_for_market(mkt: str) -> str:
+            mm = me.get(mkt) or {}
+            if not mm.get("evaluated"):
+                return "N/A (not evaluated)"
+            score = int(mm.get("score") or 0)
+            if score < 15 and not bool(mm.get("edge_ok")):
+                return "No Signal"
+            sids = mm.get("signal_ids") or []
+            if not sids:
+                return "No Signal"
+            # Use existing label mapping helper
+            return ", ".join(humanize_signal(str(x)) for x in sids)
 
         # ML line
         ml_pick = _best_pick_for_market(e.get("graded") or [], "ML")
+        ml_sig = _sig_for_market("ML")
         if ml_pick:
+            bet_placed = bool(ml_pick.get("bet_placed", True))
+            pnl_disp = pnl_str(float(ml_pick.get("pnl") or 0.0)) if bet_placed else "N/A"
             lines.append(
-                f"  BET LINE: {ml_pick.get('bet',''):<12} | SIGNAL: {sig_label:<10} | "
-                f"RESULT: {_clean_result(ml_pick.get('result')):<4} | P&L: {pnl_str(float(ml_pick.get('pnl') or 0.0))}"
+                f"  {'BET' if bet_placed else 'NO BET'} LINE: {ml_pick.get('bet',''):<12} | SIGNAL: {ml_sig:<18} | "
+                f"RESULT: {_clean_result(ml_pick.get('result')):<4} | P&L: {pnl_disp}"
             )
         else:
             winner = e.get("winner") or ""
             lines.append(
-                f"  BET LINE: {winner} ML{' ' * max(0, 9-len(winner))} | SIGNAL: {sig_label:<10} | "
+                f"  NO BET LINE: {winner} ML{' ' * max(0, 9-len(winner))} | SIGNAL: {ml_sig:<18} | "
                 f"RESULT: WIN  | P&L: N/A"
             )
 
@@ -3727,19 +3797,23 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
                 outcome_res = "PUSH"
 
             tot_pick = _best_pick_for_market(e.get("graded") or [], "TOTAL")
+            tot_sig = _sig_for_market("TOTAL")
             if tot_pick:
+                bet_placed = bool(tot_pick.get("bet_placed", True))
+                pnl_disp = pnl_str(float(tot_pick.get("pnl") or 0.0)) if bet_placed else "N/A"
                 lines.append(
-                    f"  BET LINE: {tot_pick.get('bet',''):<12} | SIGNAL: {sig_label:<10} | "
-                    f"RESULT: {_clean_result(tot_pick.get('result')):<4} | P&L: {pnl_str(float(tot_pick.get('pnl') or 0.0))}"
+                    f"  {'BET' if bet_placed else 'NO BET'} LINE: {tot_pick.get('bet',''):<12} | SIGNAL: {tot_sig:<18} | "
+                    f"RESULT: {_clean_result(tot_pick.get('result')):<4} | P&L: {pnl_disp}"
                 )
             else:
                 lines.append(
-                    f"  BET LINE: {outcome_bet:<12} | SIGNAL: {sig_label:<10} | "
+                    f"  NO BET LINE: {outcome_bet:<12} | SIGNAL: {tot_sig:<18} | "
                     f"RESULT: {outcome_res:<4} | P&L: N/A"
                 )
         else:
+            tot_sig = _sig_for_market("TOTAL")
             lines.append(
-                f"  BET LINE: TOTAL N/A     | SIGNAL: {sig_label:<10} | RESULT: —    | P&L: N/A"
+                f"  NO BET LINE: TOTAL N/A     | SIGNAL: {tot_sig:<18} | RESULT: —    | P&L: N/A"
             )
 
         # RUNLINE line (spread) — show when data available
@@ -3751,6 +3825,7 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
         as_ = g.get("away_score")
 
         rl_pick = _best_pick_for_market(e.get("graded") or [], "RL") or _best_pick_for_market(e.get("graded") or [], "RUNLINE") or _best_pick_for_market(e.get("graded") or [], "SPREAD")
+        rl_sig = _sig_for_market("RL")
         if rl_pick:
             # Grade vs final score using the bet text itself.
             team, line = _parse_runline_bet(rl_pick.get("bet") or "")
@@ -3766,7 +3841,7 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
                 odds=int(odds) if odds is not None else None,
             )
             lines.append(
-                f"  BET LINE: {rl_pick.get('bet',''):<12} | SIGNAL: {sig_label:<10} | "
+                f"  BET LINE: {rl_pick.get('bet',''):<12} | SIGNAL: {rl_sig:<18} | "
                 f"RESULT: {_clean_result(res):<4} | P&L: {pnl_str(float(pnl))}"
             )
         elif hrl is not None and arl is not None and hs is not None and as_ is not None:
@@ -3783,12 +3858,12 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
                 outcome_bet = f"{g.get('away_abbr','')} {arl:+g}"
                 outcome_res = "WIN"
             lines.append(
-                f"  BET LINE: {outcome_bet:<12} | SIGNAL: {sig_label:<10} | "
+                f"  NO BET LINE: {outcome_bet:<12} | SIGNAL: {rl_sig:<18} | "
                 f"RESULT: {outcome_res:<4} | P&L: N/A"
             )
         else:
             lines.append(
-                f"  BET LINE: RUNLINE N/A   | SIGNAL: {sig_label:<10} | RESULT: —    | P&L: N/A"
+                f"  NO BET LINE: RUNLINE N/A   | SIGNAL: {rl_sig:<18} | RESULT: —    | P&L: N/A"
             )
 
         if e["sigs"].get("data_flags"):
