@@ -721,6 +721,8 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
     except Exception:
         game_pk = -1
     print(f"[ENTER score_game] {game_pk}")
+    signals = [getattr(s, "signal_id", str(s)) for s in (getattr(g, "signals", None) or [])]
+    print(f"[DEBUG INSIDE SCORE] game={game_pk} signals={signals}")
 
     gdb = _gdb()
     mkt = g.market
