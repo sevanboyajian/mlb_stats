@@ -1328,4 +1328,12 @@ def evaluate_signals_scored(
     )
     gd = fdg.identifiers.game_date_et
     game_month = int(gd[5:7]) if len(gd) >= 7 else 0
+    if os.getenv("DEBUG_SCORE_GAME") == "1":
+        try:
+            game_pk = int(game.get("game_pk"))
+        except Exception:
+            game_pk = -1
+        pre = list(getattr(fdg, "signals", None) or [])
+        signals = [s.signal_id for s in pre]
+        print(f"[DEBUG BEFORE SCORE] game={game_pk} signals={signals}")
     return score_game(fdg, fdg.home_streak, game_month)

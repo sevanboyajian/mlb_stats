@@ -3364,6 +3364,14 @@ def evaluate_signals(
         try:
             gd = fdg.identifiers.game_date_et
             game_month = int(gd[5:7]) if len(gd) >= 7 else 0
+            if os.getenv("DEBUG_SCORE_GAME") == "1":
+                try:
+                    game_pk = int(game.get("game_pk"))
+                except Exception:
+                    game_pk = -1
+                pre = list(getattr(fdg, "signals", None) or [])
+                signals = [s.signal_id for s in pre]
+                print(f"[DEBUG BEFORE SCORE] game={game_pk} signals={signals}")
             scored = score_game(fdg, home_streak, game_month)
         except Exception as e:
             score_exc = e
@@ -3469,6 +3477,14 @@ def evaluate_signals(
 
     if out is None:
         raise RuntimeError("evaluate_signals: internal error (no result set)")
+
+    if os.getenv("DEBUG_SCORE_GAME") == "1":
+        try:
+            game_pk = int(game.get("game_pk"))
+        except Exception:
+            game_pk = -1
+        signals = list(out.get("signal_ids") or [])
+        print(f"[DEBUG SIGNAL GEN] game={game_pk} signals={signals}")
 
     return out
 
