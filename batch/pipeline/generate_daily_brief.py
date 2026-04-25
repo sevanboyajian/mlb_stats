@@ -3333,6 +3333,8 @@ def evaluate_signals(
 
     starters = starters if starters is not None else {}
 
+    out: dict | None = None
+    eval_exc: BaseException | None = None
     try:
         fdg = enrich_game(conn, game, starters)
         hid = int(game["home_team_id"])
@@ -3386,9 +3388,12 @@ def evaluate_signals(
                     )
             except Exception:
                 pass
-        return out
     except Exception as e:
-        return {
+        eval_exc = e
+
+    if eval_exc is not None:
+        # No early return: degraded path — same shape as success, penalty via flags only.
+        out = {
             "signals": [],
             "signal_ids": [],
             "picks": [],
@@ -3398,12 +3403,21 @@ def evaluate_signals(
             "avoid_reason": None,
             "watch": False,
             "watch_reason": None,
-            "data_flags": [f"Signal evaluation failed (dress/score): {e}"],
+            "data_flags": [
+                f"Signal evaluation failed (dress/score): {eval_exc}",
+                "Score penalty: dress/score path failed — treat as no edge (aggregate held at 0).",
+            ],
             "output_tier": None,
             "tier_basis": "",
             "stake_multiplier": 0.0,
             "_scored_game": None,
+            "market_evals": {},
         }
+
+    if out is None:
+        raise RuntimeError("evaluate_signals: internal error (no result set)")
+
+    return out
 
 
 # ═══════════════════════════════════════════════════════════════════════════
