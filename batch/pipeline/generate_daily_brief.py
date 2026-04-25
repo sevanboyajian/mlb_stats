@@ -1186,6 +1186,74 @@ def ensure_bet_snapshots(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def save_bet_snapshot(
+    conn: sqlite3.Connection,
+    game_date: str,
+    game_pk: int,
+    market_type: str,
+    bet: str,
+    odds: int | None,
+    scored_game: object,
+    signals: list,
+) -> None:
+    """
+    Persist a snapshot of the bet decision at placement time.
+    Called ONLY when stake > 0.
+    """
+    import json
+
+    try:
+        ensure_bet_snapshots(conn)
+    except Exception:
+        return
+
+    now_et_string = _now_et().strftime("%Y-%m-%d %H:%M ET")
+
+    # Pull the required fields off the market-eval dict we store on ScoredGame
+    try:
+        score = int(scored_game.get("score") or 0)
+    except Exception:
+        score = 0
+    try:
+        model_p = scored_game.get("model_p")
+        implied_p = scored_game.get("implied_p")
+        edge = scored_game.get("edge")
+        bet_side = str(scored_game.get("best_side") or "")
+    except Exception:
+        model_p = None
+        implied_p = None
+        edge = None
+        bet_side = ""
+
+    try:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO bet_snapshots
+                (game_date, game_pk, market_type, bet_side, bet,
+                 odds_taken, score, model_p, implied_p, edge,
+                 signals_used, placed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                game_date,
+                int(game_pk),
+                str(market_type or "").strip().upper(),
+                bet_side,
+                str(bet or ""),
+                int(odds) if odds is not None else None,
+                int(score),
+                float(model_p) if model_p is not None else None,
+                float(implied_p) if implied_p is not None else None,
+                float(edge) if edge is not None else None,
+                json.dumps(list(signals or [])),
+                now_et_string,
+            ),
+        )
+        conn.commit()
+    except Exception:
+        return
+
+
 def save_signal_state(conn: sqlite3.Connection, game_date: str, session: str,
                       top_entry: dict | None, next_entries: list,
                       avoid_entries: list, now: datetime.datetime | None = None) -> None:
@@ -1426,27 +1494,16 @@ def _insert_bet_ledger_from_latest(
             edge = mm.get("edge")
             signals_used = list(mm.get("signal_ids") or [])
 
-            conn.execute(
-                """
-                INSERT OR IGNORE INTO bet_snapshots
-                    (game_date, game_pk, market_type, bet_side, bet, odds_taken,
-                     score, model_p, implied_p, edge, signals_used, placed_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-                """,
-                (
-                    game_date,
-                    int(game_pk),
-                    market_type,
-                    bet_side,
-                    bet,
-                    int(odds_taken) if odds_taken is not None else None,
-                    int(score),
-                    float(model_p) if model_p is not None else None,
-                    float(implied_p) if implied_p is not None else None,
-                    float(edge) if edge is not None else None,
-                    json.dumps([humanize_signal(str(x)) for x in signals_used]),
-                    str(placed_at or ""),
-                ),
+            # Called only when stake > 0 (see bet_ledger insert loop).
+            save_bet_snapshot(
+                conn,
+                game_date,
+                int(game_pk),
+                market_type,
+                bet,
+                int(odds_taken) if odds_taken is not None else None,
+                mm,
+                [humanize_signal(str(x)) for x in signals_used],
             )
         except Exception:
             return
