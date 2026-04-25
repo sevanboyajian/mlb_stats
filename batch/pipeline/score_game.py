@@ -842,18 +842,12 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
         else:
             candidates = []
 
-        # Determine if this market is evaluable with current data (even if no signals fired)
-        if market == "ML":
-            evaluable = (g.market.home_ml_current is not None) and (g.market.away_ml_current is not None)
-        elif market == "TOTAL":
-            evaluable = (g.market.total_current is not None) and (g.market.over_odds is not None) and (g.market.under_odds is not None)
-        elif market == "RL":
-            evaluable = bool(g.market.rl_available) and (g.market.away_rl_odds is not None)
-        else:
-            evaluable = False
+        # Do not gate/skip scoring based on missing market data.
+        # Missing odds/lines should flow through as NO_MODEL (implied_p/edge None), not "not evaluated".
+        market_supported = market in ("ML", "TOTAL", "RL")
 
         market_out: dict[str, Any]
-        if not evaluable:
+        if not market_supported:
             market_out = {"evaluated": False, "best_side": None, "score": 0}
         else:
             best_side_m: str | None = None
