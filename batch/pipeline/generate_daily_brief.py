@@ -1154,6 +1154,38 @@ def ensure_bet_ledger(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def ensure_bet_snapshots(conn: sqlite3.Connection) -> None:
+    """
+    Persistent snapshot of bet decisions at placement time (stake>0).
+    Source of truth for PRIOR reports (no recomputation).
+    """
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS bet_snapshots (
+            game_date      TEXT    NOT NULL,
+            game_pk        INTEGER NOT NULL,
+            market_type    TEXT    NOT NULL,   -- 'ML' | 'TOTAL' | 'RL'
+            bet_side       TEXT    NOT NULL,
+            bet            TEXT    NOT NULL,
+            odds_taken     INTEGER,
+            score          INTEGER NOT NULL,
+            model_p        REAL,
+            implied_p      REAL,
+            edge           REAL,
+            signals_used   TEXT,               -- JSON list[str]
+            placed_at      TEXT    NOT NULL    -- ET timestamp string
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_bet_snapshots_key
+        ON bet_snapshots (game_date, game_pk, market_type)
+        """
+    )
+    conn.commit()
+
+
 def save_signal_state(conn: sqlite3.Connection, game_date: str, session: str,
                       top_entry: dict | None, next_entries: list,
                       avoid_entries: list, now: datetime.datetime | None = None) -> None:
@@ -1339,6 +1371,86 @@ def _insert_bet_ledger_from_latest(
     latest: dict[tuple[int, str, str], tuple[datetime.datetime, sqlite3.Row]],
 ) -> int:
     inserted = 0
+    import json
+
+    def _store_snapshot_if_needed(*, game_pk: int, market_type_raw: str, placed_at: str) -> None:
+        """
+        Store snapshot for staked bets only. Snapshot is computed once and then reused by PRIOR.
+        """
+        try:
+            ensure_bet_snapshots(conn)
+        except Exception:
+            return
+
+        mt_u = (market_type_raw or "").strip().lower()
+        market_type = "ML" if mt_u == "moneyline" else ("TOTAL" if mt_u == "total" else ("RL" if mt_u in ("spread", "runline") else mt_u.upper()))
+        if market_type not in ("ML", "TOTAL", "RL"):
+            return
+
+        try:
+            ex = conn.execute(
+                "SELECT 1 FROM bet_snapshots WHERE game_date=? AND game_pk=? AND market_type=? LIMIT 1",
+                (game_date, int(game_pk), market_type),
+            ).fetchone()
+            if ex:
+                return
+        except Exception:
+            pass
+
+        try:
+            # Compute snapshot from data available at placement time.
+            as_of = _now_et()
+            games = load_games(conn, game_date, verbose=False, as_of_dt=as_of)
+            gmap = {int(g["game_pk"]): g for g in games if g.get("game_pk") is not None}
+            game = gmap.get(int(game_pk))
+            if not game:
+                return
+            team_ids = list({game["home_team_id"], game["away_team_id"]})
+            streaks = load_streaks(conn, game_date, team_ids, verbose=False)
+            starters = load_starters(conn, game_date, verbose=False)
+            sigs = evaluate_signals(conn, game, streaks, "primary", starters)
+            sg = sigs.get("_scored_game")
+            if sg is None:
+                return
+            me = getattr(sg, "market_evals", {}) or {}
+            mm = me.get(market_type) or {}
+            if not mm.get("evaluated"):
+                return
+
+            bet_side = str(mm.get("best_side") or "")
+            bet = str(mm.get("bet") or "")
+            odds_taken = mm.get("odds")
+            score = int(mm.get("score") or 0)
+            model_p = mm.get("model_p")
+            implied_p = mm.get("implied_p")
+            edge = mm.get("edge")
+            signals_used = list(mm.get("signal_ids") or [])
+
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO bet_snapshots
+                    (game_date, game_pk, market_type, bet_side, bet, odds_taken,
+                     score, model_p, implied_p, edge, signals_used, placed_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    game_date,
+                    int(game_pk),
+                    market_type,
+                    bet_side,
+                    bet,
+                    int(odds_taken) if odds_taken is not None else None,
+                    int(score),
+                    float(model_p) if model_p is not None else None,
+                    float(implied_p) if implied_p is not None else None,
+                    float(edge) if edge is not None else None,
+                    json.dumps([humanize_signal(str(x)) for x in signals_used]),
+                    str(placed_at or ""),
+                ),
+            )
+        except Exception:
+            return
+
     # One opinion = one bet: if (game_pk, market_type) already has any staked bet, skip.
     # Also: totals are disabled temporarily (skip market_type == 'total').
     already_staked: set[tuple[int, str]] = set()
@@ -1390,8 +1502,15 @@ def _insert_bet_ledger_from_latest(
             )
             if getattr(cur, "rowcount", 0) == 1:
                 inserted += 1
-                if stake > 0:
-                    already_staked.add((int(r["game_pk"]), mt))
+            if stake > 0:
+                # Snapshot is keyed by (date, game_pk, market). Even if the ledger row already
+                # existed (rowcount==0), backfill the missing snapshot on re-runs.
+                already_staked.add((int(r["game_pk"]), mt))
+                _store_snapshot_if_needed(
+                    game_pk=int(r["game_pk"]),
+                    market_type_raw=mt,
+                    placed_at=str(r["recorded_at"] or ""),
+                )
         except sqlite3.OperationalError:
             continue
     return inserted
@@ -3484,12 +3603,24 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
         lines.append(CAVEAT)
         return "\n".join(lines)
 
-    # Build streaks as of game_date
-    team_ids = list({g["home_team_id"] for g in games} | {g["away_team_id"] for g in games})
-    streaks  = load_streaks(conn, game_date, team_ids, verbose)
-
-    # Starters (for enrich_game / starter_line). Falls back gracefully if missing.
-    starters = load_starters(conn, game_date, verbose)
+    # Load snapshots (source of truth; PRIOR report does not recompute signals/scores)
+    try:
+        ensure_bet_snapshots(conn)
+    except Exception:
+        pass
+    try:
+        snap_rows = conn.execute(
+            """
+            SELECT game_pk, market_type, bet_side, bet, odds_taken, score, model_p, implied_p, edge,
+                   signals_used, placed_at
+            FROM bet_snapshots
+            WHERE game_date = ?
+            """,
+            (game_date,),
+        ).fetchall()
+        snapshots = {(int(r["game_pk"]), str(r["market_type"] or "").upper()): dict(r) for r in snap_rows}
+    except Exception:
+        snapshots = {}
 
     # ── Grading helpers ───────────────────────────────────────────────────
     def grade_ml(bet_side, hs, as_, odds):
@@ -3551,73 +3682,27 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
         except Exception:
             return None, None
 
-    # ── Retroactive signal evaluation + grading ───────────────────────────
+    # ── Snapshot-based grading (no recomputation) ──────────────────────────
     evaluated = []
     for g in games:
-        sigs = evaluate_signals(
-            conn, g, streaks, "primary", starters,
-            verbose=verbose, debug_wind=debug_wind,
-        )
-        hs   = g["home_score"]; as_  = g["away_score"]
-        tot  = g["total_line"]; hml  = g["home_ml"]; aml = g["away_ml"]
+        hs = g["home_score"]; as_ = g["away_score"]
+        tot = g["total_line"]
         runs = (hs + as_) if (hs is not None and as_ is not None) else None
-
-        graded = []
-        me = sigs.get("market_evals") or {}
-        for market in ("ML", "TOTAL", "RL"):
-            mm = me.get(market) or {}
-            if not mm.get("evaluated"):
-                continue
-            bet_txt = str(mm.get("bet") or "").strip()
-            if not bet_txt:
-                continue
-            bet_placed = bool(mm.get("edge_ok"))
-            res = "—"
-            pnl = None
-            if bet_placed:
-                if market == "ML":
-                    side  = "away" if bet_txt.startswith(g["away_abbr"]) else "home"
-                    odds  = aml if side == "away" else hml
-                    res, pnl_v = grade_ml(side, hs, as_, odds or 0)
-                    pnl = pnl_v
-                elif market == "TOTAL":
-                    bet   = "over" if "OVER" in bet_txt.upper() else "under"
-                    odds  = g.get("over_odds") if bet == "over" else g.get("under_odds")
-                    res, pnl_v = grade_total(bet, hs, as_, tot, odds)
-                    pnl = pnl_v
-                elif market == "RL":
-                    team, line = _parse_runline_bet(bet_txt)
-                    odds = None
-                    if team and line is not None:
-                        if team.strip().upper() == (g.get("home_abbr") or "").strip().upper():
-                            odds = g.get("home_rl_odds")
-                        elif team.strip().upper() == (g.get("away_abbr") or "").strip().upper():
-                            odds = g.get("away_rl_odds")
-                    res, pnl_v = grade_runline(
-                        team or "", float(line) if line is not None else 0.0, hs, as_,
-                        home_abbr=g.get("home_abbr") or "", away_abbr=g.get("away_abbr") or "",
-                        odds=int(odds) if odds is not None else None,
-                    )
-                    pnl = pnl_v
-            graded.append({
-                "bet": bet_txt,
-                "market": market,
-                "priority": 1,
-                "result": res,
-                "pnl": pnl,
-                "bet_placed": bet_placed,
-            })
-
         ou_label = ""
         if tot is not None and runs is not None:
             ou_label = (f"OVER {tot} ({runs} runs)"  if runs > tot else
                         f"UNDER {tot} ({runs} runs)" if runs < tot else
                         f"PUSH {tot} ({runs} runs)")
-
         evaluated.append({
-            "game": g, "sigs": sigs, "graded": graded,
-            "ou_label": ou_label, "runs": runs,
+            "game": g,
+            "runs": runs,
+            "ou_label": ou_label,
             "winner": g["home_abbr"] if (hs or 0) > (as_ or 0) else g["away_abbr"],
+            "snapshots": {
+                "ML": snapshots.get((int(g["game_pk"]), "ML")),
+                "TOTAL": snapshots.get((int(g["game_pk"]), "TOTAL")),
+                "RL": snapshots.get((int(g["game_pk"]), "RL")),
+            },
         })
 
     def pnl_str(pnl):
@@ -3751,29 +3836,29 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
         if ol:
             lines.append(ol)
 
-        me = (e.get("sigs") or {}).get("market_evals") or {}
-        def _sig_for_market(mkt: str) -> str:
-            mm = me.get(mkt) or {}
-            if not mm.get("evaluated"):
-                return "N/A (not evaluated)"
-            score = int(mm.get("score") or 0)
-            if score < 15 and not bool(mm.get("edge_ok")):
+        def _sig_from_snapshot(snap: dict | None) -> str:
+            if not snap:
                 return "No Signal"
-            sids = mm.get("signal_ids") or []
-            if not sids:
+            try:
+                import json
+                raw = snap.get("signals_used") or "[]"
+                sigs = json.loads(raw) if isinstance(raw, str) else list(raw)
+                return ", ".join(str(x) for x in sigs) if sigs else "No Signal"
+            except Exception:
                 return "No Signal"
-            # Use existing label mapping helper
-            return ", ".join(humanize_signal(str(x)) for x in sids)
 
         # ML line
-        ml_pick = _best_pick_for_market(e.get("graded") or [], "ML")
-        ml_sig = _sig_for_market("ML")
-        if ml_pick:
-            bet_placed = bool(ml_pick.get("bet_placed", True))
-            pnl_disp = pnl_str(float(ml_pick.get("pnl") or 0.0)) if bet_placed else "N/A"
+        ml_snap = (e.get("snapshots") or {}).get("ML")
+        ml_sig = _sig_from_snapshot(ml_snap)
+        if ml_snap:
+            bet_txt = str(ml_snap.get("bet") or "")
+            odds = ml_snap.get("odds_taken")
+            side = "away" if bet_txt.startswith(g["away_abbr"]) else "home"
+            res, pnl_v = grade_ml(side, hs, as_, int(odds) if odds is not None else 0)
+            pnl_disp = pnl_str(float(pnl_v))
             lines.append(
-                f"  {'BET' if bet_placed else 'NO BET'} LINE: {ml_pick.get('bet',''):<12} | SIGNAL: {ml_sig:<18} | "
-                f"RESULT: {_clean_result(ml_pick.get('result')):<4} | P&L: {pnl_disp}"
+                f"  BET LINE: {bet_txt:<12} | SIGNAL: {ml_sig:<18} | "
+                f"RESULT: {_clean_result(res):<4} | P&L: {pnl_disp}"
             )
         else:
             winner = e.get("winner") or ""
@@ -3796,14 +3881,17 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
                 outcome_bet = f"PUSH {tot}"
                 outcome_res = "PUSH"
 
-            tot_pick = _best_pick_for_market(e.get("graded") or [], "TOTAL")
-            tot_sig = _sig_for_market("TOTAL")
-            if tot_pick:
-                bet_placed = bool(tot_pick.get("bet_placed", True))
-                pnl_disp = pnl_str(float(tot_pick.get("pnl") or 0.0)) if bet_placed else "N/A"
+            tot_snap = (e.get("snapshots") or {}).get("TOTAL")
+            tot_sig = _sig_from_snapshot(tot_snap)
+            if tot_snap:
+                bet_txt = str(tot_snap.get("bet") or "")
+                odds = tot_snap.get("odds_taken")
+                bet = "over" if "OVER" in bet_txt.upper() else "under"
+                res, pnl_v = grade_total(bet, hs, as_, tot, int(odds) if odds is not None else None)
+                pnl_disp = pnl_str(float(pnl_v))
                 lines.append(
-                    f"  {'BET' if bet_placed else 'NO BET'} LINE: {tot_pick.get('bet',''):<12} | SIGNAL: {tot_sig:<18} | "
-                    f"RESULT: {_clean_result(tot_pick.get('result')):<4} | P&L: {pnl_disp}"
+                    f"  BET LINE: {bet_txt:<12} | SIGNAL: {tot_sig:<18} | "
+                    f"RESULT: {_clean_result(res):<4} | P&L: {pnl_disp}"
                 )
             else:
                 lines.append(
@@ -3811,7 +3899,7 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
                     f"RESULT: {outcome_res:<4} | P&L: N/A"
                 )
         else:
-            tot_sig = _sig_for_market("TOTAL")
+            tot_sig = "No Signal"
             lines.append(
                 f"  NO BET LINE: TOTAL N/A     | SIGNAL: {tot_sig:<18} | RESULT: —    | P&L: N/A"
             )
@@ -3824,25 +3912,20 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
         hs = g.get("home_score")
         as_ = g.get("away_score")
 
-        rl_pick = _best_pick_for_market(e.get("graded") or [], "RL") or _best_pick_for_market(e.get("graded") or [], "RUNLINE") or _best_pick_for_market(e.get("graded") or [], "SPREAD")
-        rl_sig = _sig_for_market("RL")
-        if rl_pick:
-            # Grade vs final score using the bet text itself.
-            team, line = _parse_runline_bet(rl_pick.get("bet") or "")
-            odds = None
-            if team and line is not None:
-                if team.strip().upper() == (g.get("home_abbr") or "").strip().upper():
-                    odds = hrl_o
-                elif team.strip().upper() == (g.get("away_abbr") or "").strip().upper():
-                    odds = arl_o
-            res, pnl = grade_runline(
+        rl_snap = (e.get("snapshots") or {}).get("RL")
+        rl_sig = _sig_from_snapshot(rl_snap)
+        if rl_snap:
+            bet_txt = str(rl_snap.get("bet") or "")
+            odds = rl_snap.get("odds_taken")
+            team, line = _parse_runline_bet(bet_txt)
+            res, pnl_v = grade_runline(
                 team or "", float(line) if line is not None else 0.0, hs, as_,
                 home_abbr=g.get("home_abbr") or "", away_abbr=g.get("away_abbr") or "",
                 odds=int(odds) if odds is not None else None,
             )
             lines.append(
-                f"  BET LINE: {rl_pick.get('bet',''):<12} | SIGNAL: {rl_sig:<18} | "
-                f"RESULT: {_clean_result(res):<4} | P&L: {pnl_str(float(pnl))}"
+                f"  BET LINE: {bet_txt:<12} | SIGNAL: {rl_sig:<18} | "
+                f"RESULT: {_clean_result(res):<4} | P&L: {pnl_str(float(pnl_v))}"
             )
         elif hrl is not None and arl is not None and hs is not None and as_ is not None:
             # No signal: print the side that covered at the closing line.
@@ -3866,9 +3949,7 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
                 f"  NO BET LINE: RUNLINE N/A   | SIGNAL: {rl_sig:<18} | RESULT: —    | P&L: N/A"
             )
 
-        if e["sigs"].get("data_flags"):
-            for f in e["sigs"]["data_flags"]:
-                lines.append(f"  ⚠ {f}")
+        # Snapshot-driven: no recomputed data_flags in PRIOR.
         lines.append("")
 
     # ════════════════════════════════════════════════════════════════════
