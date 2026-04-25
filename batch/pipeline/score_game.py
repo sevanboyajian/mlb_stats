@@ -85,9 +85,6 @@ SIGNAL_BASE_SCORE: dict[str, int] = {
     "NF4": 3,
 }
 
-# Optional per-signal increment inside the scoring loop (empty → +1 each pass).
-SIGNAL_WEIGHTS: dict[str, int] = {}
-
 # Short reader-facing names for briefs (no internal codes shown to end users)
 SIGNAL_DISPLAY_NAME: dict[str, str] = {
     "S1H2": "Streak Fade",
@@ -784,11 +781,10 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
         except Exception:
             game_pk = -1
         signals = [f"{s.signal_id}({'Y' if s.fires else 'n'})" for s in all_signals]
-        print(f"[DEBUG] {game_pk}: raw_signals={signals}")
+        print(f"[DEBUG] {game_pk}: signals={signals}")
 
     # --- Score all signals (no fires gate) ---
     scored_signals: list[SignalFinding] = []
-    signal_weight_total = 0
     for sig in all_signals:
         hostile = _is_hostile_environment(g, sig)
 
@@ -806,16 +802,14 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
         sig.confidence_score = int(score)
         sig.score_basis = basis
         scored_signals.append(sig)
-        signal_weight_total += int(SIGNAL_WEIGHTS.get(sig.signal_id, 1))
 
     if os.getenv("DEBUG_SCORE_GAME") == "1":
         try:
             game_pk = int(g.identifiers.game_pk)
         except Exception:
             game_pk = -1
-        signals = [f"{s.signal_id}:{int(s.confidence_score or 0)}" for s in scored_signals if bool(s.fires)]
         score = sum(int(s.confidence_score or 0) for s in scored_signals if bool(s.fires))
-        print(f"[DEBUG] {game_pk}: signals={signals} score={score} weight_sum={signal_weight_total}")
+        print(f"[DEBUG] {game_pk}: final_score={score}")
 
     # --- Aggregate by bet side ---
     buckets: dict[str, list[SignalFinding]] = {}
