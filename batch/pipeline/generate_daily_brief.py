@@ -2241,6 +2241,9 @@ _SESSION_LABELS = {
     "late":      "LATE GAMES",
 }
 
+# Signal tracker rules
+SIGNAL_MIN_SCORE = 15
+
 
 
 def movement_alert(conn: sqlite3.Connection, game_date: str,
@@ -2358,23 +2361,74 @@ def build_signal_tracker_block(prior_picks: list, current_games: list,
         "  If you got in early: your position is noted. Decision is yours.\n"
     )
 
-    # Build a lookup: game_pk → current pick info (if still firing)
-    current_pick_lookup = {}  # game_pk → {rank, signal, bet, market, odds}
-    for rank, entry in enumerate(
-        sorted(current_games, key=lambda e: min(p["priority"] for p in e["sigs"]["picks"]))
-        if current_games else [], start=1
-    ):
-        if entry["sigs"]["picks"]:
-            g   = entry["game"]
-            p   = sorted(entry["sigs"]["picks"], key=lambda x: x["priority"])[0]
-            current_pick_lookup[g["game_pk"]] = {
-                "rank":   rank,
-                "signal": ", ".join(entry["sigs"]["signals"]),
-                "bet":    p["bet"],
-                "market": p["market"],
-                "odds":   _parse_odds(p.get("odds", "")) or p.get("odds"),
-                "odds_str": p.get("odds", "N/A"),
-            }
+    # Build a lookup: game_pk → current recomputed status (no carry-forward of prior signals).
+    # We recompute for *every* evaluated game each brief run; tracker only *displays* games
+    # that meet SIGNAL_MIN_SCORE or are eligible bets by edge.
+    from batch.pipeline.edge_utils import EDGE_MIN
+
+    wind_ids = {"MV-F", "MV-B", "H3b"}
+    streak_ids = {"S1+H2", "S1H2", "S1"}
+    matchup_ids = {"LHP_FADE", "LHP_FADE_RL", "NF4"}
+
+    def _grouped_categories_from_scored(scored: object) -> list[str]:
+        cats: set[str] = set()
+        sigs = list(getattr(scored, "signals_fired", []) or [])
+        for s in sigs:
+            if not bool(getattr(s, "fires", False)):
+                continue
+            sid = str(getattr(s, "signal_id", "") or "")
+            if sid in wind_ids:
+                cats.add("wind")
+            elif sid in streak_ids:
+                cats.add("streak")
+            elif sid in matchup_ids:
+                cats.add("matchup")
+        return sorted(cats)
+
+    current_lookup: dict[int, dict] = {}
+    for entry in (current_games or []):
+        g = entry.get("game") or {}
+        pk = g.get("game_pk")
+        if pk is None:
+            continue
+        sg = (entry.get("sigs") or {}).get("_scored_game")
+        if sg is None:
+            continue
+        try:
+            score = int(getattr(sg, "best_aggregate_score", 0) or 0)
+        except Exception:
+            score = 0
+        try:
+            edge = float(getattr(sg, "edge", 0.0) or 0.0)
+        except Exception:
+            edge = 0.0
+
+        if edge >= EDGE_MIN:
+            status = "ACTIVE BET SIGNAL"
+        elif score >= SIGNAL_MIN_SCORE:
+            status = "WEAK SIGNAL (no edge)"
+        else:
+            status = "NO SIGNAL"
+
+        current_lookup[int(pk)] = {
+            "score": score,
+            "edge": edge,
+            "status": status,
+            "cats": _grouped_categories_from_scored(sg),
+        }
+
+    # Sanity check: if too many games are showing signals, flag as over-triggering.
+    eligible = [
+        v for v in current_lookup.values()
+        if (v["edge"] >= EDGE_MIN) or (int(v["score"]) >= SIGNAL_MIN_SCORE)
+    ]
+    if current_games:
+        try:
+            frac = len(eligible) / float(len(current_games))
+        except Exception:
+            frac = 0.0
+        if frac > 0.50:
+            lines.append(color_text("\n  ⚠  Sanity check: signals on >50% of games — over-triggering\n", "yellow"))
 
     # Group prior picks by game_pk, keep the EARLIEST session's record per game
     seen_pks = {}
@@ -2392,63 +2446,29 @@ def build_signal_tracker_block(prior_picks: list, current_games: list,
         prior_rank   = prior["pick_rank"]
         prior_odds   = prior["odds"]
         prior_bet    = prior["bet"]
-        prior_signal = prior["signal"]
         rank_label   = "TOP PICK" if prior_rank == 1 else f"#{prior_rank}"
         prior_odds_str = fmt_odds(prior_odds) if prior_odds else "N/A"
 
-        current = current_pick_lookup.get(pk)
+        cur = current_lookup.get(int(pk))
+        if cur is None:
+            continue
 
-        if current is None:
-            # ── DROPPED ──────────────────────────────────────────────────
-            # Signal no longer firing — determine most likely reason
-            # We don't have full game context here, so describe generically
-            curr_rank_label = "—"
-            drop_note = (
-                "CLV gate not cleared — line moved away from model. "
-                "If you got in at the earlier price, position remains valid. "
-                "Current price: your discretion."
-            )
-            lines.append(
-                f"\n  ❌  {prior_bet}  [{prior_signal}]  —  was {rank_label} @ {sess_label}\n"
-                f"      {sess_label} odds: {prior_odds_str}  →  Current: DROPPED\n"
-                f"      {drop_note}\n"
-            )
-        else:
-            curr_rank   = current["rank"]
-            curr_odds   = current["odds"]
-            curr_odds_str = current["odds_str"]
-            curr_rank_label = "TOP PICK" if curr_rank == 1 else f"#{curr_rank}"
+        score = int(cur.get("score") or 0)
+        edge = float(cur.get("edge") or 0.0)
+        status = str(cur.get("status") or "NO SIGNAL")
+        cats = list(cur.get("cats") or [])
+        cats_txt = (" · ".join(cats)) if cats else "none"
 
-            if curr_odds is not None and prior_odds is not None:
-                delta = curr_odds - prior_odds
-                delta_str = (f"+{delta} pts" if delta > 0 else
-                             f"{delta} pts"  if delta < 0 else
-                             "unchanged")
-            else:
-                delta_str = "line unknown"
+        # Only list games that meet the threshold (or are bet-eligible).
+        from batch.pipeline.edge_utils import EDGE_MIN as _EDGE_MIN
+        if not (edge >= _EDGE_MIN or score >= SIGNAL_MIN_SCORE):
+            continue
 
-            if prior_rank == 1 and curr_rank > 1:
-                # ── DEMOTED ──────────────────────────────────────────────
-                lines.append(
-                    f"\n  ⚠️   {prior_bet}  [{prior_signal}]  —  was TOP PICK @ {sess_label}, now {curr_rank_label}\n"
-                    f"      {sess_label} odds: {prior_odds_str}  →  Now: {curr_odds_str}  ({delta_str})\n"
-                    f"      Signal still active — higher-priority pick displaced it at top.\n"
-                )
-            elif prior_rank > 1 and curr_rank == 1:
-                # ── PROMOTED ─────────────────────────────────────────────
-                lines.append(
-                    f"\n  ⬆️   {prior_bet}  [{prior_signal}]  —  was {rank_label} @ {sess_label}, now TOP PICK\n"
-                    f"      {sess_label} odds: {prior_odds_str}  →  Now: {curr_odds_str}  ({delta_str})\n"
-                    f"      Signal still active and elevated to top rank.\n"
-                )
-            else:
-                # ── ACTIVE (same rank) ────────────────────────────────────
-                status = "unchanged" if delta_str == "unchanged" else f"line moved {delta_str}"
-                lines.append(
-                    f"\n  ✅  {prior_bet}  [{prior_signal}]  —  {rank_label} since {sess_label}\n"
-                    f"      {sess_label} odds: {prior_odds_str}  →  Now: {curr_odds_str}  ({status})\n"
-                    f"      Signal active and holding.\n"
-                )
+        lines.append(
+            f"\n  {prior_bet}  —  was {rank_label} @ {sess_label} ({prior_odds_str})\n"
+            f"      NOW: {status}   |   score={score} edge={edge:.3f}\n"
+            f"      GROUPED SIGNALS: {cats_txt}\n"
+        )
 
     lines.append("")
     return "\n".join(lines)
@@ -3910,8 +3930,9 @@ def build_primary_brief(games, streaks, starters, game_date,
     )
     from batch.pipeline.score_game import format_aggregate_for_brief
 
-    all_picks   = []
-    no_signal   = []
+    evaluated_entries: list[dict] = []
+    all_picks: list[dict] = []
+    no_signal: list[dict] = []
 
     for game in games:
         sigs = evaluate_signals(
@@ -3924,6 +3945,7 @@ def build_primary_brief(games, streaks, starters, game_date,
             "starter": starter_line(game, starters),
             "streak":  streak_line(game, streaks),
         }
+        evaluated_entries.append(entry)
         best_score = int(sigs.get("best_aggregate_score") or 0)
         if best_score >= 5:
             all_picks.append(entry)
@@ -4011,7 +4033,7 @@ def build_primary_brief(games, streaks, starters, game_date,
     if conn is not None and session is not None:
         prior_picks = load_todays_prior_sessions(conn, game_date, session)
         tracker_block = build_signal_tracker_block(
-            prior_picks, all_picks, streaks, session
+            prior_picks, evaluated_entries, streaks, session
         )
         if tracker_block:
             lines.append(tracker_block)
