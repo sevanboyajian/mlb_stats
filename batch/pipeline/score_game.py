@@ -823,7 +823,7 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
             f"{s.signal_id}({'Y' if s.fires else 'n'}):{int(s.confidence_score or 0)}"
             for s in scored_signals
         ]
-        print(f"[DEBUG BEFORE FILTER] {game_pk}: signals={dbg_signals}")
+        print(f"[DEBUG BEFORE FILTER] game={game_pk} signals={dbg_signals}")
         score = sum(int(s.confidence_score or 0) for s in scored_signals if bool(s.fires))
         print(f"[DEBUG] {game_pk}: final_score={score}")
         print(f"[DEBUG FINAL SCORE] game={game_pk} score={score}")
@@ -847,7 +847,7 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
             for s in buckets[side]:
                 after.append(f"{s.signal_id}({side}):{int(s.confidence_score or 0)}")
         dbg_signals = after
-        print(f"[DEBUG AFTER FILTER] {game_pk}: signals={dbg_signals}")
+        print(f"[DEBUG AFTER FILTER] game={game_pk} signals={dbg_signals}")
 
     aggregated_scores: dict[str, int] = {}
     for side, sigs in buckets.items():
