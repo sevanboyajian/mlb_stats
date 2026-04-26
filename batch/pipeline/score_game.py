@@ -357,7 +357,13 @@ def _eval_lhp_fade(
     )
     fires = core
 
-    era_booster = away.quality_tier == "strong"
+    # Prefer WMA ERA when available; fall back to quality_tier
+    if away.era_wma is not None:
+        era_booster = float(away.era_wma) <= 3.04
+        era_source = "WMA"
+    else:
+        era_booster = away.quality_tier == "strong"
+        era_source = "season"
     ops_val = (
         home_off.rolling_ops_wma
         if home_off.rolling_ops_wma is not None
@@ -368,8 +374,9 @@ def _eval_lhp_fade(
     ops_label = "WMA" if home_off.rolling_ops_wma is not None else "rolling"
     booster_txt = []
     if era_booster:
+        era_wma_disp = f"{away.era_wma:.2f}" if away.era_wma is not None else "N/A"
         booster_txt.append(
-            f"Confidence: away SP quality_tier=strong (ERA gate aligned with legacy NF4)."
+            f"Confidence: away SP ERA {era_source} gate met (<=3.04, era_wma={era_wma_disp})."
         )
     if ops_booster:
         booster_txt.append(
@@ -410,7 +417,7 @@ def _eval_lhp_fade(
     rl_finding: SignalFinding | None = None
     # Supplementary RL — only when ERA gate confirmed and RL odds are present.
     if (
-        away.quality_tier == "strong"
+        era_booster
         and mkt.rl_available
         and mkt.away_rl_odds is not None
     ):
@@ -654,8 +661,14 @@ def _compute_confidence_score(
     if signal_id in ("LHP_FADE", "NF4"):
         away_sp = fdg.matchup.away_sp
         home_off = fdg.matchup.home_offense
-        if away_sp.quality_tier == "strong":
-            mods.append(("away SP ERA gate met (<=3.04)", +1))
+        if away_sp.era_wma is not None:
+            era_gate_met = float(away_sp.era_wma) <= 3.04
+            era_src_label = "WMA"
+        else:
+            era_gate_met = away_sp.quality_tier == "strong"
+            era_src_label = "season"
+        if era_gate_met:
+            mods.append((f"away SP ERA {era_src_label} gate met (<=3.04)", +1))
         ops_min = gdb.NF4_OPS_MIN
         ops_val = (
             home_off.rolling_ops_wma
