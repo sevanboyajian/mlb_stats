@@ -803,7 +803,7 @@ def build_data_completeness(
         gaps.append("no current total line")
     if not matchup.away_sp.hand_confirmed:
         gaps.append("away starter hand unknown")
-    if not matchup.home_offense.stats_valid:
+    if not matchup.home_offense.stats_valid and matchup.home_offense.rolling_ops_wma is None:
         gaps.append("home rolling offense window < 5 games (confidence penalty)")
     if market.market_confidence == "none":
         gaps.append("no usable market odds")
@@ -862,7 +862,7 @@ def dress_full_game_row(con: sqlite3.Connection, row: dict[str, Any]) -> FullyDr
 
     platoon = (
         away_sp.hand == "L"
-        and home_off.stats_valid
+        and (home_off.stats_valid or home_off.rolling_ops_wma is not None)
         and away_sp.hand_confirmed
     )
 
