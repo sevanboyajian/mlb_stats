@@ -358,10 +358,14 @@ def _eval_lhp_fade(
     fires = core
 
     era_booster = away.quality_tier == "strong"
-    ops_booster = (
-        home_off.rolling_ops is not None
-        and float(home_off.rolling_ops) >= gdb.NF4_OPS_MIN
+    ops_val = (
+        home_off.rolling_ops_wma
+        if home_off.rolling_ops_wma is not None
+        else home_off.rolling_ops
     )
+    ops_min = gdb.NF4_OPS_MIN
+    ops_booster = ops_val is not None and float(ops_val) >= ops_min
+    ops_label = "WMA" if home_off.rolling_ops_wma is not None else "rolling"
     booster_txt = []
     if era_booster:
         booster_txt.append(
@@ -369,7 +373,7 @@ def _eval_lhp_fade(
         )
     if ops_booster:
         booster_txt.append(
-            f"Confidence: home rolling OPS ≥ {gdb.NF4_OPS_MIN} (legacy NF4 OPS gate)."
+            f"Confidence: home {ops_label} OPS ≥ {ops_min} (legacy NF4 OPS gate)."
         )
     dual = era_booster and ops_booster
     if dual:
@@ -653,8 +657,15 @@ def _compute_confidence_score(
         if away_sp.quality_tier == "strong":
             mods.append(("away SP ERA gate met (<=3.04)", +1))
         ops_min = gdb.NF4_OPS_MIN
-        if home_off.rolling_ops is not None and float(home_off.rolling_ops) >= ops_min:
-            mods.append((f"home OPS gate met (>={ops_min})", +1))
+        ops_val = (
+            home_off.rolling_ops_wma
+            if home_off.rolling_ops_wma is not None
+            else home_off.rolling_ops
+        )
+        ops_booster = ops_val is not None and float(ops_val) >= ops_min
+        ops_label = "WMA" if home_off.rolling_ops_wma is not None else "rolling"
+        if ops_booster:
+            mods.append((f"home {ops_label} OPS gate met (>={ops_min})", +1))
         else:
             base = 6
         if game_month == 9:
