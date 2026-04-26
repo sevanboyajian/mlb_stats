@@ -233,10 +233,10 @@ def fetch_dressing_bundle(con: sqlite3.Connection, game_pk: int, game_date_et: s
     if "team_rolling_stats" in tabs:
         cur = con.execute(
             """
-            SELECT team_id, games_in_window, rolling_ops, rolling_ops_wma, rolling_ops_home, rolling_ops_road,
-                   rolling_runs_scored_pg, rolling_k_pct, rolling_iso, rolling_hr_pg
-            FROM team_rolling_stats
-            WHERE game_pk = ?
+            SELECT trs.team_id, trs.games_in_window, trs.rolling_ops, trs.rolling_ops_wma, trs.rolling_ops_home, trs.rolling_ops_road,
+                   trs.rolling_runs_scored_pg, trs.rolling_k_pct, trs.rolling_iso, trs.rolling_hr_pg
+            FROM team_rolling_stats trs
+            WHERE trs.game_pk = ?
             """,
             (game_pk,),
         )

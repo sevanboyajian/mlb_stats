@@ -3327,7 +3327,6 @@ def evaluate_signals(
     When ``debug_wind`` is True, prints a wind classification dump per game (DB vs dressed env).
     """
     from batch.pipeline.score_game import score_game, scored_game_to_eval_dict
-    from batch.pipeline.dressed_game_blocks import SignalFinding
 
     if conn is None:
         raise TypeError("evaluate_signals requires a sqlite3.Connection (conn)")
@@ -3365,37 +3364,6 @@ def evaluate_signals(
         try:
             gd = fdg.identifiers.game_date_et
             game_month = int(gd[5:7]) if len(gd) >= 7 else 0
-            # Guarantee a non-empty "signals" list on the dressed game for debugging.
-            # These placeholders do NOT create a real model edge because they do not fire and have no bet_side.
-            if not list(getattr(fdg, "signals", None) or []):
-                neutral_ids: list[str] = []
-                try:
-                    gaps = list(getattr(fdg, "completeness", None).gaps or [])
-                except Exception:
-                    gaps = []
-                gaps_txt = " | ".join(str(x).lower() for x in gaps)
-                if ("wind direction unknown" in gaps_txt) or bool(getattr(fdg.environment, "is_wind_suppressed", False)):
-                    neutral_ids.append("wind_neutral")
-                if ("offense window" in gaps_txt) or ("rolling offense window" in gaps_txt):
-                    neutral_ids.append("offense_unknown")
-                if ("ml odds missing" in gaps_txt) or ("no ml" in gaps_txt):
-                    neutral_ids.append("odds_unknown")
-                if not neutral_ids:
-                    neutral_ids = ["baseline"]
-                fdg = _dc_replace(
-                    fdg,
-                    signals=[
-                        SignalFinding(
-                            signal_id=sid,
-                            signal_strength="weak",
-                            bet_side="",
-                            odds="N/A",
-                            edge_basis="Neutral placeholder (debug-only).",
-                            fires=True,
-                        )
-                        for sid in neutral_ids
-                    ],
-                )
             if os.getenv("DEBUG_SCORE_GAME") == "1":
                 try:
                     game_pk = int(game.get("game_pk"))
