@@ -3500,9 +3500,23 @@ def evaluate_signals(
             game_pk = int(game.get("game_pk"))
         except Exception:
             game_pk = -1
+        # If no fired signals exist, emit neutral "unknown" tags based on data gaps.
+        # This is for debugging visibility only; it does not change scoring/picks.
         raw_signals = list(out.get("signal_ids") or [])
         if not raw_signals:
-            raw_signals = ["baseline"]
+            neutral: list[str] = []
+            try:
+                gaps = list(getattr(fdg, "completeness", None).gaps or []) if fdg is not None else []
+            except Exception:
+                gaps = []
+            gaps_txt = " | ".join(str(x).lower() for x in gaps)
+            if ("wind direction unknown" in gaps_txt) or (fdg is not None and bool(getattr(fdg.environment, "is_wind_suppressed", False))):
+                neutral.append("wind_neutral")
+            if ("offense window" in gaps_txt) or ("rolling offense window" in gaps_txt):
+                neutral.append("offense_unknown")
+            if ("ml odds missing" in gaps_txt) or ("no ml" in gaps_txt):
+                neutral.append("odds_unknown")
+            raw_signals = neutral or ["baseline"]
         print(f"[DEBUG SIGNAL GEN FINAL] game={game_pk} signals={raw_signals}")
 
     return out
