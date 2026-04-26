@@ -811,7 +811,8 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
         sig.score_basis = basis
         scored_signals.append(sig)
         if os.getenv("DEBUG_SCORE_GAME") == "1":
-            print(f"[DEBUG SCORING] game={game_pk} applying signal={sig.signal_id}")
+            signal = sig.signal_id
+            print(f"[DEBUG SCORING] game={game_pk} applying signal={signal}")
 
     if os.getenv("DEBUG_SCORE_GAME") == "1":
         try:
@@ -823,9 +824,9 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
             for s in scored_signals
         ]
         print(f"[DEBUG BEFORE FILTER] {game_pk}: signals={dbg_signals}")
-        dbg_final_score = sum(int(s.confidence_score or 0) for s in scored_signals if bool(s.fires))
-        print(f"[DEBUG] {game_pk}: final_score={dbg_final_score}")
-        print(f"[DEBUG FINAL SCORE] game={game_pk} score={dbg_final_score}")
+        score = sum(int(s.confidence_score or 0) for s in scored_signals if bool(s.fires))
+        print(f"[DEBUG] {game_pk}: final_score={score}")
+        print(f"[DEBUG FINAL SCORE] game={game_pk} score={score}")
 
     # --- Aggregate by bet side ---
     buckets: dict[str, list[SignalFinding]] = {}
