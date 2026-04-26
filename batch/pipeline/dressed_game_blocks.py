@@ -494,6 +494,7 @@ def _build_team_offense_from_rows(
     return TeamOffenseProfile(
         team_id=team_id,
         rolling_ops=f("rolling_ops"),
+        rolling_ops_wma=float(row["rolling_ops_wma"]) if row["rolling_ops_wma"] is not None else None,
         rolling_ops_home=f("rolling_ops_home"),
         rolling_ops_road=f("rolling_ops_road"),
         rolling_runs_pg=f("rolling_runs_scored_pg"),
