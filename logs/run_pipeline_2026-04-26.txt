@@ -250,3 +250,17 @@ KeyboardInterrupt
 [job] start_et=2026-04-26 15:37:29 ET (claimed)
 [job] end_et=2026-04-26 15:37:30 ET status=complete rc=0
 [run_pipeline] sleep-until-due: next pending at 2026-04-26 17:50 ET (~7980s)
+
+[job] id=1037 type=odds_pull job_date_et=2026-04-26 game_group_id=5 scheduled_time=2026-04-26 17:50 ET
+[job] command='python batch/ingestion/load_odds.py --pregame --markets game --date 2026-04-26'
+[job] context: group_id=5 window=[2026-04-26 17:45 ET -> 2026-04-26 17:55 ET]
+[job] start_et=2026-04-26 17:50:30 ET (claimed)
+[job] end_et=2026-04-26 17:50:31 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-04-26 17:55 ET (~300s)
+
+[job] id=1042 type=odds_check job_date_et=2026-04-26 game_group_id=5 scheduled_time=2026-04-26 17:55 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-04-26'
+[job] context: group_id=5 window=[2026-04-26 17:45 ET -> 2026-04-26 18:00 ET]
+[job] start_et=2026-04-26 17:55:31 ET (claimed)
+[job] end_et=2026-04-26 17:55:31 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-04-26 18:35 ET (~2400s)
