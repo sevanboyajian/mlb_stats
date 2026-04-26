@@ -90,6 +90,10 @@ SIGNAL_BASE_SCORE: dict[str, int] = {
     "baseline": 1,
 }
 
+# Debug/visibility weights: default to base score table.
+# Used only for printing/apply-tracing (model still uses confidence_score).
+SIGNAL_WEIGHTS: dict[str, int] = dict(SIGNAL_BASE_SCORE)
+
 # Default bet_side mapping for fired signals that accidentally omit bet_side.
 # This prevents "wipeout" during bucketing while still keeping market separation intact.
 SIGNAL_DEFAULT_BET_SIDE: dict[str, str] = {
@@ -813,6 +817,7 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
 
     # --- Score all signals (no fires gate) ---
     scored_signals: list[SignalFinding] = []
+    dbg_weight_score = 0
     for sig in all_signals:
         hostile = _is_hostile_environment(g, sig)
 
@@ -833,6 +838,10 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
         if os.getenv("DEBUG_SCORE_GAME") == "1":
             signal = sig.signal_id
             print(f"[DEBUG SCORING] game={game_pk} applying signal={signal}")
+            applied = int(SIGNAL_WEIGHTS.get(str(signal), 0))
+            print(f"[DEBUG APPLY] {signal} → {applied}")
+            if bool(sig.fires):
+                dbg_weight_score += applied
 
     if os.getenv("DEBUG_SCORE_GAME") == "1":
         try:
@@ -847,6 +856,7 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
         score = sum(int(s.confidence_score or 0) for s in scored_signals if bool(s.fires))
         print(f"[DEBUG] {game_pk}: final_score={score}")
         print(f"[DEBUG FINAL SCORE] game={game_pk} score={score}")
+        print(f"[DEBUG WEIGHT SCORE] game={game_pk} score={dbg_weight_score}")
 
     # --- Aggregate by bet side ---
     buckets: dict[str, list[SignalFinding]] = {}
