@@ -3483,8 +3483,8 @@ def evaluate_signals(
             game_pk = int(game.get("game_pk"))
         except Exception:
             game_pk = -1
-        signals = list(out.get("signal_ids") or [])
-        print(f"[DEBUG SIGNAL GEN] game={game_pk} signals={signals}")
+        raw_signals = list(out.get("signal_ids") or [])
+        print(f"[DEBUG SIGNAL GEN] game={game_pk} raw_signals={raw_signals}")
 
     return out
 
