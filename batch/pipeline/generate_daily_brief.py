@@ -3366,19 +3366,34 @@ def evaluate_signals(
             gd = fdg.identifiers.game_date_et
             game_month = int(gd[5:7]) if len(gd) >= 7 else 0
             # Guarantee a non-empty "signals" list on the dressed game for debugging.
-            # This does NOT create a real model edge because it does not fire and has no bet_side impact.
+            # These placeholders do NOT create a real model edge because they do not fire and have no bet_side.
             if not list(getattr(fdg, "signals", None) or []):
+                neutral_ids: list[str] = []
+                try:
+                    gaps = list(getattr(fdg, "completeness", None).gaps or [])
+                except Exception:
+                    gaps = []
+                gaps_txt = " | ".join(str(x).lower() for x in gaps)
+                if ("wind direction unknown" in gaps_txt) or bool(getattr(fdg.environment, "is_wind_suppressed", False)):
+                    neutral_ids.append("wind_neutral")
+                if ("offense window" in gaps_txt) or ("rolling offense window" in gaps_txt):
+                    neutral_ids.append("offense_unknown")
+                if ("ml odds missing" in gaps_txt) or ("no ml" in gaps_txt):
+                    neutral_ids.append("odds_unknown")
+                if not neutral_ids:
+                    neutral_ids = ["baseline"]
                 fdg = _dc_replace(
                     fdg,
                     signals=[
                         SignalFinding(
-                            signal_id="baseline",
+                            signal_id=sid,
                             signal_strength="weak",
                             bet_side="",
                             odds="N/A",
-                            edge_basis="Baseline placeholder (debug-only).",
+                            edge_basis="Neutral placeholder (debug-only).",
                             fires=False,
                         )
+                        for sid in neutral_ids
                     ],
                 )
             if os.getenv("DEBUG_SCORE_GAME") == "1":
@@ -4614,6 +4629,19 @@ def build_primary_brief(games, streaks, starters, game_date,
             conn, game, streaks, "primary", starters,
             verbose=verbose, debug_wind=debug_wind,
         )
+        if os.getenv("DEBUG_SCORE_GAME") == "1":
+            try:
+                game_pk = int(game.get("game_pk"))
+            except Exception:
+                game_pk = -1
+            signals = list(sigs.get("signal_ids") or []) or list(sigs.get("_debug_raw_signals") or [])
+            if not signals:
+                try:
+                    sg = sigs.get("_scored_game")
+                    signals = [getattr(s, "signal_id", str(s)) for s in (getattr(getattr(sg, "game", None), "signals", None) or [])]
+                except Exception:
+                    signals = []
+            print(f"[DEBUG AFTER GEN] game={game_pk} signals={signals}")
         entry = {
             "game":    game,
             "sigs":    sigs,
