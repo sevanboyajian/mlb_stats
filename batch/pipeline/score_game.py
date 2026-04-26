@@ -844,8 +844,11 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
 
     # --- Aggregate by bet side ---
     buckets: dict[str, list[SignalFinding]] = {}
+    bypass_filter = os.getenv("BYPASS_SIGNAL_FILTER") == "1"
+    if bypass_filter:
+        extra_flags.append("BYPASS_SIGNAL_FILTER=1 (debug): bucketing includes non-firing signals")
     for sig in scored_signals:
-        if not bool(sig.fires):
+        if (not bypass_filter) and (not bool(sig.fires)):
             continue
         if not sig.bet_side:
             # Never eliminate fired signals purely due to missing bet_side.
