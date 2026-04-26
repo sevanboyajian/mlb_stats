@@ -264,3 +264,10 @@ KeyboardInterrupt
 [job] start_et=2026-04-26 17:55:31 ET (claimed)
 [job] end_et=2026-04-26 17:55:31 ET status=complete rc=0
 [run_pipeline] sleep-until-due: next pending at 2026-04-26 18:35 ET (~2400s)
+
+[job] id=1047 type=weather job_date_et=2026-04-26 game_group_id=5 scheduled_time=2026-04-26 18:35 ET
+[job] command='python batch/ingestion/load_weather.py --date 2026-04-26'
+[job] context: group_id=5 window=[2026-04-26 18:20 ET -> 2026-04-26 18:50 ET]
+[job] start_et=2026-04-26 18:35:31 ET (claimed)
+[job] end_et=2026-04-26 18:35:46 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-04-26 18:50 ET (~900s)
