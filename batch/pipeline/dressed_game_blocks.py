@@ -233,14 +233,54 @@ def fetch_dressing_bundle(con: sqlite3.Connection, game_pk: int, game_date_et: s
     if "team_rolling_stats" in tabs:
         cur = con.execute(
             """
-            SELECT trs.team_id, trs.games_in_window, trs.rolling_ops, trs.rolling_ops_wma, trs.rolling_ops_home, trs.rolling_ops_road,
-                   trs.rolling_runs_scored_pg, trs.rolling_k_pct, trs.rolling_iso, trs.rolling_hr_pg
+            SELECT trs.team_id, trs.games_in_window, trs.rolling_ops,
+                   trs.rolling_ops_wma, trs.rolling_ops_home, trs.rolling_ops_road,
+                   trs.rolling_runs_scored_pg, trs.rolling_k_pct,
+                   trs.rolling_iso, trs.rolling_hr_pg
             FROM team_rolling_stats trs
             WHERE trs.game_pk = ?
             """,
             (game_pk,),
         )
         trs_rows = [dict(r) for r in cur.fetchall()]
+
+        # Fallback: if no TRS rows exist for today's game_pk (rolling stats builder
+        # hasn't run yet), fetch the most recent available row per team from the
+        # games table so we know which teams are playing today.
+        if not trs_rows:
+            cur = con.execute(
+                """
+                SELECT g.home_team_id, g.away_team_id
+                FROM games g
+                WHERE g.game_pk = ?
+                """,
+                (game_pk,),
+            )
+            game_row = cur.fetchone()
+            if game_row:
+                team_ids = [int(game_row[0]), int(game_row[1])]
+                fallback_rows: list[dict[str, Any]] = []
+                for tid in team_ids:
+                    cur = con.execute(
+                        """
+                        SELECT trs.team_id, trs.games_in_window, trs.rolling_ops,
+                               trs.rolling_ops_wma, trs.rolling_ops_home,
+                               trs.rolling_ops_road, trs.rolling_runs_scored_pg,
+                               trs.rolling_k_pct, trs.rolling_iso, trs.rolling_hr_pg
+                        FROM team_rolling_stats trs
+                        JOIN games g ON g.game_pk = trs.game_pk
+                        WHERE trs.team_id = ?
+                          AND g.game_date_et < ?
+                          AND g.game_type = 'R'
+                        ORDER BY g.game_date_et DESC, trs.game_pk DESC
+                        LIMIT 1
+                        """,
+                        (tid, game_date_et),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        fallback_rows.append(dict(row))
+                trs_rows = fallback_rows
 
     pids = sorted({int(r["player_id"]) for r in starter_rows})
     if pids and "player_game_stats" in tabs:
