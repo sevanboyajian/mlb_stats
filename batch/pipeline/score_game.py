@@ -83,6 +83,11 @@ SIGNAL_BASE_SCORE: dict[str, int] = {
     "S1": 5,
     "H3b": 3,
     "NF4": 3,
+    # Neutral / fallback placeholders (debug + robustness).
+    "offense_unknown": 1,
+    "wind_neutral": 1,
+    "odds_unknown": 1,
+    "baseline": 1,
 }
 
 # Default bet_side mapping for fired signals that accidentally omit bet_side.
@@ -793,7 +798,8 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
     s1 = _eval_s1(g, home_streak, s1h2_fired)
     h3b = _eval_h3b(g, mvb.fires)
 
-    all_signals = [s1h2, mvf, *lhp_findings, mvb, s1, h3b]
+    incoming = list(getattr(g, "signals", None) or [])
+    all_signals = [*incoming, s1h2, mvf, *lhp_findings, mvb, s1, h3b]
     avoids = _eval_avoids(g)
     blocked = [f for f in all_signals if not f.fires]
 
@@ -1022,6 +1028,10 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
         model_p = max(0.50, float(model_p) - float(confidence_penalty))
     implied_p = american_to_implied_prob(int(odds) if odds is not None else None)
     edge = compute_edge(model_p, implied_p)
+    if os.getenv("DEBUG_SCORE_GAME") == "1":
+        mp_txt = f"{float(model_p):.2f}" if model_p is not None else "NA"
+        ed_txt = f"{float(edge):.2f}" if edge is not None else "NA"
+        print(f"[DEBUG EDGE] game={game_pk} score={int(best_score)} model_p={mp_txt} edge={ed_txt}")
 
     # 3) Decide whether to bet — EDGE is necessary, plus minimum signal diversity.
     # Diversity rule: need at least one matchup-based and one context-based driver.

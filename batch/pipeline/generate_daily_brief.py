@@ -3391,7 +3391,7 @@ def evaluate_signals(
                             bet_side="",
                             odds="N/A",
                             edge_basis="Neutral placeholder (debug-only).",
-                            fires=False,
+                            fires=True,
                         )
                         for sid in neutral_ids
                     ],

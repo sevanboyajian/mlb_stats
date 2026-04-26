@@ -778,14 +778,16 @@ def build_data_completeness(
     no_ml = market.home_ml_current is None
     no_total = market.total_current is None
 
-    # Per-signal gating only (partial evaluation allowed):
-    # - wind unknown -> suppress wind-dependent signals only
-    # - missing ML -> suppress ML-dependent signals only
-    # - missing totals -> suppress total-dependent signals only
-    mvf = no_ml or wind_unknown
-    mvb = mvf
-    h3b = no_total or wind_unknown
-    s1h2 = no_ml
+    # Partial evaluation policy:
+    # Warnings (wind unknown, short offense window, starter hand unknown) should
+    # NOT hard-suppress signal creation. Keep these as confidence penalties via gaps
+    # (score_game applies confidence_penalty and per-signal score modifiers).
+    #
+    # Only hard-block when market context is truly unusable (no odds).
+    mvf = bool(market.market_confidence == "none")
+    mvb = bool(market.market_confidence == "none")
+    h3b = bool(market.market_confidence == "none")
+    s1h2 = bool(market.market_confidence == "none")
     # Offense window <5 should reduce confidence, not block the model.
     # Keep LHP blocked only for truly missing critical inputs (hand/odds).
     lhp = (not matchup.away_sp.hand_confirmed) or (market.market_confidence == "none")
