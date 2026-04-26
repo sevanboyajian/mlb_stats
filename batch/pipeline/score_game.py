@@ -1036,6 +1036,9 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
     model_p = score_to_model_prob(int(best_score))
     if model_p is not None and confidence_penalty > 0:
         model_p = max(0.50, float(model_p) - float(confidence_penalty))
+    if os.getenv("DEBUG_SCORE_GAME") == "1":
+        mp_txt = f"{float(model_p):.3f}" if model_p is not None else "NA"
+        print(f"[DEBUG MODEL_P] score={int(best_score)} \u2192 model_p={mp_txt}")
     implied_p = american_to_implied_prob(int(odds) if odds is not None else None)
     edge = compute_edge(model_p, implied_p)
     if os.getenv("DEBUG_SCORE_GAME") == "1":
