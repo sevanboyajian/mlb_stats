@@ -23,7 +23,7 @@
 --  TABLE ORDER (dependency safe):
 --    1. Reference     : seasons, venues, teams, players
 --    2. Schedule      : games, game_probable_pitchers
---    3. Stats         : player_game_stats, play_by_play, standings, team_rolling_stats
+--    3. Stats         : player_game_stats, pitcher_rolling_stats, play_by_play, standings, team_rolling_stats
 --    4. Odds          : game_odds, game_odds_f5, player_props, line_movement
 --    5. Backtesting   : model_predictions, backtest_results
 --    6. Operations    : ingest_log, odds_ingest_log, signal_state, bet_ledger,
@@ -342,6 +342,33 @@ CREATE INDEX IF NOT EXISTS idx_pgs_team     ON player_game_stats (team_id);
 CREATE INDEX IF NOT EXISTS idx_pgs_role     ON player_game_stats (player_role);
 CREATE INDEX IF NOT EXISTS idx_pgs_player_season
     ON player_game_stats (player_id, game_pk);
+
+
+-- ------------------------------------------------------------
+-- pitcher_rolling_stats
+-- One row per (player_id, game_pk): pitcher WMA form entering
+-- that game. Populated by build_pitcher_wma.py.
+-- Starters only (innings_pitched >= 3.0 in qualifying starts).
+-- WMA weights: G-1=5, G-2=4, G-3=3, G-4=2, G-5=1 (div=15).
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS pitcher_rolling_stats (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    player_id       INTEGER NOT NULL REFERENCES players (player_id),
+    game_pk         INTEGER NOT NULL REFERENCES games (game_pk),
+    game_date_et    DATE    NOT NULL,
+    season          INTEGER NOT NULL,
+    team_id         INTEGER NOT NULL REFERENCES teams (team_id),
+    starts_in_window INTEGER NOT NULL DEFAULT 0,
+    era_wma         REAL,
+    k_per_9_wma     REAL,
+    whip_wma        REAL,
+    updated_at      DATETIME NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (player_id, game_pk)
+);
+
+CREATE INDEX IF NOT EXISTS idx_prs_player ON pitcher_rolling_stats (player_id);
+CREATE INDEX IF NOT EXISTS idx_prs_game   ON pitcher_rolling_stats (game_pk);
+CREATE INDEX IF NOT EXISTS idx_prs_date   ON pitcher_rolling_stats (game_date_et);
 
 
 -- ------------------------------------------------------------
