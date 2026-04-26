@@ -47,6 +47,8 @@ CHANGE LOG (latest first)
 2026-04-19  job_type ``load_weather`` → ``load_weather.py --date`` (morning global: wind +
             probable starters after ``load_today``). Deps: ``day_setup`` / ``prior_report`` /
             ``early_peek`` / ``group_brief`` wait on ``load_weather`` where applicable.
+2026-04-26  Global ``build_team_wma`` (after ``stats_pull``); ``early_peek`` / ``prior_report`` wait
+            on it. ``group_brief`` does not (``--groups-only`` slates skip morning globals).
 2026-04-19  --sleep-until-due: when idle (or all due rows skipped on deps), sleep until the
             next pending ``scheduled_time_et`` instead of fixed polling; optional ``--job-date-et``
             scopes next-wake MIN query; ``--exit-when-no-pending`` exits when nothing pending.
@@ -172,6 +174,16 @@ class _TeeTextIO:
 
 def _utc_now_iso_z() -> str:
     return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _wma_seasons_for_job_date(job_date: str) -> str:
+    """``build_team_wma --seasons`` — calendar year and prior (e.g. 2025 2026 for 2026 slates)."""
+    jd = (job_date or "").strip()
+    if len(jd) >= 4 and jd[:4].isdigit():
+        y = int(jd[:4])
+    else:
+        y = dt.date.today().year
+    return f"{y - 1} {y}"
 
 
 def _utc_iso_z_to_et_log_str(utc_iso_z: str) -> str:
@@ -704,6 +716,7 @@ def _build_command(job: dict) -> str:
     pipeline_jobs definitions are job_type-driven (no 'command' column).
 
     Scheduling jobs (see batch/jobs/schedule_pipeline_day.py):
+    - build_team_wma: morning global — 5-game rolling OPS WMA into team_rolling_stats (after stats_pull).
     - load_weather: morning global — Open-Meteo wind + MLB probable starters (after load_today).
     - day_setup: morning pass — only per-group jobs for this slate date (--groups-only).
     - schedule_next_day_globals: evening pass — only next day's group-0 globals
@@ -723,8 +736,10 @@ def _build_command(job: dict) -> str:
     # Note: commands intentionally simple; no parallelism.
     # If a job requires additional parameters later, extend this mapping only.
     # day_setup / schedule_next_day_globals: must match schedule_pipeline_day.py modes.
+    seasons_wma = _wma_seasons_for_job_date(job_date or today_iso)
     mapping: dict[str, str] = {
         "stats_pull": "python batch/ingestion/load_mlb_stats.py",
+        "build_team_wma": f"python -m batch.pipeline.build_team_wma --seasons {seasons_wma}",
         "load_today": f"python batch/ingestion/load_today.py --date {job_date}" if job_date else "python batch/ingestion/load_today.py",
         "load_weather": (
             f"python batch/ingestion/load_weather.py --date {job_date}"
@@ -831,14 +846,15 @@ def _dependency_rules() -> dict[str, list[str]]:
     """
     return {
         # load_today must complete before any game-based jobs
+        "build_team_wma": ["stats_pull"],
         "load_weather": ["load_today"],
         "day_setup": ["load_weather"],
         "odds_pull": ["load_today"],
         "odds_check": ["load_today", "odds_pull"],
         "weather": ["load_today"],
         # odds pulls must complete before brief generation; morning load_weather fills wind + starters
-        "prior_report": ["load_weather"],
-        "early_peek": ["load_weather"],
+        "prior_report": ["load_weather", "build_team_wma"],
+        "early_peek": ["load_weather", "build_team_wma"],
         "group_brief": ["load_today", "odds_pull", "load_weather"],
         "bet_ledger_sync": ["load_today"],
         "ledger_snapshot": ["load_today", "odds_pull"],

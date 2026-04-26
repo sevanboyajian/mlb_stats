@@ -70,11 +70,12 @@ Inserted for **`job_date_et`** (typical ET times):
 | Order | `job_type` | Scheduled (ET) |
 |-------|------------|----------------|
 | 1 | `stats_pull` | 06:00 |
-| 2 | `load_today` | 06:05 |
-| 3 | `load_weather` | 06:07 |
-| 4 | `day_setup` | 06:10 → runs **`--groups-only`** for same date |
-| 5 | `prior_report` | 06:15 |
-| 6 | `early_peek` | 06:20 |
+| 2 | `build_team_wma` | 06:02 — **5-prior-game** (not calendar-day) WMA of team OPS into `team_rolling_stats.rolling_ops_wma` |
+| 3 | `load_today` | 06:05 |
+| 4 | `load_weather` | 06:07 |
+| 5 | `day_setup` | 06:10 → runs **`--groups-only`** for same date |
+| 6 | `prior_report` | 06:15 |
+| 7 | `early_peek` | 06:20 |
 
 ### Per-group job types (after games exist)
 
@@ -134,6 +135,7 @@ Mappings live in **`_build_command()`** in `run_pipeline.py` (abbreviated):
 | `job_type` | Command (from repo root) |
 |------------|---------------------------|
 | `stats_pull` | `python batch/ingestion/load_mlb_stats.py` |
+| `build_team_wma` | `python -m batch.pipeline.build_team_wma --seasons Y-1 Y` (e.g. `2025 2026` for a 2026 slate; derived from `job_date_et`) |
 | `load_today` | `python batch/ingestion/load_today.py --date {job_date_et}` |
 | `load_weather` | `python batch/ingestion/load_weather.py --date {job_date_et}` |
 | `day_setup` | `python batch/jobs/schedule_pipeline_day.py --groups-only --date-et {job_date_et}` |
@@ -151,7 +153,9 @@ Mappings live in **`_build_command()`** in `run_pipeline.py` (abbreviated):
 
 Defined in **`_dependency_rules()`** — examples:
 
-- **`group_brief`** waits on **`load_today`**, **`odds_pull`**, **`load_weather`** (among others).
+- **`build_team_wma`** waits on **`stats_pull`**.
+- **`prior_report`** and **`early_peek`** wait on **`load_weather`** and **`build_team_wma`** so the brief reads an updated `rolling_ops_wma`. **`group_brief`** does **not** list **`build_team_wma`** (a **`--groups-only`** schedule omits morning globals; intraday briefs use WMA from the last successful morning run).
+- **`group_brief`** waits on **`load_today`**, **`odds_pull`**, **`load_weather`**.
 - **`bet_ledger_sync`** waits on **`load_today`**.
 - **`ledger_snapshot`** waits on **`load_today`**, **`odds_pull`**.
 

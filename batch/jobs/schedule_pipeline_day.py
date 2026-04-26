@@ -9,6 +9,8 @@ Console output is intentionally verbose so you can see exactly what it is doing.
 
 CHANGE LOG (latest first)
 ────────────────────────
+2026-04-26  Global ``build_team_wma`` (06:02 ET) after ``stats_pull``; ``run_pipeline`` wires deps so
+            ``early_peek`` / ``prior_report`` wait on ``build_team_wma`` (``group_brief`` does not — groups-only slates).
 2026-04-20  Word brief email delivery moved to ``generate_daily_brief.py`` via ``delivery.email_sender``
             (env ``BRIEF_EMAIL_TO`` + SMTP); pipeline no longer schedules ``email_job``.
 2026-04-17  ``_insert_global_job``: ET-first DBs have no ``scheduled_time`` column; branch like
@@ -374,7 +376,7 @@ def _normalize_and_dedupe_globals(con: sqlite3.Connection, *, job_date_et: str) 
             WHERE game_group_id IS NULL
               AND scheduled_time_et IS NOT NULL
               AND substr(scheduled_time_et, 1, 10) = ?
-              AND job_type IN ('stats_pull','load_today','load_weather','day_setup','early_peek','prior_report')
+              AND job_type IN ('stats_pull','build_team_wma','load_today','load_weather','day_setup','early_peek','prior_report')
             """,
             (job_date_et,),
         )
@@ -416,6 +418,7 @@ def _insert_global_daily_setup_jobs(con: sqlite3.Connection, *, job_date_et: str
     """Insert the fixed morning global jobs (group_id=0) for job_date_et."""
     g_ins = 0
     g_ins += _insert_global_job(con, job_date_et=job_date_et, job_type="stats_pull", scheduled_time_et=f"{job_date_et} 06:00 ET")
+    g_ins += _insert_global_job(con, job_date_et=job_date_et, job_type="build_team_wma", scheduled_time_et=f"{job_date_et} 06:02 ET")
     g_ins += _insert_global_job(con, job_date_et=job_date_et, job_type="load_today", scheduled_time_et=f"{job_date_et} 06:05 ET")
     g_ins += _insert_global_job(con, job_date_et=job_date_et, job_type="load_weather", scheduled_time_et=f"{job_date_et} 06:07 ET")
     g_ins += _insert_global_job(con, job_date_et=job_date_et, job_type="day_setup", scheduled_time_et=f"{job_date_et} 06:10 ET")
