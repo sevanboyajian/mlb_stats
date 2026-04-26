@@ -87,6 +87,7 @@ class TeamOffenseProfile:
     games_in_window: int
     ops_confidence: str
     stats_valid: bool
+    rolling_ops_wma: float | None = None
 
 
 @dataclass(frozen=True)
@@ -232,7 +233,7 @@ def fetch_dressing_bundle(con: sqlite3.Connection, game_pk: int, game_date_et: s
     if "team_rolling_stats" in tabs:
         cur = con.execute(
             """
-            SELECT team_id, games_in_window, rolling_ops, rolling_ops_home, rolling_ops_road,
+            SELECT team_id, games_in_window, rolling_ops, rolling_ops_wma, rolling_ops_home, rolling_ops_road,
                    rolling_runs_scored_pg, rolling_k_pct, rolling_iso, rolling_hr_pg
             FROM team_rolling_stats
             WHERE game_pk = ?
