@@ -72,6 +72,13 @@ class PitcherProfile:
     era_source: str
     era_confidence: str
     quality_tier: str | None
+    era_wma: float | None = None
+    k_per_9_wma: float | None = None
+    whip_wma: float | None = None
+
+
+# Backwards-compatible name (briefs / external prompts refer to "starter" profile).
+StarterProfile = PitcherProfile
 
 
 @dataclass(frozen=True)
