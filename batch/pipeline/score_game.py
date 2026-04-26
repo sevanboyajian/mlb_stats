@@ -85,6 +85,20 @@ SIGNAL_BASE_SCORE: dict[str, int] = {
     "NF4": 3,
 }
 
+# Default bet_side mapping for fired signals that accidentally omit bet_side.
+# This prevents "wipeout" during bucketing while still keeping market separation intact.
+SIGNAL_DEFAULT_BET_SIDE: dict[str, str] = {
+    "S1H2": "away_ml",
+    "S1+H2": "away_ml",
+    "MV-F": "away_ml",
+    "LHP_FADE": "away_ml",
+    "LHP_FADE_RL": "away_rl",
+    "NF4": "away_ml",
+    "S1": "away_ml",
+    "MV-B": "over_total",
+    "H3b": "over_total",
+}
+
 # Short reader-facing names for briefs (no internal codes shown to end users)
 SIGNAL_DISPLAY_NAME: dict[str, str] = {
     "S1H2": "Streak Fade",
@@ -834,7 +848,15 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
         if not bool(sig.fires):
             continue
         if not sig.bet_side:
-            continue
+            # Never eliminate fired signals purely due to missing bet_side.
+            # Assign a conservative default so aggregation/market eval can proceed.
+            fallback = SIGNAL_DEFAULT_BET_SIDE.get(str(sig.signal_id or "").strip())
+            if fallback:
+                sig.bet_side = fallback
+                extra_flags.append(f"bet_side missing for {sig.signal_id}; defaulted to {fallback}")
+            else:
+                extra_flags.append(f"bet_side missing for {sig.signal_id}; dropped from aggregation")
+                continue
         buckets.setdefault(sig.bet_side, []).append(sig)
 
     if os.getenv("DEBUG_SCORE_GAME") == "1":
