@@ -44,6 +44,7 @@ _OPTIONAL_TABLES = (
     "game_probable_pitchers",
     "player_game_stats",
     "team_rolling_stats",
+    "pitcher_rolling_stats",
     "game_odds",
 )
 
@@ -57,6 +58,7 @@ class DressingBundle:
     starter_rows: list[dict[str, Any]]
     team_rolling_rows: list[dict[str, Any]]
     pitcher_prior_rows: list[dict[str, Any]]
+    pitcher_wma_rows: list[dict[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -208,6 +210,7 @@ def fetch_dressing_bundle(con: sqlite3.Connection, game_pk: int, game_date_et: s
     starter_rows: list[dict[str, Any]] = []
     trs_rows: list[dict[str, Any]] = []
     pgs_rows: list[dict[str, Any]] = []
+    pitcher_wma_rows: list[dict[str, Any]] = []
 
     if "game_odds" in tabs:
         cur = con.execute(
@@ -236,6 +239,22 @@ def fetch_dressing_bundle(con: sqlite3.Connection, game_pk: int, game_date_et: s
             (game_pk,),
         )
         starter_rows = [dict(r) for r in cur.fetchall()]
+
+    if "pitcher_rolling_stats" in tabs:
+        pids = [int(r["player_id"]) for r in starter_rows]
+        if pids:
+            ph = ",".join("?" * len(pids))
+            cur = con.execute(
+                f"""
+                SELECT prs.player_id, prs.era_wma, prs.k_per_9_wma, prs.whip_wma
+                FROM pitcher_rolling_stats prs
+                JOIN games g ON g.game_pk = prs.game_pk
+                WHERE prs.player_id IN ({ph})
+                  AND prs.game_pk = ?
+                """,
+                (*pids, game_pk),
+            )
+            pitcher_wma_rows = [dict(r) for r in cur.fetchall()]
 
     if "team_rolling_stats" in tabs:
         cur = con.execute(
@@ -321,6 +340,7 @@ def fetch_dressing_bundle(con: sqlite3.Connection, game_pk: int, game_date_et: s
         starter_rows=starter_rows,
         team_rolling_rows=trs_rows,
         pitcher_prior_rows=pgs_rows,
+        pitcher_wma_rows=pitcher_wma_rows,
     )
 
 
@@ -449,6 +469,7 @@ def _pitcher_profile_missing() -> PitcherProfile:
 def _pitcher_profile_from_starter_row(
     starter_row: dict[str, Any] | None,
     era_roll: tuple[float | None, int],
+    bundle: DressingBundle | None = None,
 ) -> PitcherProfile:
     if starter_row is None:
         return _pitcher_profile_missing()
@@ -482,6 +503,15 @@ def _pitcher_profile_from_starter_row(
 
     qt = _quality_tier_from_era(era_quality, era_confidence)
 
+    # Attach pitcher WMA if available
+    wma_lookup = {int(r["player_id"]): r for r in (bundle.pitcher_wma_rows if bundle else [])}
+    wma = wma_lookup.get(pid)
+    era_wma = float(wma["era_wma"]) if wma and wma.get("era_wma") is not None else None
+    k_per_9_wma = (
+        float(wma["k_per_9_wma"]) if wma and wma.get("k_per_9_wma") is not None else None
+    )
+    whip_wma = float(wma["whip_wma"]) if wma and wma.get("whip_wma") is not None else None
+
     return PitcherProfile(
         player_id=pid,
         name=name,
@@ -494,6 +524,9 @@ def _pitcher_profile_from_starter_row(
         era_source=era_source,
         era_confidence=era_confidence,
         quality_tier=qt,
+        era_wma=era_wma,
+        k_per_9_wma=k_per_9_wma,
+        whip_wma=whip_wma,
     )
 
 
@@ -902,8 +935,8 @@ def dress_full_game_row(con: sqlite3.Connection, row: dict[str, Any]) -> FullyDr
     home_roll = rolling.get(int(home_sr["player_id"]), (None, 0)) if home_sr else (None, 0)
     away_roll = rolling.get(int(away_sr["player_id"]), (None, 0)) if away_sr else (None, 0)
 
-    home_sp = _pitcher_profile_from_starter_row(home_sr, home_roll)
-    away_sp = _pitcher_profile_from_starter_row(away_sr, away_roll)
+    home_sp = _pitcher_profile_from_starter_row(home_sr, home_roll, bundle)
+    away_sp = _pitcher_profile_from_starter_row(away_sr, away_roll, bundle)
     home_off = _build_team_offense_from_rows(bundle.team_rolling_rows, ids.home_team_id)
     away_off = _build_team_offense_from_rows(bundle.team_rolling_rows, ids.away_team_id)
 
