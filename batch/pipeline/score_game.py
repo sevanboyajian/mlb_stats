@@ -1081,6 +1081,14 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
             tier = "Tier2"
             stake = min(0.25, stake_frac)
 
+    # Temporary debug: lower tier thresholds so we can confirm scoring is non-zero
+    # even when the edge gate prevents a bet. Does not change stake sizing.
+    if os.getenv("LOWER_TIER_THRESH") == "1" and tier is None:
+        if int(best_score) >= 5:
+            tier = "Tier3"
+        elif int(best_score) >= 3:
+            tier = "Tier3"
+
     # --- Build outputs ---
     active_bets: list[SignalFinding] = []
     top_pick: SignalFinding | None = None
