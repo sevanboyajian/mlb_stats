@@ -1,0 +1,252 @@
+
+══════════════════════════════════════════════════════════════════
+  MLB SCOUT — DAILY RESULTS REPORT
+  2026-04-25  (14 games)
+══════════════════════════════════════════════════════════════════
+
+  ────────────────────────────────────────────────────────────────
+  SEA  @  STL  │  Final: SEA 11  –  STL 9  (SEA wins)
+  Busch Stadium  73°F  │  Wind 6 mph 6 mph, In From LF
+  ML: STL +123 / SEA -149  │  RL -1 / +1  │  O/U 7.5
+
+  BET                                ODDS  RESULT         P&L
+  ────────────────────────────────  ──────  ────────  ────────
+  STL ML (home)                      +123  ✗ LOSS  -$100.00
+  SEA ML (away)                      -149  ✓ WIN    +$67.11
+  STL RL -1 (home)                   +113  ✗ LOSS  -$100.00
+  SEA RL +1 (away)                   -136  ✓ WIN    +$73.53
+  OVER 7.5  (20 runs)                -108  ✓ WIN    +$92.59
+  UNDER 7.5  (20 runs)               -112  ✗ LOSS  -$100.00
+
+  ▶ MODEL SIGNALS:
+    [S1   ]  SEA ML                     -149  ✓ WIN    +$67.11
+
+  ────────────────────────────────────────────────────────────────
+  CLE  @  TOR  │  Final: CLE 3  –  TOR 5  (TOR wins)
+  Rogers Centre  68°F
+  ML: TOR -149 / CLE +123  │  RL -1 / +1  │  O/U 7.0
+
+  BET                                ODDS  RESULT         P&L
+  ────────────────────────────────  ──────  ────────  ────────
+  TOR ML (home)                      -149  ✓ WIN    +$67.11
+  CLE ML (away)                      +123  ✗ LOSS  -$100.00
+  TOR RL -1 (home)                   +144  ✓ WIN   +$144.00
+  CLE RL +1 (away)                   -175  ✗ LOSS  -$100.00
+  OVER 7.0  (8 runs)                 -112  ✓ WIN    +$89.29
+  UNDER 7.0  (8 runs)                -108  ✗ LOSS  -$100.00
+
+  ▶ MODEL SIGNALS:
+    [S1+H2]  CLE ML                     +123  ✗ LOSS  -$100.00
+
+  ────────────────────────────────────────────────────────────────
+  MIA  @  SF  │  Final: MIA 2  –  SF 6  (SF wins)
+  Oracle Park  56°F  │  Wind 10 mph 10 mph, Out To CF
+  ML: SF -110 / MIA -110  │  RL -1 / +1  │  O/U 7.5
+
+  BET                                ODDS  RESULT         P&L
+  ────────────────────────────────  ──────  ────────  ────────
+  SF ML (home)                       -110  ✓ WIN    +$90.91
+  MIA ML (away)                      -110  ✗ LOSS  -$100.00
+  SF RL -1 (home)                    +147  ✓ WIN   +$147.00
+  MIA RL +1 (away)                   -179  ✗ LOSS  -$100.00
+  OVER 7.5  (8 runs)                 -108  ✓ WIN    +$92.59
+  UNDER 7.5  (8 runs)                -112  ✗ LOSS  -$100.00
+
+  ▶ MODEL SIGNALS:
+    [S1   ]  MIA ML                     -110  ✗ LOSS  -$100.00
+
+  ────────────────────────────────────────────────────────────────
+  BOS  @  BAL  │  Final: BOS 17  –  BAL 1  (BOS wins)
+  Oriole Park at Camden Yards  57°F  │  Wind 13 mph 13 mph, In From RF
+  ML: BAL +253 / BOS -349  │  RL -7 / +7  │  O/U 9.5
+
+  BET                                ODDS  RESULT         P&L
+  ────────────────────────────────  ──────  ────────  ────────
+  BAL ML (home)                      +253  ✗ LOSS  -$100.00
+  BOS ML (away)                      -349  ✓ WIN    +$28.65
+  BAL RL -7 (home)                   +173  ✗ LOSS  -$100.00
+  BOS RL +7 (away)                   -232  ✓ WIN    +$43.10
+  OVER 9.5  (18 runs)                +109  ✓ WIN   +$109.00
+  UNDER 9.5  (18 runs)               -141  ✗ LOSS  -$100.00
+
+  ────────────────────────────────────────────────────────────────
+  MIN  @  TB  │  Final: MIN 1  –  TB 6  (TB wins)
+  Tropicana Field  72°F
+  ML: TB -136 / MIN +113  │  RL -1 / +1  │  O/U 8.5
+
+  BET                                ODDS  RESULT         P&L
+  ────────────────────────────────  ──────  ────────  ────────
+  TB ML (home)                       -136  ✓ WIN    +$73.53
+  MIN ML (away)                      +113  ✗ LOSS  -$100.00
+  TB RL -1 (home)                    +153  ✓ WIN   +$153.00
+  MIN RL +1 (away)                   -186  ✗ LOSS  -$100.00
+  OVER 8.5  (7 runs)                 -105  ✗ LOSS  -$100.00
+  UNDER 8.5  (7 runs)                -115  ✓ WIN    +$86.96
+
+  ▶ MODEL SIGNALS:
+    [S1+H2]  MIN ML                     +113  ✗ LOSS  -$100.00
+
+  ────────────────────────────────────────────────────────────────
+  WSH  @  CWS  │  Final: WSH 6  –  CWS 3  (WSH wins)
+  Rate Field  49°F  │  Wind 13 mph 13 mph, Out To RF
+  ML: CWS -143 / WSH +119  │  RL -1 / +1  │  O/U 8.0
+
+  BET                                ODDS  RESULT         P&L
+  ────────────────────────────────  ──────  ────────  ────────
+  CWS ML (home)                      -143  ✗ LOSS  -$100.00
+  WSH ML (away)                      +119  ✓ WIN   +$119.00
+  CWS RL -1 (home)                   +144  ✗ LOSS  -$100.00
+  WSH RL +1 (away)                   -175  ✓ WIN    +$57.14
+  OVER 8.0  (9 runs)                 -118  ✓ WIN    +$84.75
+  UNDER 8.0  (9 runs)                -102  ✗ LOSS  -$100.00
+
+  ────────────────────────────────────────────────────────────────
+  SD  @  AZ  │  Final: SD 6  –  AZ 4  (SD wins)
+  Estadio Alfredo Harp Helu  84°F  │  Wind 11 mph 11 mph, L To R
+  ML: AZ -112 / SD -108  │  RL -1 / +1  │  O/U 16.0
+
+  BET                                ODDS  RESULT         P&L
+  ────────────────────────────────  ──────  ────────  ────────
+  AZ ML (home)                       -112  ✗ LOSS  -$100.00
+  SD ML (away)                       -108  ✓ WIN    +$92.59
+  AZ RL -1 (home)                    +121  ✗ LOSS  -$100.00
+  SD RL +1 (away)                    -146  ✓ WIN    +$68.49
+  OVER 16.0  (10 runs)               -110  ✗ LOSS  -$100.00
+  UNDER 16.0  (10 runs)              -110  ✓ WIN    +$90.91
+
+  ▶ MODEL SIGNALS:
+    [S1   ]  SD ML                      -108  ✓ WIN    +$92.59
+
+  ────────────────────────────────────────────────────────────────
+  ATH  @  TEX  │  Final: ATH 3  –  TEX 4  (TEX wins)
+  Globe Life Field  74°F
+  ML: TEX -132 / ATH +109  │  RL -1 / +1  │  O/U 8.0
+
+  BET                                ODDS  RESULT         P&L
+  ────────────────────────────────  ──────  ────────  ────────
+  TEX ML (home)                      -132  ✓ WIN    +$75.76
+  ATH ML (away)                      +109  ✗ LOSS  -$100.00
+  TEX RL -1 (home)                   +159  — PUSH      PUSH
+  ATH RL +1 (away)                   -193  — PUSH      PUSH
+  OVER 8.0  (7 runs)                 -110  ✗ LOSS  -$100.00
+  UNDER 8.0  (7 runs)                -110  ✓ WIN    +$90.91
+
+  ▶ MODEL SIGNALS:
+    [S1+H2]  ATH ML                     +109  ✗ LOSS  -$100.00
+
+  ────────────────────────────────────────────────────────────────
+  PIT  @  MIL  │  Final: PIT 6  –  MIL 3  (PIT wins)
+  American Family Field  62°F
+  ML: MIL -138 / PIT +115  │  RL -1 / +1  │  O/U 8.0
+
+  BET                                ODDS  RESULT         P&L
+  ────────────────────────────────  ──────  ────────  ────────
+  MIL ML (home)                      -138  ✗ LOSS  -$100.00
+  PIT ML (away)                      +115  ✓ WIN   +$115.00
+  MIL RL -1 (home)                   +157  ✗ LOSS  -$100.00
+  PIT RL +1 (away)                   -192  ✓ WIN    +$52.08
+  OVER 8.0  (9 runs)                 -110  ✓ WIN    +$90.91
+  UNDER 8.0  (9 runs)                -110  ✗ LOSS  -$100.00
+
+  ▶ MODEL SIGNALS:
+    [S1+H2]  PIT ML                     +115  ✓ WIN   +$115.00
+
+  ────────────────────────────────────────────────────────────────
+  LAA  @  KC  │  Final: LAA 1  –  KC 12  (KC wins)
+  Kauffman Stadium  74°F  │  Wind 7 mph 7 mph, In From RF
+  ML: KC -149 / LAA +123  │  RL -1 / +1  │  O/U 8.5
+
+  BET                                ODDS  RESULT         P&L
+  ────────────────────────────────  ──────  ────────  ────────
+  KC ML (home)                       -149  ✓ WIN    +$67.11
+  LAA ML (away)                      +123  ✗ LOSS  -$100.00
+  KC RL -1 (home)                    +139  ✓ WIN   +$139.00
+  LAA RL +1 (away)                   -168  ✗ LOSS  -$100.00
+  OVER 8.5  (13 runs)                -122  ✓ WIN    +$81.97
+  UNDER 8.5  (13 runs)               +102  ✗ LOSS  -$100.00
+
+  ────────────────────────────────────────────────────────────────
+  NYY  @  HOU  │  Final: NYY 8  –  HOU 3  (NYY wins)
+  Daikin Park  73°F
+  ML: HOU +129 / NYY -156  │  RL -1 / +1  │  O/U 9.0
+
+  BET                                ODDS  RESULT         P&L
+  ────────────────────────────────  ──────  ────────  ────────
+  HOU ML (home)                      +129  ✗ LOSS  -$100.00
+  NYY ML (away)                      -156  ✓ WIN    +$64.10
+  HOU RL -1 (home)                   +104  ✗ LOSS  -$100.00
+  NYY RL +1 (away)                   -126  ✓ WIN    +$79.37
+  OVER 9.0  (11 runs)                -122  ✓ WIN    +$81.97
+  UNDER 9.0  (11 runs)               +102  ✗ LOSS  -$100.00
+
+  ▶ MODEL SIGNALS:
+    [S1   ]  NYY ML                     -156  ✓ WIN    +$64.10
+
+  ────────────────────────────────────────────────────────────────
+  CHC  @  LAD  │  Final: CHC 4  –  LAD 12  (LAD wins)
+  Dodger Stadium  63°F  │  Wind 11 mph 11 mph, Out To CF
+  ML: LAD -132 / CHC +109  │  RL -1 / +1  │  O/U 9.5
+
+  BET                                ODDS  RESULT         P&L
+  ────────────────────────────────  ──────  ────────  ────────
+  LAD ML (home)                      -132  ✓ WIN    +$75.76
+  CHC ML (away)                      +109  ✗ LOSS  -$100.00
+  LAD RL -1 (home)                   +148  ✓ WIN   +$148.00
+  CHC RL +1 (away)                   -180  ✗ LOSS  -$100.00
+  OVER 9.5  (16 runs)                -102  ✓ WIN    +$98.04
+  UNDER 9.5  (16 runs)               -118  ✗ LOSS  -$100.00
+
+  ▶ MODEL SIGNALS:
+    [S1+H2]  CHC ML                     +109  ✗ LOSS  -$100.00
+
+  ────────────────────────────────────────────────────────────────
+  DET  @  CIN  │  Final: DET 2  –  CIN 9  (CIN wins)
+  Great American Ball Park  72°F  │  Wind 7 mph 7 mph, Out To RF
+  ML: CIN -108 / DET -112  │  RL -1 / +1  │  O/U 9.5
+
+  BET                                ODDS  RESULT         P&L
+  ────────────────────────────────  ──────  ────────  ────────
+  CIN ML (home)                      -108  ✓ WIN    +$92.59
+  DET ML (away)                      -112  ✗ LOSS  -$100.00
+  CIN RL -1 (home)                   +141  ✓ WIN   +$141.00
+  DET RL +1 (away)                   -171  ✗ LOSS  -$100.00
+  OVER 9.5  (11 runs)                -102  ✓ WIN    +$98.04
+  UNDER 9.5  (11 runs)               -118  ✗ LOSS  -$100.00
+
+  ────────────────────────────────────────────────────────────────
+  PHI  @  ATL  │  Final: PHI 8  –  ATL 5  (PHI wins)
+  Truist Park  68°F  │  Wind 3 mph 3 mph, Calm
+  ML: ATL -136 / PHI +113  │  RL -1 / +1  │  O/U 8.5
+
+  BET                                ODDS  RESULT         P&L
+  ────────────────────────────────  ──────  ────────  ────────
+  ATL ML (home)                      -136  ✗ LOSS  -$100.00
+  PHI ML (away)                      +113  ✓ WIN   +$113.00
+  ATL RL -1 (home)                   +153  ✗ LOSS  -$100.00
+  PHI RL +1 (away)                   -186  ✓ WIN    +$53.76
+  OVER 8.5  (13 runs)                -118  ✓ WIN    +$84.75
+  UNDER 8.5  (13 runs)               -102  ✗ LOSS  -$100.00
+
+  ▶ MODEL SIGNALS:
+    [S1+H2]  PHI ML                     +113  ✓ WIN   +$113.00
+
+
+══════════════════════════════════════════════════════════════════
+  DAY SUMMARY  —  2026-04-25
+══════════════════════════════════════════════════════════════════
+
+  O/U:  11 Over / 3 Under  (79% over rate on 14 games)
+  Best bet:   TB RL -1 (home)                    +$153.00
+  Worst bet:  STL ML (home)                      -$100.00
+
+  SIGNAL P&L  (flat $100 per pick):
+  ──────────────────────────────────────────────────
+  S1        3W 1L 0P  P&L: +$123.80
+  S1+H2     2W 4L 0P  P&L: -$172.00
+  ──────────────────────────────────────────────────
+  ALL       5W 5L   P&L: -$48.20
+
+  Home teams:  7/14 wins (50% win rate)
+  Away teams:  7/14 wins (50% win rate)
+
+══════════════════════════════════════════════════════════════════

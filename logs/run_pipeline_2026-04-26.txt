@@ -1,0 +1,150 @@
+[run_pipeline] force-unlock: runner_lock not present (nothing to clear)
+[run_pipeline] db=C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\data\mlb_stats.db
+[run_pipeline] mode=loop poll_seconds=60 ghost=False stale_minutes=30 timeout_minutes=30 sleep_until_due=True scope_job_date_et='2026-04-26' exit_when_no_pending=True
+
+[job] id=1025 type=stats_pull job_date_et=2026-04-26 game_group_id=0 scheduled_time=2026-04-26 06:00 ET
+[job] command='python batch/ingestion/load_mlb_stats.py'
+[job] start_et=2026-04-26 07:09:48 ET (claimed)
+[job] end_et=2026-04-26 07:09:59 ET status=complete rc=0
+
+[job] id=1026 type=load_today job_date_et=2026-04-26 game_group_id=0 scheduled_time=2026-04-26 06:05 ET
+[job] command='python batch/ingestion/load_today.py --date 2026-04-26'
+[job] start_et=2026-04-26 07:09:59 ET (claimed)
+[job] end_et=2026-04-26 07:10:02 ET status=complete rc=0
+
+[job] id=1027 type=load_weather job_date_et=2026-04-26 game_group_id=0 scheduled_time=2026-04-26 06:07 ET
+[job] command='python batch/ingestion/load_weather.py --date 2026-04-26'
+[job] start_et=2026-04-26 07:10:02 ET (claimed)
+[job] end_et=2026-04-26 07:10:25 ET status=complete rc=0
+
+[job] id=1028 type=day_setup job_date_et=2026-04-26 game_group_id=0 scheduled_time=2026-04-26 06:10 ET
+[job] command='python batch/jobs/schedule_pipeline_day.py --groups-only --date-et 2026-04-26'
+[job] start_et=2026-04-26 07:10:25 ET (claimed)
+[job] end_et=2026-04-26 07:10:25 ET status=complete rc=0
+
+[job] id=1029 type=prior_report job_date_et=2026-04-26 game_group_id=0 scheduled_time=2026-04-26 06:15 ET
+[job] command='python batch/pipeline/generate_daily_brief.py --session prior --date 2026-04-26 --as-of "2026-04-26 07:10"'
+[job] start_et=2026-04-26 07:10:25 ET (claimed)
+[job] end_et=2026-04-26 07:10:27 ET status=complete rc=0
+
+[job] id=1030 type=early_peek job_date_et=2026-04-26 game_group_id=0 scheduled_time=2026-04-26 06:20 ET
+[job] command='python batch/pipeline/generate_daily_brief.py --session morning --date 2026-04-26 --as-of "2026-04-26 07:10"'
+[job] start_et=2026-04-26 07:10:27 ET (claimed)
+[job] end_et=2026-04-26 07:10:32 ET status=complete rc=0
+
+[job] id=1031 type=email_runlog_morning job_date_et=2026-04-26 game_group_id=0 scheduled_time=2026-04-26 06:22 ET
+[job] command='python batch/jobs/email_run_log.py --date 2026-04-26 --kind morning'
+[job] start_et=2026-04-26 07:10:32 ET (claimed)
+[job] end_et=2026-04-26 07:10:34 ET status=complete rc=0
+
+[job] id=1033 type=odds_pull job_date_et=2026-04-25 game_group_id=1 scheduled_time=2026-04-25 14:40 ET
+[job] command='python batch/ingestion/load_odds.py --pregame --markets game --date 2026-04-25 --force'
+[job] context: group_id=1 window=[2026-04-25 14:35 ET -> 2026-04-25 14:45 ET]
+[job] start_et=2026-04-26 07:10:34 ET (claimed)
+[job] end_et=2026-04-26 07:10:35 ET status=complete rc=0
+
+[job] id=1038 type=odds_check job_date_et=2026-04-25 game_group_id=1 scheduled_time=2026-04-25 14:45 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-04-25'
+[job] context: group_id=1 window=[2026-04-25 14:35 ET -> 2026-04-25 14:50 ET]
+[job] start_et=2026-04-26 07:10:35 ET (claimed)
+[job] end_et=2026-04-26 07:10:35 ET failure rc=1
+[job] error_tail=⚠  No scheduled games found for 2026-04-25.
+     Run: python batch/ingestion/load_today.py --date YYYY-MM-DD
+     Or:  python batch/ingestion/load_mlb_stats.py  (schedule + boxscores)
+[job] RETRY — job_id=1038 attempt=1/5 (will run after next poll loop)
+
+[job] id=1043 type=weather job_date_et=2026-04-25 game_group_id=1 scheduled_time=2026-04-25 15:25 ET
+[job] command='python batch/ingestion/load_weather.py --date 2026-04-25'
+[job] context: group_id=1 window=[2026-04-25 15:10 ET -> 2026-04-25 15:40 ET]
+[job] start_et=2026-04-26 07:10:35 ET (claimed)
+[job] end_et=2026-04-26 07:10:35 ET status=complete rc=0
+
+[job] id=1048 type=group_brief job_date_et=2026-04-25 game_group_id=1 scheduled_time=2026-04-25 15:40 ET
+[job] command='python batch/pipeline/generate_daily_brief.py --session primary --date 2026-04-25 --as-of "2026-04-26 07:10" --game-group-id 1'
+[job] context: group_id=1 window=[2026-04-25 15:40 ET -> 2026-04-25 15:42 ET]
+[job] start_et=2026-04-26 07:10:35 ET (claimed)
+[job] end_et=2026-04-26 07:10:35 ET status=complete rc=0
+
+[job] id=1053 type=ledger_snapshot job_date_et=2026-04-25 game_group_id=1 scheduled_time=2026-04-25 15:42 ET
+[job] command='python batch/pipeline/daily_results_report.py --date 2026-04-25'
+[job] context: group_id=1 window=[2026-04-25 15:40 ET -> 2026-04-25 16:10 ET]
+[job] start_et=2026-04-26 07:10:35 ET (claimed)
+[job] end_et=2026-04-26 07:10:36 ET status=complete rc=0
+
+[job] id=1038 type=odds_check job_date_et=2026-04-25 game_group_id=1 scheduled_time=2026-04-25 14:45 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-04-25'
+[job] context: group_id=1 window=[2026-04-25 14:35 ET -> 2026-04-25 14:50 ET]
+[job] start_et=2026-04-26 07:10:36 ET (claimed)
+[job] end_et=2026-04-26 07:10:36 ET failure rc=1
+[job] error_tail=⚠  No scheduled games found for 2026-04-25.
+     Run: python batch/ingestion/load_today.py --date YYYY-MM-DD
+     Or:  python batch/ingestion/load_mlb_stats.py  (schedule + boxscores)
+[job] RETRY — job_id=1038 attempt=2/5 (will run after next poll loop)
+
+[job] id=1038 type=odds_check job_date_et=2026-04-25 game_group_id=1 scheduled_time=2026-04-25 14:45 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-04-25'
+[job] context: group_id=1 window=[2026-04-25 14:35 ET -> 2026-04-25 14:50 ET]
+[job] start_et=2026-04-26 07:10:36 ET (claimed)
+[job] end_et=2026-04-26 07:10:36 ET failure rc=1
+[job] error_tail=⚠  No scheduled games found for 2026-04-25.
+     Run: python batch/ingestion/load_today.py --date YYYY-MM-DD
+     Or:  python batch/ingestion/load_mlb_stats.py  (schedule + boxscores)
+[job] RETRY — job_id=1038 attempt=3/5 (will run after next poll loop)
+
+[job] id=1038 type=odds_check job_date_et=2026-04-25 game_group_id=1 scheduled_time=2026-04-25 14:45 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-04-25'
+[job] context: group_id=1 window=[2026-04-25 14:35 ET -> 2026-04-25 14:50 ET]
+[job] start_et=2026-04-26 07:10:36 ET (claimed)
+[job] end_et=2026-04-26 07:10:36 ET failure rc=1
+[job] error_tail=⚠  No scheduled games found for 2026-04-25.
+     Run: python batch/ingestion/load_today.py --date YYYY-MM-DD
+     Or:  python batch/ingestion/load_mlb_stats.py  (schedule + boxscores)
+[job] RETRY — job_id=1038 attempt=4/5 (will run after next poll loop)
+
+[job] id=1038 type=odds_check job_date_et=2026-04-25 game_group_id=1 scheduled_time=2026-04-25 14:45 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-04-25'
+[job] context: group_id=1 window=[2026-04-25 14:35 ET -> 2026-04-25 14:50 ET]
+[job] start_et=2026-04-26 07:10:36 ET (claimed)
+[job] end_et=2026-04-26 07:10:36 ET failure rc=1
+[job] error_tail=⚠  No scheduled games found for 2026-04-25.
+     Run: python batch/ingestion/load_today.py --date YYYY-MM-DD
+     Or:  python batch/ingestion/load_mlb_stats.py  (schedule + boxscores)
+[job] RETRY — job_id=1038 attempt=5/5 (will run after next poll loop)
+
+[job] id=1038 type=odds_check job_date_et=2026-04-25 game_group_id=1 scheduled_time=2026-04-25 14:45 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-04-25'
+[job] context: group_id=1 window=[2026-04-25 14:35 ET -> 2026-04-25 14:50 ET]
+[job] start_et=2026-04-26 07:10:36 ET (claimed)
+[job] end_et=2026-04-26 07:10:37 ET failure rc=1
+[job] error_tail=⚠  No scheduled games found for 2026-04-25.
+     Run: python batch/ingestion/load_today.py --date YYYY-MM-DD
+     Or:  python batch/ingestion/load_mlb_stats.py  (schedule + boxscores)
+[job] SKIPPED (terminal, max retries) job_id=1038 type=odds_check — status=skipped; downstream deps will proceed
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+! PIPELINE ALERT: JOB SKIPPED (terminal — max retries; deps unblocked)
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  time_utc:     2026-04-26T11:10:37Z
+  job_id:       1038
+  job_type:     odds_check
+  job_date_et:  2026-04-25
+  started_utc:  2026-04-26T11:10:36Z
+  finished_utc: 2026-04-26T11:10:37Z
+  error_tail:
+    rc=1 ⚠  No scheduled games found for 2026-04-25.
+         Run: python batch/ingestion/load_today.py --date YYYY-MM-DD
+         Or:  python batch/ingestion/load_mlb_stats.py  (schedule + boxscores) | terminal=skipped after 5 attempts (deps unblocked — assume manual follow-up)
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+[run_pipeline] sleep-until-due: next pending at 2026-04-26 12:05 ET (~17700s)
+Traceback (most recent call last):
+  File "C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\batch\jobs\run_pipeline.py", line 2382, in <module>
+    main()
+  File "C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\batch\jobs\run_pipeline.py", line 2360, in main
+    run_loop(
+  File "C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\batch\jobs\run_pipeline.py", line 1882, in run_loop
+    if _sleep_until_next_pending_or_poll(
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\batch\jobs\run_pipeline.py", line 668, in _sleep_until_next_pending_or_poll
+    time.sleep(delta)
+KeyboardInterrupt

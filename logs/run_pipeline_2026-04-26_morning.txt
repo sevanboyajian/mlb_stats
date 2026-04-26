@@ -1,0 +1,37 @@
+[run_pipeline] force-unlock: runner_lock not present (nothing to clear)
+[run_pipeline] db=C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\data\mlb_stats.db
+[run_pipeline] mode=loop poll_seconds=60 ghost=False stale_minutes=30 timeout_minutes=30 sleep_until_due=True scope_job_date_et='2026-04-26' exit_when_no_pending=True
+
+[job] id=1025 type=stats_pull job_date_et=2026-04-26 game_group_id=0 scheduled_time=2026-04-26 06:00 ET
+[job] command='python batch/ingestion/load_mlb_stats.py'
+[job] start_et=2026-04-26 07:09:48 ET (claimed)
+[job] end_et=2026-04-26 07:09:59 ET status=complete rc=0
+
+[job] id=1026 type=load_today job_date_et=2026-04-26 game_group_id=0 scheduled_time=2026-04-26 06:05 ET
+[job] command='python batch/ingestion/load_today.py --date 2026-04-26'
+[job] start_et=2026-04-26 07:09:59 ET (claimed)
+[job] end_et=2026-04-26 07:10:02 ET status=complete rc=0
+
+[job] id=1027 type=load_weather job_date_et=2026-04-26 game_group_id=0 scheduled_time=2026-04-26 06:07 ET
+[job] command='python batch/ingestion/load_weather.py --date 2026-04-26'
+[job] start_et=2026-04-26 07:10:02 ET (claimed)
+[job] end_et=2026-04-26 07:10:25 ET status=complete rc=0
+
+[job] id=1028 type=day_setup job_date_et=2026-04-26 game_group_id=0 scheduled_time=2026-04-26 06:10 ET
+[job] command='python batch/jobs/schedule_pipeline_day.py --groups-only --date-et 2026-04-26'
+[job] start_et=2026-04-26 07:10:25 ET (claimed)
+[job] end_et=2026-04-26 07:10:25 ET status=complete rc=0
+
+[job] id=1029 type=prior_report job_date_et=2026-04-26 game_group_id=0 scheduled_time=2026-04-26 06:15 ET
+[job] command='python batch/pipeline/generate_daily_brief.py --session prior --date 2026-04-26 --as-of "2026-04-26 07:10"'
+[job] start_et=2026-04-26 07:10:25 ET (claimed)
+[job] end_et=2026-04-26 07:10:27 ET status=complete rc=0
+
+[job] id=1030 type=early_peek job_date_et=2026-04-26 game_group_id=0 scheduled_time=2026-04-26 06:20 ET
+[job] command='python batch/pipeline/generate_daily_brief.py --session morning --date 2026-04-26 --as-of "2026-04-26 07:10"'
+[job] start_et=2026-04-26 07:10:27 ET (claimed)
+[job] end_et=2026-04-26 07:10:32 ET status=complete rc=0
+
+[job] id=1031 type=email_runlog_morning job_date_et=2026-04-26 game_group_id=0 scheduled_time=2026-04-26 06:22 ET
+[job] command='python batch/jobs/email_run_log.py --date 2026-04-26 --kind morning'
+[job] start_et=2026-04-26 07:10:32 ET (claimed)
