@@ -183,5 +183,3 @@ UnicodeEncodeError: 'charmap' codec can't encode characters in position 2-3: cha
 [job] id=1069 type=email_runlog_morning job_date_et=2026-04-27 game_group_id=0 scheduled_time=2026-04-27 06:22 ET
 [job] command='python batch/jobs/email_run_log.py --date 2026-04-27 --kind morning'
 [job] start_et=2026-04-27 06:22:45 ET (claimed)
-[job] end_et=2026-04-27 06:22:47 ET status=complete rc=0
-[run_pipeline] sleep-until-due: next pending at 2026-04-27 16:40 ET (~37080s)
