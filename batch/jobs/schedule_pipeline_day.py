@@ -418,9 +418,13 @@ def _insert_global_daily_setup_jobs(con: sqlite3.Connection, *, job_date_et: str
     """Insert the fixed morning global jobs (group_id=0) for job_date_et."""
     g_ins = 0
     g_ins += _insert_global_job(con, job_date_et=job_date_et, job_type="stats_pull", scheduled_time_et=f"{job_date_et} 06:00 ET")
-    g_ins += _insert_global_job(con, job_date_et=job_date_et, job_type="build_team_wma", scheduled_time_et=f"{job_date_et} 06:02 ET")
     g_ins += _insert_global_job(con, job_date_et=job_date_et, job_type="load_today", scheduled_time_et=f"{job_date_et} 06:05 ET")
     g_ins += _insert_global_job(con, job_date_et=job_date_et, job_type="load_weather", scheduled_time_et=f"{job_date_et} 06:07 ET")
+    # Pull opening/pregame odds early so briefs never start "NO_MODEL" due to missing lines.
+    g_ins += _insert_global_job(con, job_date_et=job_date_et, job_type="odds_pull", scheduled_time_et=f"{job_date_et} 06:08 ET")
+    # WMA jobs after load_today/load_weather so today's slate tables exist and DB locks have cleared.
+    g_ins += _insert_global_job(con, job_date_et=job_date_et, job_type="build_team_wma", scheduled_time_et=f"{job_date_et} 06:09 ET")
+    g_ins += _insert_global_job(con, job_date_et=job_date_et, job_type="build_pitcher_wma", scheduled_time_et=f"{job_date_et} 06:11 ET")
     g_ins += _insert_global_job(con, job_date_et=job_date_et, job_type="day_setup", scheduled_time_et=f"{job_date_et} 06:10 ET")
     g_ins += _insert_global_job(con, job_date_et=job_date_et, job_type="prior_report", scheduled_time_et=f"{job_date_et} 06:15 ET")
     g_ins += _insert_global_job(con, job_date_et=job_date_et, job_type="early_peek", scheduled_time_et=f"{job_date_et} 06:20 ET")

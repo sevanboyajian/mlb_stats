@@ -740,6 +740,7 @@ def _build_command(job: dict) -> str:
     mapping: dict[str, str] = {
         "stats_pull": "python batch/ingestion/load_mlb_stats.py",
         "build_team_wma": f"python -m batch.pipeline.build_team_wma --seasons {seasons_wma}",
+        "build_pitcher_wma": f"python -m batch.pipeline.build_pitcher_wma --seasons {seasons_wma}",
         "load_today": f"python batch/ingestion/load_today.py --date {job_date}" if job_date else "python batch/ingestion/load_today.py",
         "load_weather": (
             f"python batch/ingestion/load_weather.py --date {job_date}"
@@ -847,14 +848,15 @@ def _dependency_rules() -> dict[str, list[str]]:
     return {
         # load_today must complete before any game-based jobs
         "build_team_wma": ["stats_pull"],
+        "build_pitcher_wma": ["load_weather"],
         "load_weather": ["load_today"],
         "day_setup": ["load_weather"],
         "odds_pull": ["load_today"],
         "odds_check": ["load_today", "odds_pull"],
         "weather": ["load_today"],
         # odds pulls must complete before brief generation; morning load_weather fills wind + starters
-        "prior_report": ["load_weather", "build_team_wma"],
-        "early_peek": ["load_weather", "build_team_wma"],
+        "prior_report": ["load_weather", "odds_pull", "build_team_wma", "build_pitcher_wma"],
+        "early_peek": ["load_weather", "odds_pull", "build_team_wma", "build_pitcher_wma"],
         "group_brief": ["load_today", "odds_pull", "load_weather"],
         "bet_ledger_sync": ["load_today"],
         "ledger_snapshot": ["load_today", "odds_pull"],

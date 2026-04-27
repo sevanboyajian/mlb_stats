@@ -459,8 +459,13 @@ def main() -> None:
 
     # ── Step 6: validation output ─────────────────────────────────────────────
     if not args.dry_run and not args.skip_sample:
-        _print_sample(con, seasons)
-        _print_divergence_sample(con, seasons)
+        # Windows consoles may still be cp1252 even if UTF-8 is preferred; avoid hard-failing
+        # a pipeline job due to box-drawing characters in sample output.
+        try:
+            _print_sample(con, seasons)
+            _print_divergence_sample(con, seasons)
+        except UnicodeEncodeError:
+            print("[build_team_wma] NOTE: console encoding could not render sample output; skipping sample prints.")
 
     con.close()
     print("[build_team_wma] Done.")

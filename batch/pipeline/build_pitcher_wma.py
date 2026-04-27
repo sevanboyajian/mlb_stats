@@ -387,7 +387,12 @@ def main() -> None:
     print(f"[build_pitcher_wma] {'Would update' if args.dry_run else 'Updated'}: {updated}")
 
     if not args.dry_run and not args.skip_sample:
-        _print_sample(con, seasons)
+        # Windows consoles may still be cp1252 even if UTF-8 is preferred; avoid hard-failing
+        # a pipeline job due to box-drawing characters in sample output.
+        try:
+            _print_sample(con, seasons)
+        except UnicodeEncodeError:
+            print("[build_pitcher_wma] NOTE: console encoding could not render sample output; skipping sample prints.")
 
     con.close()
     print("[build_pitcher_wma] Done.")
