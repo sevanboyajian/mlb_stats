@@ -932,12 +932,13 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
 
     mvf = _eval_mv_f(g, s1h2_fired)
     lhp_findings = _eval_lhp_fade(g, game_month, s1h2_fired)
+    owm = _eval_owm(g, game_month)
     mvb = _eval_mv_b(g, game_month)
     s1 = _eval_s1(g, home_streak, s1h2_fired)
     h3b = _eval_h3b(g, mvb.fires)
 
     incoming = list(getattr(g, "signals", None) or [])
-    all_signals = [*incoming, s1h2, mvf, *lhp_findings, mvb, s1, h3b]
+    all_signals = [*incoming, s1h2, mvf, *lhp_findings, owm, mvb, s1, h3b]
     avoids = _eval_avoids(g)
     blocked = [f for f in all_signals if not f.fires]
 
