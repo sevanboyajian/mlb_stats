@@ -69,6 +69,7 @@ SIGNAL_STRENGTH: dict[str, str] = {
     "H3b": "moderate",
     "LHP_FADE": "moderate",
     "LHP_FADE_RL": "moderate",
+    "OWM": "moderate",
     "S1": "weak",
 }
 
@@ -80,6 +81,7 @@ SIGNAL_BASE_SCORE: dict[str, int] = {
     "MV-B": 7,
     "LHP_FADE": 7,
     "LHP_FADE_RL": 6,
+    "OWM": 6,
     "S1": 5,
     "H3b": 3,
     "NF4": 3,
