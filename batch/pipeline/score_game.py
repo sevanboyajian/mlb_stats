@@ -538,6 +538,81 @@ def _h3b_standalone_would_fire(g: FullyDressedGame) -> bool:
     return bool(wind_ok and tot_ok and h3b_park_ok and h3b_pf_ok and not g.completeness.h3b_blocked)
 
 
+def _eval_owm(g: FullyDressedGame, game_month: int) -> SignalFinding:
+    """
+    OWM — Offensive WMA vs Pitcher WMA Matchup.
+    Fires when home team has strong recent offensive form AND away starter
+    has been struggling recently. Independent of weather and odds band.
+
+    Conditions:
+      - Home team rolling_ops_wma >= 0.760 (strong recent offense)
+      - Away starter era_wma >= 4.50 (struggling pitcher)
+      - Away starter has >= 2 starts in WMA window (sufficient data)
+      - Home team has >= 2 games in WMA window
+      - Game month Apr–Sep (months 4–9)
+      - Home team is not a heavy underdog (home_impl >= 0.40)
+    Bet side: home_ml
+    """
+    home_off = g.matchup.home_offense
+    away_sp = g.matchup.away_sp
+
+    # Data gates — require sufficient WMA history
+    home_wma_ok = (
+        home_off.rolling_ops_wma is not None
+        and home_off.games_in_window >= 2
+    )
+    pitcher_wma_ok = (
+        away_sp.era_wma is not None
+        and getattr(away_sp, "starts_in_window", 0) >= 2
+    )
+
+    # Market gate — home team must not be a heavy underdog
+    mkt = g.market
+    home_impl = mkt.home_impl
+    market_ok = home_impl is not None and float(home_impl) >= 0.40
+
+    # Month gate
+    month_ok = game_month in {4, 5, 6, 7, 8, 9}
+
+    # Core firing conditions
+    ops_threshold = 0.760
+    era_threshold = 4.50
+
+    ops_ok = home_wma_ok and float(home_off.rolling_ops_wma) >= ops_threshold
+    era_ok = pitcher_wma_ok and float(away_sp.era_wma) >= era_threshold
+
+    fires = ops_ok and era_ok and market_ok and month_ok
+
+    if fires:
+        ops_val = float(home_off.rolling_ops_wma)
+        era_val = float(away_sp.era_wma)
+        sp_name = away_sp.name or g.identifiers.away_team_abbr
+        reason = (
+            f"OWM — Home {g.identifiers.home_team_abbr} offense hot "
+            f"(OPS WMA {ops_val:.3f} >= {ops_threshold}) vs struggling away "
+            f"SP {sp_name} (ERA WMA {era_val:.2f} >= {era_threshold}). "
+            f"Matchup signal — independent of wind."
+        )
+    else:
+        ops_disp = f"{home_off.rolling_ops_wma:.3f}" if home_off.rolling_ops_wma is not None else "N/A"
+        era_disp = f"{away_sp.era_wma:.2f}" if away_sp.era_wma is not None else "N/A"
+        reason = (
+            f"OWM blocked: ops_wma={ops_disp} (need>={ops_threshold}) "
+            f"era_wma={era_disp} (need>={era_threshold}) "
+            f"market_ok={market_ok} month_ok={month_ok} "
+            f"home_wma_ok={home_wma_ok} pitcher_wma_ok={pitcher_wma_ok}"
+        )
+
+    return SignalFinding(
+        signal_id="OWM",
+        signal_strength=SIGNAL_STRENGTH["OWM"],
+        bet_side="home_ml",
+        odds=_fmt_odds(mkt.home_ml_current),
+        edge_basis=reason,
+        fires=fires,
+    )
+
+
 def _eval_h3b(g: FullyDressedGame, mvb_fires: bool) -> SignalFinding:
     gdb = _gdb()
     env = g.environment
@@ -685,6 +760,39 @@ def _compute_confidence_score(
             base = 6
         if game_month == 9:
             mods.append(("September — signal historically inverts", -1))
+
+    elif signal_id == "OWM":
+        home_off = fdg.matchup.home_offense
+        away_sp = fdg.matchup.away_sp
+
+        # Booster 1: away pitcher truly struggling (ERA WMA >= 5.50)
+        if away_sp.era_wma is not None and float(away_sp.era_wma) >= 5.50:
+            mods.append(("away SP ERA WMA elite bad (>=5.50)", +1))
+
+        # Booster 2: away pitcher command issues (WHIP WMA >= 1.50)
+        if away_sp.whip_wma is not None and float(away_sp.whip_wma) >= 1.50:
+            mods.append(("away SP WHIP WMA high (>=1.50)", +1))
+
+        # Booster 3: home offense elite recent form (OPS WMA >= 0.820)
+        if (
+            home_off.rolling_ops_wma is not None
+            and float(home_off.rolling_ops_wma) >= 0.820
+        ):
+            mods.append(("home OPS WMA elite (>=0.820)", +1))
+
+        # Booster 4: wind out (offense-boosting environment)
+        env = fdg.environment
+        if env.wind_out and not env.is_wind_suppressed:
+            mods.append(("wind OUT — offense environment", +1))
+
+        # Booster 5: second signal present
+        if second_signal:
+            mods.append(("second signal present", +1))
+
+        # Penalty: home team below .500 implied (slight dog territory)
+        mkt = fdg.market
+        if mkt.home_impl is not None and float(mkt.home_impl) < 0.475:
+            mods.append(("home mild underdog — reduce confidence", -1))
 
     wind_signals = {"MV-F", "MV-B", "H3b"}
     if signal_id in wind_signals:
