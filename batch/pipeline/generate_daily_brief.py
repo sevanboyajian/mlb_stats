@@ -3055,8 +3055,79 @@ def load_games(conn: sqlite3.Connection, game_date: str, verbose: bool,
         if as_of_dt is not None
         else "          AND  g.status    != 'Final'          -- skip already-completed games\n"
     )
+
+    # Odds policy:
+    # - Do NOT depend on game_odds.is_closing_line for live runs (it may not be set yet).
+    # - Prefer the latest snapshot up to ``as_of_dt`` (or now), ideally pregame (<= first pitch).
+    # - If the API has gaps (no row before cutoff), fall back to the latest row anyway so odds
+    #   don't appear "missing" when game_odds has data.
+    try:
+        if as_of_dt is None:
+            as_of_utc = datetime.datetime.now(datetime.timezone.utc)
+        elif getattr(as_of_dt, "tzinfo", None) is None:
+            as_of_utc = as_of_dt.replace(tzinfo=_ET).astimezone(datetime.timezone.utc)
+        else:
+            as_of_utc = as_of_dt.astimezone(datetime.timezone.utc)
+    except Exception:
+        as_of_utc = datetime.datetime.now(datetime.timezone.utc)
+    as_of_utc_s = as_of_utc.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
     cur = conn.execute(
         """
+        WITH
+        _games AS (
+            SELECT game_pk, game_start_utc
+            FROM games
+            WHERE game_date_et = ?
+              AND game_type = 'R'
+        ),
+        _odds_ranked AS (
+            SELECT
+                go.game_pk,
+                go.bookmaker,
+                go.market_type,
+                go.home_ml,
+                go.away_ml,
+                go.total_line,
+                go.over_odds,
+                go.under_odds,
+                go.home_rl_line,
+                go.away_rl_line,
+                go.home_rl_odds,
+                go.away_rl_odds,
+                go.captured_at_utc,
+                ROW_NUMBER() OVER (
+                    PARTITION BY go.game_pk, go.market_type
+                    ORDER BY
+                        -- Best: <= as-of and <= first pitch (pregame). Otherwise: <= as-of. Otherwise: anything.
+                        CASE
+                            WHEN go.captured_at_utc <= ? AND (g.game_start_utc IS NULL OR go.captured_at_utc <= g.game_start_utc)
+                            THEN 1 ELSE 0
+                        END DESC,
+                        CASE
+                            WHEN go.captured_at_utc <= ?
+                            THEN 1 ELSE 0
+                        END DESC,
+                        CASE go.bookmaker
+                            WHEN 'draftkings'    THEN 1
+                            WHEN 'fanduel'       THEN 2
+                            WHEN 'betmgm'        THEN 3
+                            WHEN 'betonlineag'   THEN 4
+                            WHEN 'sbro'          THEN 5
+                            WHEN 'oddswarehouse' THEN 6
+                            ELSE                      7
+                        END ASC,
+                        go.captured_at_utc DESC
+                ) AS rn
+            FROM game_odds go
+            JOIN _games g ON g.game_pk = go.game_pk
+            WHERE go.market_type IN ('moneyline', 'total', 'runline')
+        ),
+        _odds AS (
+            SELECT *
+            FROM _odds_ranked
+            WHERE rn = 1
+        )
         SELECT
             g.game_pk,
             g.game_date_et AS game_date,
@@ -3108,19 +3179,19 @@ def load_games(conn: sqlite3.Connection, game_date: str, verbose: bool,
         JOIN   teams  ta ON ta.team_id  = g.away_team_id
         LEFT JOIN venues v  ON v.venue_id   = g.venue_id
         -- Join each market type separately — one row per game
-        LEFT JOIN v_closing_game_odds ml  ON ml.game_pk  = g.game_pk
-                                         AND ml.market_type = 'moneyline'
-        LEFT JOIN v_closing_game_odds tot ON tot.game_pk = g.game_pk
-                                         AND tot.market_type = 'total'
-        LEFT JOIN v_closing_game_odds rl  ON rl.game_pk  = g.game_pk
-                                         AND rl.market_type = 'runline'
+        LEFT JOIN _odds ml  ON ml.game_pk  = g.game_pk
+                           AND ml.market_type = 'moneyline'
+        LEFT JOIN _odds tot ON tot.game_pk = g.game_pk
+                           AND tot.market_type = 'total'
+        LEFT JOIN _odds rl  ON rl.game_pk  = g.game_pk
+                           AND rl.market_type = 'runline'
         WHERE  g.game_date_et = ?
           AND  g.game_type = 'R'          -- regular season only; Spring Training / Exhibition excluded
 """
         + status_line
         + """        ORDER  BY g.game_start_utc
         """,
-        (game_date,),
+        (game_date, as_of_utc_s, as_of_utc_s, game_date),
     )
     rows = [dict(r) for r in cur.fetchall()]
 
