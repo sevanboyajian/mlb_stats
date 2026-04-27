@@ -376,7 +376,7 @@ def _normalize_and_dedupe_globals(con: sqlite3.Connection, *, job_date_et: str) 
             WHERE game_group_id IS NULL
               AND scheduled_time_et IS NOT NULL
               AND substr(scheduled_time_et, 1, 10) = ?
-              AND job_type IN ('stats_pull','build_team_wma','load_today','load_weather','day_setup','early_peek','prior_report')
+              AND job_type IN ('stats_pull','build_team_wma','build_pitcher_wma','load_today','load_weather','day_setup','early_peek','prior_report')
             """,
             (job_date_et,),
         )
