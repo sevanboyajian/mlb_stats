@@ -545,8 +545,9 @@ def _eval_owm(g: FullyDressedGame, game_month: int) -> SignalFinding:
     has been struggling recently. Independent of weather and odds band.
 
     Conditions:
-      - Home team rolling_ops_wma >= 0.760 (strong recent offense)
-      - Away starter era_wma >= 4.50 (struggling pitcher)
+      - Home team rolling_ops_wma >= 0.780 (2025 backtest: strong recent offense)
+      - Away starter era_wma >= 5.00 (struggling pitcher)
+      - Home ML not more extreme than -275 (cap on heavy favorites)
       - Away starter has >= 2 starts in WMA window (sufficient data)
       - Home team has >= 2 games in WMA window
       - Game month Apr–Sep (months 4–9)
@@ -566,18 +567,23 @@ def _eval_owm(g: FullyDressedGame, game_month: int) -> SignalFinding:
         and getattr(away_sp, "starts_in_window", 0) >= 2
     )
 
-    # Market gate — home team must not be a heavy underdog
+    # Market gate — not heavy dog; cap extreme home favorites
     mkt = g.market
     home_impl = mkt.home_impl
-    market_ok = home_impl is not None and float(home_impl) >= 0.40
+    ops_threshold = 0.780   # 2025 backtest: 69.0% win / +11.5% ROI at this level
+    era_threshold = 5.00    # 2025 backtest: optimal balance of N and win rate
+    ml_cap = -275    # cap: avoid extreme favorites where 1 loss = big drawdown
+    market_ok = (
+        home_impl is not None
+        and float(home_impl) >= 0.40          # not a heavy underdog
+        and mkt.home_ml_current is not None
+        and int(mkt.home_ml_current) >= ml_cap  # not an extreme favorite
+    )
 
     # Month gate
     month_ok = game_month in {4, 5, 6, 7, 8, 9}
 
     # Core firing conditions
-    ops_threshold = 0.760
-    era_threshold = 4.50
-
     ops_ok = home_wma_ok and float(home_off.rolling_ops_wma) >= ops_threshold
     era_ok = pitcher_wma_ok and float(away_sp.era_wma) >= era_threshold
 
@@ -599,7 +605,8 @@ def _eval_owm(g: FullyDressedGame, game_month: int) -> SignalFinding:
         reason = (
             f"OWM blocked: ops_wma={ops_disp} (need>={ops_threshold}) "
             f"era_wma={era_disp} (need>={era_threshold}) "
-            f"market_ok={market_ok} month_ok={month_ok} "
+            f"market_ok={market_ok} (home_fav, cap>={ml_cap}) "
+            f"month_ok={month_ok} "
             f"home_wma_ok={home_wma_ok} pitcher_wma_ok={pitcher_wma_ok}"
         )
 
