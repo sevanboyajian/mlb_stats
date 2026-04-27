@@ -4537,7 +4537,7 @@ def build_morning_brief(games, streaks, starters, game_date,
     when known, and Vegas lines (ML, total, runline). No signal evaluation,
     no picks, no streak monitor, no avoids, no signal_state persistence.
     """
-    _ = (streaks, conn, session, verbose, debug_wind)  # API compatibility; unused (slate-only).
+    _ = (streaks, session, verbose, debug_wind)  # API compatibility; unused (slate-only).
     lines = []
     if now is None:
         now = _now_et()
@@ -4549,13 +4549,60 @@ def build_morning_brief(games, streaks, starters, game_date,
         "  Weather and odds reflect the latest load; re-check before you bet.\n"
     )
 
+    # Optional enrichment: show team offense WMA + starter WMA (ERA/K9/WHIP) when available.
+    if conn is not None:
+        lines.append(
+            "  Offense strength: OPS WMA is a 5-game weighted moving average (G-1=5…G-5=1), "
+            "exclusive of the current game. 'N/A' means missing/insufficient history.\n"
+        )
+
     lines.append(section(f"📋  TODAY'S SLATE  ({len(games)} games)"))
     if not games:
         lines.append("\n  No games on the slate for this date.\n")
     for game in games:
+        fdg = None
+        if conn is not None:
+            try:
+                g2 = dict(game)
+                enrich_game_with_starters(g2, starters)
+                from batch.pipeline.score_game import dress_game_for_brief
+
+                fdg = dress_game_for_brief(conn, g2)
+            except Exception:
+                fdg = None
+
         lines.append(f"\n  {matchup_line(game)}")
         lines.append(f"  {weather_line(game, wind_signal_hints=False)}")
         lines.append(f"  {starter_line(game, starters)}")
+        if fdg is not None:
+            try:
+                a = fdg.matchup.away_offense
+                h = fdg.matchup.home_offense
+                a_abbr = game.get("away_abbr", "AWAY")
+                h_abbr = game.get("home_abbr", "HOME")
+                a_ops_wma = f"{float(a.rolling_ops_wma):.3f}" if a.rolling_ops_wma is not None else "N/A"
+                h_ops_wma = f"{float(h.rolling_ops_wma):.3f}" if h.rolling_ops_wma is not None else "N/A"
+                lines.append(f"  Offense OPS WMA: {a_abbr} {a_ops_wma}  |  {h_abbr} (h) {h_ops_wma}")
+            except Exception:
+                pass
+            try:
+                away_sp = fdg.matchup.away_sp
+                home_sp = fdg.matchup.home_sp
+                a_abbr = game.get("away_abbr", "AWAY")
+                h_abbr = game.get("home_abbr", "HOME")
+
+                def _fmt_sp_wma(sp) -> str:
+                    era = f"{float(sp.era_wma):.2f}" if getattr(sp, "era_wma", None) is not None else "N/A"
+                    k9 = f"{float(sp.k_per_9_wma):.2f}" if getattr(sp, "k_per_9_wma", None) is not None else "N/A"
+                    whip = f"{float(sp.whip_wma):.2f}" if getattr(sp, "whip_wma", None) is not None else "N/A"
+                    return f"ERA {era}  K/9 {k9}  WHIP {whip}"
+
+                lines.append(
+                    f"  Starter WMA (last 5 starts): {a_abbr} {away_sp.name or 'TBD'} — {_fmt_sp_wma(away_sp)}"
+                    f"  |  {h_abbr} (h) {home_sp.name or 'TBD'} — {_fmt_sp_wma(home_sp)}"
+                )
+            except Exception:
+                pass
         lines.append(f"  {odds_summary_line(game)}")
     lines.append("")
     lines.append(CAVEAT)
