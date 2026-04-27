@@ -1,0 +1,4 @@
+[run_pipeline] force-unlock: runner_lock not present (nothing to clear)
+[run_pipeline] db=C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\data\mlb_stats.db
+[run_pipeline] mode=loop poll_seconds=60 ghost=False stale_minutes=30 timeout_minutes=30 sleep_until_due=True scope_job_date_et='2026-04-27' exit_when_no_pending=True
+[run_pipeline] sleep-until-due: next pending at 2026-04-27 06:00 ET (~3480s)

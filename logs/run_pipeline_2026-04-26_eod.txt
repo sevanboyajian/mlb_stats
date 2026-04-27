@@ -300,5 +300,3 @@ KeyboardInterrupt
 [job] id=1060 type=email_runlog_eod job_date_et=2026-04-26 game_group_id=0 scheduled_time=2026-04-26 19:27 ET
 [job] command='python batch/jobs/email_run_log.py --date 2026-04-26 --kind eod'
 [job] start_et=2026-04-26 19:28:09 ET (claimed)
-[job] end_et=2026-04-26 19:28:10 ET status=complete rc=0
-[run_pipeline] no pending pipeline_jobs; exiting (--exit-when-no-pending).
