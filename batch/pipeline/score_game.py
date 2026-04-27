@@ -1190,7 +1190,7 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
 
     # 3) Decide whether to bet — EDGE is necessary, plus minimum signal diversity.
     # Diversity rule: need at least one matchup-based and one context-based driver.
-    matchup_ids = {"LHP_FADE", "LHP_FADE_RL", "NF4"}
+    matchup_ids = {"LHP_FADE", "LHP_FADE_RL", "NF4", "OWM"}
     context_ids = {"S1H2", "S1+H2", "S1"}
     fired_best = [s for s in buckets.get(best_side or "", []) if bool(s.fires)] if best_side else []
     has_matchup = any(s.signal_id in matchup_ids for s in fired_best)

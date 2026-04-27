@@ -2762,7 +2762,7 @@ def build_signal_tracker_block(prior_picks: list, current_games: list,
 
     wind_ids = {"MV-F", "MV-B", "H3b"}
     streak_ids = {"S1+H2", "S1H2", "S1"}
-    matchup_ids = {"LHP_FADE", "LHP_FADE_RL", "NF4"}
+    matchup_ids = {"LHP_FADE", "LHP_FADE_RL", "NF4", "OWM"}
 
     def _grouped_categories_from_scored(scored: object) -> list[str]:
         cats: set[str] = set()
