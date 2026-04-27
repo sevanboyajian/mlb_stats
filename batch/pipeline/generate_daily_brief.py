@@ -4580,9 +4580,30 @@ def build_morning_brief(games, streaks, starters, game_date,
                 h = fdg.matchup.home_offense
                 a_abbr = game.get("away_abbr", "AWAY")
                 h_abbr = game.get("home_abbr", "HOME")
-                a_ops_wma = f"{float(a.rolling_ops_wma):.3f}" if a.rolling_ops_wma is not None else "N/A"
-                h_ops_wma = f"{float(h.rolling_ops_wma):.3f}" if h.rolling_ops_wma is not None else "N/A"
-                lines.append(f"  Offense OPS WMA: {a_abbr} {a_ops_wma}  |  {h_abbr} (h) {h_ops_wma}")
+                def _ops_label(v: float | None) -> str:
+                    if v is None:
+                        return "Insufficient data"
+                    x = float(v)
+                    if x >= 0.850:
+                        return "Elite offense"
+                    if x >= 0.780:
+                        return "Strong offense"
+                    if x >= 0.720:
+                        return "Above average"
+                    if x >= 0.680:
+                        return "Average offense"
+                    if x >= 0.630:
+                        return "Below average"
+                    return "Weak offense"
+
+                a_ops_wma_val = float(a.rolling_ops_wma) if a.rolling_ops_wma is not None else None
+                h_ops_wma_val = float(h.rolling_ops_wma) if h.rolling_ops_wma is not None else None
+                a_ops_wma = f"{a_ops_wma_val:.3f}" if a_ops_wma_val is not None else "N/A"
+                h_ops_wma = f"{h_ops_wma_val:.3f}" if h_ops_wma_val is not None else "N/A"
+                lines.append(
+                    f"  Offense OPS WMA: {a_abbr} {a_ops_wma} ({_ops_label(a_ops_wma_val)})"
+                    f"  |  {h_abbr} (h) {h_ops_wma} ({_ops_label(h_ops_wma_val)})"
+                )
             except Exception:
                 pass
             try:
