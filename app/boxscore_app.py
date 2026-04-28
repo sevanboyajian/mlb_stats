@@ -518,12 +518,12 @@ def build_game_card(game_pk: int, game_date: str) -> str:
     signals = evaluate_signals(g, home_streak)
 
     # Wind display
-    mph    = g["wind_mph"] or 0
+    mph    = g["wind_mph"]
     wdir   = wind_label(g["wind_direction"] or "")
     wdisp  = g["wind_direction"] or ""
     wsrc   = " (forecast)" if g.get("wind_source") == "forecast" else " (actual)"
     temp   = f"{int(g['temp_f'])}°F  " if g["temp_f"] else ""
-    wind_str = f"{temp}{mph} mph {wdir}{wsrc}" if mph else "Wind N/A"
+    wind_str = f"{temp}{float(mph):.0f} mph {wdir}{wsrc}" if mph is not None else "Wind N/A"
 
     # Score display
     if is_final:
@@ -541,8 +541,8 @@ def build_game_card(game_pk: int, game_date: str) -> str:
 
     # Odds bar
     hml = g["home_ml"]; aml = g["away_ml"]; total = g["total_line"]
-    ml_str  = f"{home_abbr} {fmt_odds(hml)} / {away_abbr} {fmt_odds(aml)}" if hml else "N/A"
-    tot_str = f"O/U {total}" if total else "N/A"
+    ml_str  = f"{home_abbr} {fmt_odds(hml)} / {away_abbr} {fmt_odds(aml)}" if hml is not None else "N/A"
+    tot_str = f"O/U {total}" if total is not None else "N/A"
     clv_str = ""
     if opening and hml and aml:
         ch = int(hml) - int(opening["home_ml"] or hml)
