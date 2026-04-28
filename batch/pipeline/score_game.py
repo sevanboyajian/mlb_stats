@@ -1034,6 +1034,11 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
 
     aggregated_scores: dict[str, int] = {}
     for side, sigs in buckets.items():
+        if str(side).endswith("_total"):
+            # Totals edges are primarily wind-driven; do not suppress wind signal strength.
+            aggregated_scores[side] = sum(int(s.confidence_score or 0) for s in sigs)
+            continue
+
         non_wind_total = sum(
             int(s.confidence_score or 0) for s in sigs if s.signal_id not in WIND_SIGNAL_IDS
         )
@@ -1164,6 +1169,8 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
             best_score = total
             best_side = side
 
+    agg_best_score = int(best_score)
+
     # --- env_ceiling penalty (soft, never blocks) ---
     env_penalty = 0
     ec = (g.environment.env_ceiling or "").strip()
@@ -1194,7 +1201,9 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
         odds_side = "home_ml_default" if home_ml is not None else ("away_ml_default" if away_ml is not None else None)
 
     # 2) Convert to probabilities
-    score_for_model = max(1, int(best_score))
+    # Use the raw aggregated score for calibration/edge (do not dilute signal probabilities
+    # due to venue env_ceiling penalties; penalties are for tier/visibility, not pricing).
+    score_for_model = max(1, int(agg_best_score))
     best_signal_id: str | None = None
     try:
         if best_side:
@@ -1232,7 +1241,7 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
     # (S1H2/S1 fire on away_ml) so diversity_ok will never be True for OWM.
     # Allow OWM to stake independently when score >= 8.
     owm_fired = any(s.signal_id == "OWM" and s.fires for s in fired_best)
-    owm_standalone_ok = owm_fired and int(best_score) >= 8
+    owm_standalone_ok = owm_fired and int(agg_best_score) >= 8
 
     # Wind total signals (MV-B, H3b) are self-sufficient — wind IS the context.
     # They stake independently when edge is positive.
