@@ -1214,7 +1214,17 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
     owm_fired = any(s.signal_id == "OWM" and s.fires for s in fired_best)
     owm_standalone_ok = owm_fired and int(best_score) >= 8
 
-    edge_ok = (edge is not None) and (edge >= EDGE_MIN) and (diversity_ok or owm_standalone_ok)
+    # Wind total signals (MV-B, H3b) are self-sufficient — wind IS the context.
+    # They stake independently when edge is positive.
+    wind_total_fired = any(
+        s.signal_id in ("MV-B", "H3b") and s.fires
+        for s in fired_best
+    )
+    wind_total_ok = wind_total_fired and best_side in ("over_total", "under_total")
+
+    edge_ok = (edge is not None) and (edge >= EDGE_MIN) and (
+        diversity_ok or owm_standalone_ok or wind_total_ok
+    )
 
     # Overall evaluation status (best-side ML only; totals/RL are per-market in market_evals)
     if model_p is None or implied_p is None:
