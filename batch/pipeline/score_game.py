@@ -1487,6 +1487,19 @@ def scored_game_to_eval_dict(scored: ScoredGame, session: str) -> dict[str, Any]
                         "note": "RL at breakeven — ML is the preferred bet.",
                     }
                 picks.append(pick)
+            elif scored.best_side == "home_ml":
+                pick = {
+                    "bet": f"{ids.home_team_abbr} ML",
+                    "market": "ML",
+                    "odds": _fmt_odds(mkt.home_ml_current),
+                    "reason": reason or (top.edge_basis or ""),
+                    "priority": pr,
+                    "confidence_score": int(top.confidence_score or 0),
+                    "score_basis": top.score_basis,
+                    "signal_id": top.signal_id,
+                    "bet_side": "home_ml",
+                }
+                picks.append(pick)
             elif scored.best_side == "over_total":
                 tline = mkt.total_current
                 bet_txt = f"OVER {tline}" if tline is not None else "OVER"
@@ -1500,6 +1513,21 @@ def scored_game_to_eval_dict(scored: ScoredGame, session: str) -> dict[str, Any]
                     "score_basis": top.score_basis,
                     "signal_id": top.signal_id,
                     "bet_side": "over_total",
+                }
+                picks.append(pick)
+            elif scored.best_side == "under_total":
+                tline = mkt.total_current
+                bet_txt = f"UNDER {tline}" if tline is not None else "UNDER"
+                pick = {
+                    "bet": bet_txt,
+                    "market": "TOTAL",
+                    "odds": _fmt_odds(mkt.under_odds),
+                    "reason": reason or (top.edge_basis or ""),
+                    "priority": pr,
+                    "confidence_score": int(top.confidence_score or 0),
+                    "score_basis": top.score_basis,
+                    "signal_id": top.signal_id,
+                    "bet_side": "under_total",
                 }
                 picks.append(pick)
 

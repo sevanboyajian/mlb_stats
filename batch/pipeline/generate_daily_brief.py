@@ -4905,7 +4905,11 @@ def build_primary_brief(games, streaks, starters, game_date,
     if skipped_bets:
         lines.append(color_text("  (Note: additional edges existed but were skipped due to the 5-bets/day cap.)\n", "dim"))
 
-    # Sort picks by priority (lower = higher priority)
+    # Sort picks for actionability under live odds:
+    # 1) stake > 0 first (actionable)
+    # 2) higher edge first
+    # 3) higher aggregate score first
+    # 4) signal priority as tie-break
     def _entry_priority(e: dict) -> int:
         try:
             picks = list((e.get("sigs") or {}).get("picks") or [])
@@ -4915,7 +4919,25 @@ def build_primary_brief(games, streaks, starters, game_date,
         except Exception:
             return 999
 
-    all_picks.sort(key=_entry_priority)
+    def _entry_rank(e: dict) -> tuple[int, float, int, int]:
+        sg = (e.get("sigs") or {}).get("_scored_game")
+        try:
+            st = float(getattr(sg, "stake_multiplier", 0.0) or 0.0) if sg is not None else 0.0
+        except Exception:
+            st = 0.0
+        try:
+            edge = float(getattr(sg, "edge", 0.0) or 0.0) if sg is not None else 0.0
+        except Exception:
+            edge = 0.0
+        try:
+            sc = int(getattr(sg, "best_aggregate_score", 0) or 0) if sg is not None else 0
+        except Exception:
+            sc = 0
+        pr = _entry_priority(e)
+        is_bet = 1 if st > 0 else 0
+        return (-is_bet, -edge, -sc, pr)
+
+    all_picks.sort(key=_entry_rank)
 
     # ── Persist signal state (TOP / NEXT only for customer briefs) ───────
     # Do not affect computation or report output; best-effort insert only.
