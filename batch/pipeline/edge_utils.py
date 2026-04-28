@@ -87,12 +87,78 @@ def _load_calibration_table() -> dict[int, float]:
 
 def score_to_model_prob(score: int) -> float:
     """
-    Calibrated score → probability:
-    - If calibration exists for the score: use it
-    - Else interpolate between nearest calibrated scores
-    - Clamp 0.50..0.75
-    - If no calibration yet: fall back to 0.50 + (score-5)*0.01 (clamped)
+    Deprecated shim for older call sites.
+
+    Prefer: score_to_model_prob(score, signal_id=...)
     """
+    return score_to_model_prob(int(score), None)
+
+
+# Backtested win rates per signal — grounded in historical data.
+# Source: 2025 backtests run April 2026.
+# OWM: 116 games, 69.0% win rate
+# LHP_FADE Band B [-150 to -203]: 83 games, 54.2% win rate
+# MV-B: historical wind-out OVER rate ~62%
+# H3b: secondary wind signal ~52%
+# S1H2/S1: streak fade signals ~54%/~52%
+# MV-F: wind-in ML fade ~53%
+_SIGNAL_BASE_WIN_RATES: dict[str, float] = {
+    "OWM": 0.690,
+    "LHP_FADE": 0.542,
+    "LHP_FADE_RL": 0.542,
+    "MV-B": 0.620,
+    "H3b": 0.522,
+    "S1H2": 0.540,
+    "S1": 0.520,
+    "MV-F": 0.530,
+}
+
+# Base scores per signal — must match SIGNAL_BASE_SCORE in score_game.py
+_SIGNAL_BASE_SCORES: dict[str, int] = {
+    "OWM": 8,
+    "LHP_FADE": 7,
+    "LHP_FADE_RL": 6,
+    "MV-B": 7,
+    "H3b": 3,
+    "S1H2": 8,
+    "S1": 5,
+    "MV-F": 8,
+}
+
+# Adjustment per score point above/below base score: ±1.5%
+_SCORE_ADJ_PER_POINT = 0.015
+
+
+def score_to_model_prob(score: int, signal_id: str | None = None) -> float:
+    """
+    Convert a confidence score to a win probability estimate.
+
+    When signal_id is provided and recognized:
+      - Uses the backtested win rate as the base probability
+      - Adjusts ±1.5% per score point above/below the signal's base score
+      - Clamps to 0.50–0.75
+
+    When signal_id is None or unrecognized:
+      - Falls back to calibration curve (calibration_log.csv) or linear ramp
+      - Behaviour identical to previous implementation
+
+    Examples:
+      OWM base score=8, win rate=69.0%
+        score=8 → 0.690  (at base)
+        score=9 → 0.705  (one booster confirmed)
+        score=7 → 0.675  (one booster below base)
+      LHP_FADE base score=7, win rate=54.2%
+        score=7 → 0.542
+        score=8 → 0.557
+    """
+    if signal_id is not None and signal_id in _SIGNAL_BASE_WIN_RATES:
+        base_prob = _SIGNAL_BASE_WIN_RATES[signal_id]
+        base_score = _SIGNAL_BASE_SCORES.get(signal_id, int(score))
+        delta = (int(score) - base_score) * _SCORE_ADJ_PER_POINT
+        p = base_prob + delta
+        return max(0.50, min(0.75, round(p, 4)))
+
+    # ── Fallback: original calibration-curve logic ────────────────────────
     tbl = _load_calibration_table()
     p = _interp(int(score), tbl) if tbl else None
     if p is None:

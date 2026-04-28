@@ -1098,7 +1098,17 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
                     )
 
             # Compute edge only if we have odds
-            model_p_m = score_to_model_prob(int(best_score_m))
+            best_signal_id_m: str | None = None
+            try:
+                if best_side_m:
+                    fired_m = [s for s in buckets.get(best_side_m or "", []) if bool(s.fires)]
+                    if fired_m:
+                        best_sig_m = max(fired_m, key=lambda s: int(getattr(s, "confidence_score", 0) or 0))
+                        best_signal_id_m = str(getattr(best_sig_m, "signal_id", "") or "") or None
+            except Exception:
+                best_signal_id_m = None
+
+            model_p_m = score_to_model_prob(int(best_score_m), best_signal_id_m)
             if model_p_m is not None and confidence_penalty > 0:
                 model_p_m = max(0.50, float(model_p_m) - float(confidence_penalty))
             implied_p_m = american_to_implied_prob(int(odds_taken) if odds_taken is not None else None)
@@ -1185,7 +1195,17 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
 
     # 2) Convert to probabilities
     score_for_model = max(1, int(best_score))
-    model_p = score_to_model_prob(int(score_for_model))
+    best_signal_id: str | None = None
+    try:
+        if best_side:
+            fired_for_best = [s for s in buckets.get(best_side or "", []) if bool(s.fires)]
+            if fired_for_best:
+                best_sig = max(fired_for_best, key=lambda s: int(getattr(s, "confidence_score", 0) or 0))
+                best_signal_id = str(getattr(best_sig, "signal_id", "") or "") or None
+    except Exception:
+        best_signal_id = None
+
+    model_p = score_to_model_prob(int(score_for_model), best_signal_id)
     if model_p is not None and confidence_penalty > 0:
         model_p = max(0.50, float(model_p) - float(confidence_penalty))
     if os.getenv("DEBUG_SCORE_GAME") == "1":
