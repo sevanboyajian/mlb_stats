@@ -3911,6 +3911,81 @@ def _avoid_scope_line(game: dict, sigs: dict) -> str | None:
     return None
 
 
+def _ops_tier_label(wma: float | None) -> str:
+    """Return a human-readable offensive tier label from OPS WMA value."""
+    if wma is None:
+        return "N/A"
+    if wma >= 0.870:
+        return "Elite offense"
+    if wma >= 0.800:
+        return "Strong offense"
+    if wma >= 0.750:
+        return "Above average"
+    if wma >= 0.710:
+        return "Average offense"
+    if wma >= 0.660:
+        return "Below average"
+    return "Weak offense"
+
+
+def _wma_context_lines(game: dict, sigs: dict) -> list[str]:
+    """
+    Return 0, 1, or 2 WMA context lines for a game using the _scored_game
+    object stored in sigs. Returns empty list if no WMA data available.
+
+    Line 1: Offense OPS WMA for away and home teams
+    Line 2: Starter ERA WMA, K/9 WMA, WHIP WMA for away and home starters
+    """
+    sg = (sigs or {}).get("_scored_game")
+    if sg is None:
+        return []
+    try:
+        fdg = sg.game
+        home_off = fdg.matchup.home_offense
+        away_off = fdg.matchup.away_offense if hasattr(fdg.matchup, "away_offense") else None
+        away_sp = fdg.matchup.away_sp
+        home_sp = fdg.matchup.home_sp if hasattr(fdg.matchup, "home_sp") else None
+        home_abbr = fdg.identifiers.home_team_abbr
+        away_abbr = fdg.identifiers.away_team_abbr
+    except Exception:
+        return []
+
+    result: list[str] = []
+
+    # ── Offense OPS WMA line ──────────────────────────────────────────────
+    home_wma = getattr(home_off, "rolling_ops_wma", None)
+    away_wma = getattr(away_off, "rolling_ops_wma", None) if away_off else None
+
+    home_ops_str = f"{home_wma:.3f} ({_ops_tier_label(home_wma)})" if home_wma is not None else "N/A"
+    away_ops_str = f"{away_wma:.3f} ({_ops_tier_label(away_wma)})" if away_wma is not None else "N/A"
+    result.append(
+        f"  Offense OPS WMA: {away_abbr} {away_ops_str}  |  {home_abbr} (h) {home_ops_str}"
+    )
+
+    # ── Starter WMA line ──────────────────────────────────────────────────
+    def _sp_wma_str(sp) -> str:
+        if sp is None:
+            return "N/A"
+        name = getattr(sp, "name", None) or "TBD"
+        era = getattr(sp, "era_wma", None)
+        k9 = getattr(sp, "k_per_9_wma", None)
+        whip = getattr(sp, "whip_wma", None)
+        if era is None and k9 is None and whip is None:
+            return f"{name} — ERA N/A  K/9 N/A  WHIP N/A"
+        era_s = f"{era:.2f}" if era is not None else "N/A"
+        k9_s = f"{k9:.2f}" if k9 is not None else "N/A"
+        whip_s = f"{whip:.2f}" if whip is not None else "N/A"
+        return f"{name} — ERA {era_s}  K/9 {k9_s}  WHIP {whip_s}"
+
+    away_sp_str = _sp_wma_str(away_sp)
+    home_sp_str = _sp_wma_str(home_sp)
+    result.append(
+        f"  Starter WMA (last 5 starts): {away_abbr} {away_sp_str}  |  {home_abbr} (h) {home_sp_str}"
+    )
+
+    return result
+
+
 def starter_line(game: dict, starters: dict) -> str:
     """Return starting pitcher line if available."""
     gpk = game.get("game_pk")
@@ -5012,6 +5087,8 @@ def build_primary_brief(games, streaks, starters, game_date,
             g = entry["game"]
             lines.append(f"  {matchup_line(g)}  |  {weather_line(g)}")
             lines.append(f"    {odds_summary_line(g)}")
+            for wma_line in _wma_context_lines(g, entry["sigs"]):
+                lines.append(wma_line)
             if entry["sigs"]["data_flags"]:
                 for f in entry["sigs"]["data_flags"]:
                     lines.append(f"    ⚠ {f}")
