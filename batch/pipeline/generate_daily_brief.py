@@ -3751,10 +3751,30 @@ def format_bet_block(scored_game: object) -> str:
 
     pick = getattr(scored_game, "top_pick", None)
     best_side = getattr(scored_game, "best_side", None)
-    if pick is not None and getattr(pick, "bet_side", None):
-        bet_txt = str(pick.bet_side).upper()
+
+    # Render the exact bet text (side/line/odds) with no ambiguity.
+    g = getattr(scored_game, "game", None)
+    ids = getattr(g, "identifiers", None) if g is not None else None
+    mkt = getattr(g, "market", None) if g is not None else None
+    side = str(getattr(pick, "bet_side", None) or best_side or "unknown")
+
+    if mkt is None or ids is None:
+        bet_txt = side.upper()
+    elif side == "home_ml":
+        bet_txt = f"{ids.home_team_abbr} ML {fmt_odds(mkt.home_ml_current)}"
+    elif side == "away_ml":
+        bet_txt = f"{ids.away_team_abbr} ML {fmt_odds(mkt.away_ml_current)}"
+    elif side == "over_total":
+        t = mkt.total_current
+        bet_txt = f"OVER {float(t):.1f} ({fmt_odds(mkt.over_odds)})" if t is not None else f"OVER ({fmt_odds(mkt.over_odds)})"
+    elif side == "under_total":
+        t = mkt.total_current
+        bet_txt = f"UNDER {float(t):.1f} ({fmt_odds(mkt.under_odds)})" if t is not None else f"UNDER ({fmt_odds(mkt.under_odds)})"
+    elif side == "away_rl":
+        rl = mkt.away_rl_line
+        bet_txt = f"{ids.away_team_abbr} {rl:+g} ({fmt_odds(mkt.away_rl_odds)})" if rl is not None else f"{ids.away_team_abbr} +1.5 ({fmt_odds(mkt.away_rl_odds)})"
     else:
-        bet_txt = str(best_side or "unknown").upper()
+        bet_txt = side.upper()
 
     if stake > 0:
         head = color_text("🔥 BET:", "green")
