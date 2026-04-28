@@ -1197,7 +1197,14 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
     has_context = any(s.signal_id in context_ids for s in fired_best)
     diversity_ok = bool(has_matchup and has_context)
 
-    edge_ok = (edge is not None) and (edge >= EDGE_MIN) and diversity_ok
+    # OWM is validated independently (69% win rate, 116 games 2025).
+    # It fires on home_ml which is the opposite side from context signals
+    # (S1H2/S1 fire on away_ml) so diversity_ok will never be True for OWM.
+    # Allow OWM to stake independently when score >= 8.
+    owm_fired = any(s.signal_id == "OWM" and s.fires for s in fired_best)
+    owm_standalone_ok = owm_fired and int(best_score) >= 8
+
+    edge_ok = (edge is not None) and (edge >= EDGE_MIN) and (diversity_ok or owm_standalone_ok)
 
     # Overall evaluation status (best-side ML only; totals/RL are per-market in market_evals)
     if model_p is None or implied_p is None:
