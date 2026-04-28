@@ -1493,7 +1493,7 @@ def scored_game_to_eval_dict(scored: ScoredGame, session: str) -> dict[str, Any]
                 pick = {
                     "bet": bet_txt,
                     "market": "TOTAL",
-                    "odds": _fmt_odds(mkt.over_odds_current),
+                    "odds": _fmt_odds(mkt.over_odds),
                     "reason": reason or (top.edge_basis or ""),
                     "priority": pr,
                     "confidence_score": int(top.confidence_score or 0),
