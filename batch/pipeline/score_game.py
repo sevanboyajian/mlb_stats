@@ -1257,13 +1257,20 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
         f"CALIB score={int(best_score)} model_p={model_p:.3f} implied_p={implied_txt} edge={edge_txt}"
     ]
 
+    stake_basis = "aggregated_scoring"
+    if owm_standalone_ok and not diversity_ok:
+        stake_basis = (
+            "OWM signal — home offense hot vs struggling away SP. "
+            "Staking independently (validated: 69% win rate, 116 games, 2025)."
+        )
+
     return ScoredGame(
         game=g,
         signals_fired=scored_signals,
         signals_blocked=blocked,
         avoids=avoids,
         output_tier=tier,
-        tier_basis="aggregated_scoring",
+        tier_basis=stake_basis,
         stake_multiplier=stake,
         top_pick=top_pick,
         data_flags=data_flags,
