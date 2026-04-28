@@ -884,9 +884,10 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
         game_pk = int(g.identifiers.game_pk)
     except Exception:
         game_pk = -1
-    print(f"[ENTER score_game] {game_pk}")
-    incoming_signals = [getattr(s, "signal_id", str(s)) for s in (getattr(g, "signals", None) or [])]
-    print(f"[DEBUG INSIDE SCORE] game={game_pk} signals={incoming_signals}")
+    if os.getenv("DEBUG_SCORE_GAME") == "1":
+        print(f"[ENTER score_game] {game_pk}")
+        incoming_signals = [getattr(s, "signal_id", str(s)) for s in (getattr(g, "signals", None) or [])]
+        print(f"[DEBUG INSIDE SCORE] game={game_pk} signals={incoming_signals}")
 
     gdb = _gdb()
     mkt = g.market

@@ -4833,7 +4833,8 @@ def build_primary_brief(games, streaks, starters, game_date,
         }
         evaluated_entries.append(entry)
         best_score = int(sigs.get("best_aggregate_score") or 0)
-        if best_score >= 5:
+        picks = list(sigs.get("picks") or [])
+        if best_score >= 5 and picks:
             all_picks.append(entry)
         else:
             # No published "bets to avoid" — treat no-pick games (incl. internal avoid flags) as no-signal slate
@@ -4905,7 +4906,16 @@ def build_primary_brief(games, streaks, starters, game_date,
         lines.append(color_text("  (Note: additional edges existed but were skipped due to the 5-bets/day cap.)\n", "dim"))
 
     # Sort picks by priority (lower = higher priority)
-    all_picks.sort(key=lambda e: min(p["priority"] for p in e["sigs"]["picks"]))
+    def _entry_priority(e: dict) -> int:
+        try:
+            picks = list((e.get("sigs") or {}).get("picks") or [])
+            if not picks:
+                return 999
+            return int(min(p.get("priority", 999) for p in picks))
+        except Exception:
+            return 999
+
+    all_picks.sort(key=_entry_priority)
 
     # ── Persist signal state (TOP / NEXT only for customer briefs) ───────
     # Do not affect computation or report output; best-effort insert only.
