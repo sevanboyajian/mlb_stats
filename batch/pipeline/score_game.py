@@ -1164,14 +1164,20 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
     best_score = max(0, int(best_score) + int(env_penalty))
 
     # --- EDGE MODEL INTEGRATION ---
-    # 1) Map side → odds (totals disabled for now)
+    # 1) Map side → odds
     home_ml = g.market.home_ml_current
     away_ml = g.market.away_ml_current
+    over_odds = g.market.over_odds
+    under_odds = g.market.under_odds
     odds_side = best_side
     if best_side == "away_ml":
         odds = away_ml
     elif best_side == "home_ml":
         odds = home_ml
+    elif best_side == "over_total":
+        odds = over_odds
+    elif best_side == "under_total":
+        odds = under_odds
     else:
         # Diagnostics: keep odds visible even if no side wins.
         odds = home_ml if home_ml is not None else away_ml
