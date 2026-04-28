@@ -1167,26 +1167,30 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
     # 1) Map side → odds (totals disabled for now)
     home_ml = g.market.home_ml_current
     away_ml = g.market.away_ml_current
+    odds_side = best_side
     if best_side == "away_ml":
         odds = away_ml
     elif best_side == "home_ml":
         odds = home_ml
     else:
-        odds = None
+        # Diagnostics: keep odds visible even if no side wins.
+        odds = home_ml if home_ml is not None else away_ml
+        odds_side = "home_ml_default" if home_ml is not None else ("away_ml_default" if away_ml is not None else None)
 
     # 2) Convert to probabilities
-    model_p = score_to_model_prob(int(best_score))
+    score_for_model = max(1, int(best_score))
+    model_p = score_to_model_prob(int(score_for_model))
     if model_p is not None and confidence_penalty > 0:
         model_p = max(0.50, float(model_p) - float(confidence_penalty))
     if os.getenv("DEBUG_SCORE_GAME") == "1":
         mp_txt = f"{float(model_p):.3f}" if model_p is not None else "NA"
-        print(f"[DEBUG MODEL_P] score={int(best_score)} \u2192 model_p={mp_txt}")
+        print(f"[DEBUG MODEL_P] score={int(score_for_model)} \u2192 model_p={mp_txt}")
     implied_p = american_to_implied_prob(int(odds) if odds is not None else None)
     edge = compute_edge(model_p, implied_p)
     if os.getenv("DEBUG_SCORE_GAME") == "1":
         mp_txt = f"{float(model_p):.2f}" if model_p is not None else "NA"
         ed_txt = f"{float(edge):.2f}" if edge is not None else "NA"
-        print(f"[DEBUG EDGE] game={game_pk} score={int(best_score)} model_p={mp_txt} edge={ed_txt}")
+        print(f"[DEBUG EDGE] game={game_pk} score={int(score_for_model)} model_p={mp_txt} edge={ed_txt}")
 
     # 3) Decide whether to bet — EDGE is necessary, plus minimum signal diversity.
     # Diversity rule: need at least one matchup-based and one context-based driver.
@@ -1253,8 +1257,14 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
     # Customer briefs: gaps + venue/odds notes, plus calibration line for analysis
     implied_txt = f"{implied_p:.3f}" if implied_p is not None else "NA"
     edge_txt = f"{edge:.3f}" if edge is not None else "NA"
+    odds_txt = _fmt_odds(odds) if odds is not None else "NA"
+    home_odds_txt = _fmt_odds(home_ml) if home_ml is not None else "NA"
+    away_odds_txt = _fmt_odds(away_ml) if away_ml is not None else "NA"
     data_flags = list(g.completeness.gaps) + extra_flags + [
-        f"CALIB score={int(best_score)} model_p={model_p:.3f} implied_p={implied_txt} edge={edge_txt}"
+        f"CALIB score={int(score_for_model)} (agg={int(best_score)}) "
+        f"odds={odds_txt} odds_side={odds_side or 'NA'} "
+        f"home_ml={home_odds_txt} away_ml={away_odds_txt} "
+        f"model_p={model_p:.3f} implied_p={implied_txt} edge={edge_txt}"
     ]
 
     stake_basis = "aggregated_scoring"
