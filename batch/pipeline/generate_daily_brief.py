@@ -3606,6 +3606,7 @@ SIGNAL_LABELS = {
     "MV-F": "Wind Fade (ML)",
     "MV-B": "Wind Boost (Over)",
     "LHP_FADE": "LHP Mismatch",
+    "OWM": "Offense Matchup",
     "LHP_FADE_RL": "LHP RL Edge",
     "NF4": "Pitching Edge",
     "H3b": "Wind → Over",
