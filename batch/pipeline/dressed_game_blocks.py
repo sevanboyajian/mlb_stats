@@ -77,6 +77,7 @@ class PitcherProfile:
     era_wma: float | None = None
     k_per_9_wma: float | None = None
     whip_wma: float | None = None
+    starts_in_window: int = 0
 
 
 # Backwards-compatible name (briefs / external prompts refer to "starter" profile).
@@ -246,7 +247,7 @@ def fetch_dressing_bundle(con: sqlite3.Connection, game_pk: int, game_date_et: s
             ph = ",".join("?" * len(pids))
             cur = con.execute(
                 f"""
-                SELECT prs.player_id, prs.era_wma, prs.k_per_9_wma, prs.whip_wma
+                SELECT prs.player_id, prs.era_wma, prs.k_per_9_wma, prs.whip_wma, prs.starts_in_window
                 FROM pitcher_rolling_stats prs
                 JOIN games g ON g.game_pk = prs.game_pk
                 WHERE prs.player_id IN ({ph})
@@ -511,6 +512,7 @@ def _pitcher_profile_from_starter_row(
         float(wma["k_per_9_wma"]) if wma and wma.get("k_per_9_wma") is not None else None
     )
     whip_wma = float(wma["whip_wma"]) if wma and wma.get("whip_wma") is not None else None
+    starts_in_window = int(wma["starts_in_window"]) if wma and wma.get("starts_in_window") is not None else 0
 
     return PitcherProfile(
         player_id=pid,
@@ -527,6 +529,7 @@ def _pitcher_profile_from_starter_row(
         era_wma=era_wma,
         k_per_9_wma=k_per_9_wma,
         whip_wma=whip_wma,
+        starts_in_window=starts_in_window,
     )
 
 
