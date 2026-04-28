@@ -123,7 +123,7 @@ def fractional_kelly(model_p: float, odds: int, fraction: float = 0.25) -> float
     return kelly * float(fraction)
 
 
-EDGE_MIN = 0.07
+EDGE_MIN = 0.02
 EDGE_STRONG = 0.06
 EDGE_MAX = 0.15
 
