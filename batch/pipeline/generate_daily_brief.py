@@ -4542,6 +4542,10 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
 
     for e in evaluated:
         g = e["game"]
+        # IMPORTANT: per-game grading must use THIS game's final score.
+        # These variables are used by the actionable grading blocks below.
+        hs = g.get("home_score")
+        as_ = g.get("away_score")
         lines.append(f"\n  {matchup_line(g)}")
         lines.append(f"  {weather_line(g)}")
         if g.get("home_score") is not None:
