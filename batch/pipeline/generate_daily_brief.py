@@ -1746,7 +1746,6 @@ def _insert_bet_ledger_from_latest(
             return
 
     # One opinion = one bet: if (game_pk, market_type) already has any staked bet, skip.
-    # Also: totals are disabled temporarily (skip market_type == 'total').
     already_staked: set[tuple[int, str]] = set()
     try:
         rows = conn.execute(
@@ -1766,8 +1765,6 @@ def _insert_bet_ledger_from_latest(
         if sig_type not in ("top", "next", "avoid"):
             continue
         mt = str(r["market_type"] or "")
-        if mt == "total":
-            continue
         stake = 0.0 if sig_type == "avoid" else 1.0
         odds_val = None if sig_type == "avoid" else r["odds"]
 
