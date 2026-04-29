@@ -216,5 +216,3 @@
 [job] id=1137 type=email_runlog_eod job_date_et=2026-04-28 game_group_id=0 scheduled_time=2026-04-28 21:47 ET
 [job] command='python batch/jobs/email_run_log.py --date 2026-04-28 --kind eod'
 [job] start_et=2026-04-28 21:47:52 ET (claimed)
-[job] end_et=2026-04-28 21:47:53 ET status=complete rc=0
-[run_pipeline] no pending pipeline_jobs; exiting (--exit-when-no-pending).
