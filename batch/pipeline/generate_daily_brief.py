@@ -4474,6 +4474,22 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
             return None
         return sorted(picks, key=lambda x: x.get("priority", 99))[0]
 
+    def _parse_total_line_from_bet_text(bt: str) -> float | None:
+        """
+        Extract total line from a bet string like:
+          'OVER 7.5' / 'UNDER 9.0 (-108)' / 'OVER 7.5  (8 runs)'
+        Returns None if not parseable.
+        """
+        s = (bt or "").strip().upper()
+        if not s:
+            return None
+        if not (s.startswith("OVER") or s.startswith("UNDER") or s.startswith("PUSH")):
+            return None
+        try:
+            return float(s.split()[1])
+        except Exception:
+            return None
+
     for e in evaluated:
         g = e["game"]
         lines.append(f"\n  {matchup_line(g)}")
@@ -4572,7 +4588,16 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
                 bet_txt = str(tot_snap.get("bet") or "")
                 odds = tot_snap.get("odds_taken")
                 bet = "over" if "OVER" in bet_txt.upper() else "under"
-                res, pnl_v = grade_total(bet, hs, as_, tot, int(odds) if odds is not None else None)
+                # Grade totals against the bet-time line (from bet text) whenever possible.
+                # Fall back to bet-time/closing total only if the bet text is missing a number.
+                total_for_grade = _parse_total_line_from_bet_text(bet_txt) or tot
+                res, pnl_v = grade_total(
+                    bet,
+                    hs,
+                    as_,
+                    float(total_for_grade) if total_for_grade is not None else tot,
+                    int(odds) if odds is not None else None,
+                )
                 pnl_disp = pnl_str(float(pnl_v))
                 lines.append("  ────────────────────────────")
                 lines.append(color_text("  🔥 ACTIONABLE BET", "bold"))
