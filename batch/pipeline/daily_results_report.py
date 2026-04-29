@@ -499,19 +499,30 @@ def format_game_block(g: dict, all_bets: list, signal_picks: list) -> str:
 
     # Conditions
     wind_str = ""
-    if g.get("wind_mph"):
+    if g.get("wind_mph") is not None:
         wind_str = f"  │  Wind {g['wind_mph']} mph {g.get('wind_direction','')}"
     temp_str = f"  {g['temp_f']}°F" if g.get("temp_f") else ""
     if g.get("venue_name"):
         lines.append(f"  {g['venue_name']}{temp_str}{wind_str}")
 
     # Odds line
-    if g.get("home_ml"):
-        rl_str = (f"  │  RL {fmt_odds(int(g['home_rl']))} / +{abs(int(g['away_rl']))}"
-                  if g.get("home_rl") else "")
-        ou_str = (f"  │  O/U {g['total_line']}" if g.get("total_line") else "")
-        lines.append(f"  ML: {home} {fmt_odds(g['home_ml'])} / {away} {fmt_odds(g['away_ml'])}"
-                     f"{rl_str}{ou_str}")
+    hml = g.get("home_ml")
+    aml = g.get("away_ml")
+    if (hml is not None) or (aml is not None) or (g.get("total_line") is not None) or (g.get("home_rl") is not None):
+        rl_str = ""
+        if g.get("home_rl") is not None and g.get("away_rl") is not None:
+            rl_str = (f"  │  RL {fmt_odds(int(g['home_rl']))} / +{abs(int(g['away_rl']))}")
+        ou_str = (f"  │  O/U {g['total_line']}" if g.get("total_line") is not None else "")
+        ml_str = ""
+        if hml is not None and aml is not None:
+            ml_str = f"  ML: {home} {fmt_odds(hml)} / {away} {fmt_odds(aml)}"
+        elif hml is not None:
+            ml_str = f"  ML: {home} {fmt_odds(hml)}"
+        elif aml is not None:
+            ml_str = f"  ML: {away} {fmt_odds(aml)}"
+        else:
+            ml_str = "  ML: N/A"
+        lines.append(f"{ml_str}{rl_str}{ou_str}")
 
     # All bets graded
     if all_bets:
@@ -706,7 +717,7 @@ def build_season_summary(con: sqlite3.Connection, season: int) -> str:
         for g in games:
             # O/U tracking
             hs = g["home_score"]; as_ = g["away_score"]
-            if hs is not None and g["total_line"]:
+            if hs is not None and g["total_line"] is not None:
                 total_ou_games += 1
                 if hs + as_ > g["total_line"]:
                     total_overs += 1
