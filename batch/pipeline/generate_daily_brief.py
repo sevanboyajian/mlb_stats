@@ -4676,14 +4676,13 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
                 if bet_line is not None and close_line is not None:
                     o_bet = _total_outcome_for_line(bet=bet_txt, runs=runs_f, line=bet_line)
                     o_close = _total_outcome_for_line(bet=bet_txt, runs=runs_f, line=close_line)
-                    if (abs(close_line - bet_line) >= 0.05) or (o_bet != o_close):
-                        delta = close_line - bet_line
-                        lines.append(
-                            color_text(
-                                f"    Line movement: bet-time {bet_line:.1f} → {o_bet}  |  closing {close_line:.1f} → {o_close}  (Δ{delta:+.1f})",
-                                "dim",
-                            )
+                    delta = close_line - bet_line
+                    lines.append(
+                        color_text(
+                            f"    Line movement: bet-time {bet_line:.1f} → {o_bet}  |  closing {close_line:.1f} → {o_close}  (Δ{delta:+.1f})",
+                            "dim",
                         )
+                    )
             else:
                 if tot_snap:
                     st = _snap_status(tot_snap)
