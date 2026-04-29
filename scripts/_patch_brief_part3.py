@@ -2,8 +2,8 @@
 Apply Part 3 brief patches to batch/pipeline/generate_daily_brief.py.
 
 Requires: batch/pipeline/brief_score_helpers.py (committed).
-Close generate_daily_brief.py in the editor, then run:
-  python _patch_brief_part3.py
+Close generate_daily_brief.py in the editor, then run from repo root:
+  python scripts/_patch_brief_part3.py
 """
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import os
 import pathlib
 import shutil
 
-ROOT = pathlib.Path(__file__).resolve().parent
+ROOT = pathlib.Path(__file__).resolve().parent.parent
 P = ROOT / "batch" / "pipeline" / "generate_daily_brief.py"
 
 IMPORT_BLOCK = """
