@@ -4524,6 +4524,22 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
         except Exception:
             return None
 
+    def _total_outcome_for_line(*, bet: str, runs: float, line: float) -> str:
+        b = (bet or "").strip().upper()
+        if b.startswith("OVER"):
+            if runs > line:
+                return "WIN"
+            if runs < line:
+                return "LOSS"
+            return "PUSH"
+        if b.startswith("UNDER"):
+            if runs < line:
+                return "WIN"
+            if runs > line:
+                return "LOSS"
+            return "PUSH"
+        return "—"
+
     for e in evaluated:
         g = e["game"]
         lines.append(f"\n  {matchup_line(g)}")
@@ -4645,6 +4661,25 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
                     f"  {prefix}  {bet_txt:<12} | SIGNAL: {tot_sig:<22} | "
                     f"RESULT: {_clean_result(res):<10} | P&L: {pnl_disp}"
                 )
+                # Add a closing-line counterfactual to explain when a "good early" bet
+                # would look "bad late" due to line movement.
+                try:
+                    runs_f = float((hs or 0) + (as_ or 0))
+                except Exception:
+                    runs_f = float(runs or 0)
+                bet_line = float(total_for_grade) if total_for_grade is not None else None
+                close_line = float(tot) if tot is not None else None
+                if bet_line is not None and close_line is not None:
+                    o_bet = _total_outcome_for_line(bet=bet_txt, runs=runs_f, line=bet_line)
+                    o_close = _total_outcome_for_line(bet=bet_txt, runs=runs_f, line=close_line)
+                    if (abs(close_line - bet_line) >= 0.05) or (o_bet != o_close):
+                        delta = close_line - bet_line
+                        lines.append(
+                            color_text(
+                                f"    Line movement: bet-time {bet_line:.1f} → {o_bet}  |  closing {close_line:.1f} → {o_close}  (Δ{delta:+.1f})",
+                                "dim",
+                            )
+                        )
             else:
                 if tot_snap:
                     st = _snap_status(tot_snap)
