@@ -35,7 +35,7 @@ def _smtp_settings() -> tuple[str, int, str, str, str]:
         port = int(port_s)
     except ValueError:
         port = 587
-    user = _env("SMTP_USER") or _env("BRIEF_SMTP_USER", "mlb.stats.sender@gmail.com")
+    user = _env("SMTP_USER") or _env("BRIEF_SMTP_USER", "")
     password = _env("SMTP_PASSWORD") or _env("BRIEF_SMTP_PASSWORD", "")
     mail_from = _env("SMTP_FROM") or _env("BRIEF_EMAIL_FROM") or user
     return host, port, user, password, mail_from
@@ -73,6 +73,8 @@ def send_report_email(
     host, port, user, password, mail_from = _smtp_settings()
     if not password:
         return False, "SMTP_PASSWORD (or BRIEF_SMTP_PASSWORD) not set"
+    if not user:
+        return False, "SMTP_USER (or BRIEF_SMTP_USER) not set"
 
     attach_p: Path | None = None
     if attachment_path:
