@@ -917,7 +917,9 @@ CREATE TABLE IF NOT EXISTS brief_picks (
     market      TEXT    NOT NULL,
     odds        INTEGER,
     total_line  REAL,
+    total_line_at_bet REAL,
     recorded_at TEXT    NOT NULL,
+    model_version TEXT DEFAULT 'legacy',
     UNIQUE (game_date, session, game_pk, signal)
 );
 

@@ -1071,7 +1071,7 @@ def load_season_pnl(conn: sqlite3.Connection, game_date: str) -> dict:
 
 def ensure_brief_picks(conn: sqlite3.Connection) -> None:
     """Create table that stores confirmed picks shown in each brief.
-    Migrates existing tables: total_line, model_version."""
+    Migrates existing tables: total_line, total_line_at_bet, model_version."""
     conn.execute("""
         CREATE TABLE IF NOT EXISTS brief_picks (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1084,6 +1084,7 @@ def ensure_brief_picks(conn: sqlite3.Connection) -> None:
             market      TEXT    NOT NULL,
             odds        INTEGER,
             total_line  REAL,              -- stored when market=TOTAL; enables movement alert
+            total_line_at_bet REAL,         -- bet-time total line for grading (not closing)
             recorded_at TEXT    NOT NULL,
             model_version TEXT DEFAULT 'legacy',
             UNIQUE (game_date, session, game_pk, signal)
@@ -1095,6 +1096,8 @@ def ensure_brief_picks(conn: sqlite3.Connection) -> None:
         if cols:
             if "total_line" not in cols:
                 conn.execute("ALTER TABLE brief_picks ADD COLUMN total_line REAL")
+            if "total_line_at_bet" not in cols:
+                conn.execute("ALTER TABLE brief_picks ADD COLUMN total_line_at_bet REAL")
             if "model_version" not in cols:
                 conn.execute(
                     "ALTER TABLE brief_picks ADD COLUMN model_version TEXT DEFAULT 'legacy'"
@@ -2184,11 +2187,26 @@ def grade_bet_ledger(conn: sqlite3.Connection, game_date: str | None = None) -> 
             g.home_score,
             g.away_score,
             th.abbreviation AS home_abbr,
-            ta.abbreviation AS away_abbr
+            ta.abbreviation AS away_abbr,
+            bp.total_line_at_bet AS total_line_at_bet,
+            go_tot.total_line     AS closing_total_line
         FROM bet_ledger bl
         JOIN games g ON g.game_pk = bl.game_pk
         JOIN teams th ON th.team_id = g.home_team_id
         JOIN teams ta ON ta.team_id = g.away_team_id
+        LEFT JOIN brief_picks bp
+            ON bp.game_date = bl.game_date
+           AND bp.session   = bl.session
+           AND bp.game_pk   = bl.game_pk
+           AND bp.market    = 'TOTAL'
+           AND (
+                (LOWER(TRIM(bl.signal_at_time)) = 'top'  AND bp.pick_rank = 1)
+             OR (LOWER(TRIM(bl.signal_at_time)) = 'next' AND bp.pick_rank > 1)
+             OR (LOWER(TRIM(bl.signal_at_time)) = 'avoid' AND bp.pick_rank = 0)
+           )
+        LEFT JOIN v_closing_game_odds go_tot
+            ON go_tot.game_pk = bl.game_pk
+           AND go_tot.market_type = 'total'
         WHERE g.status = 'Final'
           AND (bl.result IS NULL OR TRIM(bl.result) = '')
           {where_date}
@@ -2315,7 +2333,19 @@ def grade_bet_ledger(conn: sqlite3.Connection, game_date: str | None = None) -> 
                 hypo = "win" if won else "loss"
             elif market == "total":
                 side, line = _parse_total_bet(equiv)
-                if side is None or line is None:
+                if side is None:
+                    continue
+                if line is None:
+                    try:
+                        tlb = r.get("total_line_at_bet")
+                    except Exception:
+                        tlb = None
+                    try:
+                        tcl = r.get("closing_total_line")
+                    except Exception:
+                        tcl = None
+                    line = float(tlb) if tlb is not None else (float(tcl) if tcl is not None else None)
+                if line is None:
                     continue
                 if runs == line:
                     hypo = "push"
@@ -2375,7 +2405,20 @@ def grade_bet_ledger(conn: sqlite3.Connection, game_date: str | None = None) -> 
 
         elif market == "total":
             side, line = _parse_total_bet(bet_text)
-            if side is None or line is None:
+            if side is None:
+                continue
+            # Prefer bet-time line (from bet text), else brief_picks.total_line_at_bet, else closing.
+            if line is None:
+                try:
+                    tlb = r.get("total_line_at_bet")
+                except Exception:
+                    tlb = None
+                try:
+                    tcl = r.get("closing_total_line")
+                except Exception:
+                    tcl = None
+                line = float(tlb) if tlb is not None else (float(tcl) if tcl is not None else None)
+            if line is None:
                 continue
             runs = hs + as_
             if runs == line:
@@ -2485,15 +2528,17 @@ def save_brief_picks(
                 continue
             odds_raw = _parse_odds(p.get("odds", ""))
             total_line_val = None
+            total_line_at_bet = None
             if p.get("market") == "TOTAL":
                 total_line_val = entry["game"].get("total_line")
+                total_line_at_bet = entry["game"].get("total_line")
             try:
                 conn.execute(
                     """
                     INSERT OR IGNORE INTO brief_picks
                         (game_date, session, game_pk, pick_rank, signal,
-                         bet, market, odds, total_line, recorded_at, model_version)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                         bet, market, odds, total_line, total_line_at_bet, recorded_at, model_version)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     (
                         game_date,
@@ -2505,6 +2550,7 @@ def save_brief_picks(
                         p["market"],
                         odds_raw,
                         total_line_val,
+                        total_line_at_bet,
                         now_et,
                         model_version,
                     ),
@@ -2522,6 +2568,7 @@ def save_brief_picks(
             if _game_already_started_for_brief_picks(g, now):
                 continue
             market, bet_text, total_line_val = avoid_entry_bet_fields(entry)
+            total_line_at_bet = total_line_val
             if _brief_pick_exists_cross_session(
                 conn, game_date, int(gpk), "AVOID", market,
             ):
@@ -2531,8 +2578,8 @@ def save_brief_picks(
                     """
                     INSERT OR IGNORE INTO brief_picks
                         (game_date, session, game_pk, pick_rank, signal,
-                         bet, market, odds, total_line, recorded_at, model_version)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                         bet, market, odds, total_line, total_line_at_bet, recorded_at, model_version)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     (
                         game_date,
@@ -2544,6 +2591,7 @@ def save_brief_picks(
                         market,
                         None,
                         total_line_val,
+                        total_line_at_bet,
                         now_et,
                         model_version,
                     ),
