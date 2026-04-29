@@ -227,8 +227,9 @@ from core.db.connection import connect as db_connect, get_db_path
 try:
     from dotenv import load_dotenv
     # Load in a stable order; avoids relying on "current working directory".
+    # Important: repo-root ".env" should win over any inherited shell env vars.
     load_dotenv(os.path.join(_REPO_ROOT, "config", ".env"), override=False)
-    load_dotenv(os.path.join(_REPO_ROOT, ".env"), override=False)
+    load_dotenv(os.path.join(_REPO_ROOT, ".env"), override=True)
     load_dotenv(override=False)  # fallback: cwd / parent-chain
 except ImportError:
     pass
