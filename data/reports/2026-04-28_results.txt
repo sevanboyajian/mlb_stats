@@ -82,7 +82,7 @@
 
   ────────────────────────────────────────────────────────────────
   BOS  @  TOR  │  Final: BOS 0  –  TOR 3  (TOR wins)
-  Rogers Centre  68°F
+  Rogers Centre  68°F  │  Wind 0 mph 0 mph, None
   ML: TOR -115 / BOS -105  │  RL -1 / +1  │  O/U 7.5
 
   BET                                ODDS  RESULT         P&L
@@ -150,7 +150,7 @@
 
   ────────────────────────────────────────────────────────────────
   AZ  @  MIL  │  Final: AZ 2  –  MIL 13  (MIL wins)
-  American Family Field  67°F
+  American Family Field  67°F  │  Wind 0 mph 0 mph, None
   ML: MIL -136 / AZ +113  │  RL -1 / +1  │  O/U 8.0
 
   BET                                ODDS  RESULT         P&L
@@ -181,7 +181,7 @@
 
   ────────────────────────────────────────────────────────────────
   NYY  @  TEX  │  Final: NYY 3  –  TEX 2  (NYY wins)
-  Globe Life Field  74°F
+  Globe Life Field  74°F  │  Wind 0 mph 0 mph, None
   ML: TEX +104 / NYY -126  │  RL -1 / +1  │  O/U 7.0
 
   BET                                ODDS  RESULT         P&L
