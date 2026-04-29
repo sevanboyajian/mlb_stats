@@ -1116,6 +1116,30 @@ def ensure_brief_picks(conn: sqlite3.Connection) -> None:
                 )
             except Exception:
                 pass
+            # One row per (game_date, game_pk, market) — used to prevent duplicate staking
+            # across sessions. Must dedupe legacy duplicates before creating unique index.
+            try:
+                conn.execute(
+                    """
+                    DELETE FROM brief_picks
+                    WHERE id NOT IN (
+                        SELECT MAX(id)
+                        FROM brief_picks
+                        GROUP BY game_date, game_pk, market
+                    )
+                    """
+                )
+            except Exception:
+                pass
+            try:
+                conn.execute(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS uq_brief_picks_game_market
+                    ON brief_picks (game_date, game_pk, market)
+                    """
+                )
+            except Exception:
+                pass
             conn.commit()
     except Exception:
         pass
@@ -2536,10 +2560,6 @@ def save_brief_picks(
             signal = ", ".join(entry["sigs"]["signals"])
             if _game_already_started_for_brief_picks(g, now):
                 continue
-            if _brief_pick_exists_cross_session(
-                conn, game_date, int(g["game_pk"]), signal, p["market"],
-            ):
-                continue
             odds_raw = _parse_odds(p.get("odds", ""))
             total_line_val = None
             total_line_at_bet = None
@@ -2549,10 +2569,20 @@ def save_brief_picks(
             try:
                 conn.execute(
                     """
-                    INSERT OR IGNORE INTO brief_picks
+                    INSERT INTO brief_picks
                         (game_date, session, game_pk, pick_rank, signal,
                          bet, market, odds, total_line, total_line_at_bet, recorded_at, model_version)
                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(game_date, game_pk, market) DO UPDATE SET
+                        session          = excluded.session,
+                        pick_rank        = excluded.pick_rank,
+                        signal           = excluded.signal,
+                        bet              = excluded.bet,
+                        odds             = excluded.odds,
+                        total_line       = excluded.total_line,
+                        total_line_at_bet= excluded.total_line_at_bet,
+                        recorded_at      = excluded.recorded_at,
+                        model_version    = excluded.model_version
                     """,
                     (
                         game_date,
@@ -2583,17 +2613,23 @@ def save_brief_picks(
                 continue
             market, bet_text, total_line_val = avoid_entry_bet_fields(entry)
             total_line_at_bet = total_line_val
-            if _brief_pick_exists_cross_session(
-                conn, game_date, int(gpk), "AVOID", market,
-            ):
-                continue
             try:
                 conn.execute(
                     """
-                    INSERT OR IGNORE INTO brief_picks
+                    INSERT INTO brief_picks
                         (game_date, session, game_pk, pick_rank, signal,
                          bet, market, odds, total_line, total_line_at_bet, recorded_at, model_version)
                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(game_date, game_pk, market) DO UPDATE SET
+                        session          = excluded.session,
+                        pick_rank        = excluded.pick_rank,
+                        signal           = excluded.signal,
+                        bet              = excluded.bet,
+                        odds             = excluded.odds,
+                        total_line       = excluded.total_line,
+                        total_line_at_bet= excluded.total_line_at_bet,
+                        recorded_at      = excluded.recorded_at,
+                        model_version    = excluded.model_version
                     """,
                     (
                         game_date,

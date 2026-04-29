@@ -923,6 +923,10 @@ CREATE TABLE IF NOT EXISTS brief_picks (
     UNIQUE (game_date, session, game_pk, signal)
 );
 
+-- One row per game+market per date (prevents duplicate staking across sessions).
+CREATE UNIQUE INDEX IF NOT EXISTS uq_brief_picks_game_market
+ON brief_picks (game_date, game_pk, market);
+
 
 -- ------------------------------------------------------------
 -- PLANNED (not created yet): game_signal_log
