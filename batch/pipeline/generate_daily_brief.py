@@ -1102,6 +1102,19 @@ def ensure_brief_picks(conn: sqlite3.Connection) -> None:
                 conn.execute(
                     "ALTER TABLE brief_picks ADD COLUMN model_version TEXT DEFAULT 'legacy'"
                 )
+            # One-time backfill: older rows had total_line but not total_line_at_bet.
+            try:
+                conn.execute(
+                    """
+                    UPDATE brief_picks
+                    SET total_line_at_bet = total_line
+                    WHERE total_line_at_bet IS NULL
+                      AND total_line IS NOT NULL
+                      AND market = 'TOTAL'
+                    """
+                )
+            except Exception:
+                pass
             conn.commit()
     except Exception:
         pass
