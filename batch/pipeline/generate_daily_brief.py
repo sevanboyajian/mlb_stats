@@ -2275,7 +2275,28 @@ def grade_bet_ledger(conn: sqlite3.Connection, game_date: str | None = None) -> 
         where_date = "AND bl.game_date = ?"
         params = (game_date,)
 
+    def _coalesce_float(*vals: object) -> float | None:
+        for v in vals:
+            if v is None:
+                continue
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    def _total_line_for_totals_grading(row: sqlite3.Row) -> float | None:
+        """Ledger / brief picks line first; last pre-start snapshot last (never is_closing_line)."""
+        return _coalesce_float(
+            row["ledger_total_line_at_bet"],
+            row["bp_total_line_at_bet"],
+            row["bp_total_line"],
+            row["pre_start_total_line"],
+        )
+
     # Only grade ungraded bets (result is NULL or empty) for Final games.
+    # Totals: prefer bet_ledger.total_line_at_bet, then brief_picks total_line_at_bet / total_line,
+    # then last game_odds snapshot at or before first pitch (not v_closing_game_odds / is_closing_line).
     rows = conn.execute(
         f"""
         SELECT
@@ -2292,25 +2313,37 @@ def grade_bet_ledger(conn: sqlite3.Connection, game_date: str | None = None) -> 
             g.away_score,
             th.abbreviation AS home_abbr,
             ta.abbreviation AS away_abbr,
-            bp.total_line_at_bet AS total_line_at_bet,
-            go_tot.total_line     AS closing_total_line
+            bl.total_line_at_bet AS ledger_total_line_at_bet,
+            bp.total_line_at_bet AS bp_total_line_at_bet,
+            bp.total_line AS bp_total_line,
+            (
+                SELECT go.total_line
+                FROM game_odds go
+                WHERE go.game_pk = bl.game_pk
+                  AND go.market_type = 'total'
+                  AND g.game_start_utc IS NOT NULL
+                  AND TRIM(CAST(g.game_start_utc AS TEXT)) != ''
+                  AND go.captured_at_utc <= g.game_start_utc
+                ORDER BY go.captured_at_utc DESC,
+                    CASE lower(go.bookmaker)
+                        WHEN 'draftkings' THEN 1
+                        WHEN 'fanduel' THEN 2
+                        WHEN 'betmgm' THEN 3
+                        WHEN 'betonlineag' THEN 4
+                        WHEN 'sbro' THEN 5
+                        WHEN 'oddswarehouse' THEN 6
+                        ELSE 7
+                    END ASC
+                LIMIT 1
+            ) AS pre_start_total_line
         FROM bet_ledger bl
         JOIN games g ON g.game_pk = bl.game_pk
         JOIN teams th ON th.team_id = g.home_team_id
         JOIN teams ta ON ta.team_id = g.away_team_id
         LEFT JOIN brief_picks bp
             ON bp.game_date = bl.game_date
-           AND bp.session   = bl.session
-           AND bp.game_pk   = bl.game_pk
-           AND bp.market    = 'TOTAL'
-           AND (
-                (LOWER(TRIM(bl.signal_at_time)) = 'top'  AND bp.pick_rank = 1)
-             OR (LOWER(TRIM(bl.signal_at_time)) = 'next' AND bp.pick_rank > 1)
-             OR (LOWER(TRIM(bl.signal_at_time)) = 'avoid' AND bp.pick_rank = 0)
-           )
-        LEFT JOIN v_closing_game_odds go_tot
-            ON go_tot.game_pk = bl.game_pk
-           AND go_tot.market_type = 'total'
+           AND bp.game_pk = bl.game_pk
+           AND bp.market = 'TOTAL'
         WHERE g.status = 'Final'
           AND (bl.result IS NULL OR TRIM(bl.result) = '')
           {where_date}
@@ -2436,19 +2469,10 @@ def grade_bet_ledger(conn: sqlite3.Connection, game_date: str | None = None) -> 
                     continue
                 hypo = "win" if won else "loss"
             elif market == "total":
-                side, line = _parse_total_bet(equiv)
+                side, parsed_line = _parse_total_bet(equiv)
                 if side is None:
                     continue
-                if line is None:
-                    try:
-                        tlb = r.get("total_line_at_bet")
-                    except Exception:
-                        tlb = None
-                    try:
-                        tcl = r.get("closing_total_line")
-                    except Exception:
-                        tcl = None
-                    line = float(tlb) if tlb is not None else (float(tcl) if tcl is not None else None)
+                line = _total_line_for_totals_grading(r) or parsed_line
                 if line is None:
                     continue
                 if runs == line:
@@ -2508,20 +2532,11 @@ def grade_bet_ledger(conn: sqlite3.Connection, game_date: str | None = None) -> 
             pnl = _pnl_units_from_odds(r["odds_taken"], won=won, push=False)
 
         elif market == "total":
-            side, line = _parse_total_bet(bet_text)
+            side, parsed_line = _parse_total_bet(bet_text)
             if side is None:
                 continue
-            # Prefer bet-time line (from bet text), else brief_picks.total_line_at_bet, else closing.
-            if line is None:
-                try:
-                    tlb = r.get("total_line_at_bet")
-                except Exception:
-                    tlb = None
-                try:
-                    tcl = r.get("closing_total_line")
-                except Exception:
-                    tcl = None
-                line = float(tlb) if tlb is not None else (float(tcl) if tcl is not None else None)
+            # Grade vs line at bet time — not v_closing / is_closing_line (Prompt 2).
+            line = _total_line_for_totals_grading(r) or parsed_line
             if line is None:
                 continue
             runs = hs + as_
@@ -4297,7 +4312,14 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
             v.wind_effect, v.wind_note, v.roof_type,
             v.park_factor_runs, v.park_factor_hr, v.orientation_hp,
             go_ml.home_ml,   go_ml.away_ml,
-            go_tot.total_line, go_tot.over_odds, go_tot.under_odds,
+            COALESCE(
+                bp_tot.total_line_at_bet,
+                bp_tot.total_line,
+                tot_snap.total_line,
+                tot_close.total_line
+            ) AS total_line,
+            COALESCE(tot_snap.over_odds, tot_close.over_odds) AS over_odds,
+            COALESCE(tot_snap.under_odds, tot_close.under_odds) AS under_odds,
             rl.home_rl_line  AS home_rl,
             rl.away_rl_line  AS away_rl,
             rl.home_rl_odds,
@@ -4306,10 +4328,42 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
         JOIN   teams  th     ON th.team_id  = g.home_team_id
         JOIN   teams  ta     ON ta.team_id  = g.away_team_id
         LEFT JOIN venues v   ON v.venue_id  = g.venue_id
+        LEFT JOIN brief_picks bp_tot
+               ON bp_tot.game_date = g.game_date_et
+              AND bp_tot.game_pk   = g.game_pk
+              AND bp_tot.market    = 'TOTAL'
+        LEFT JOIN (
+            SELECT z.game_pk, z.total_line, z.over_odds, z.under_odds FROM (
+                SELECT
+                    go.game_pk,
+                    go.total_line,
+                    go.over_odds,
+                    go.under_odds,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY go.game_pk
+                        ORDER BY go.captured_at_utc DESC,
+                            CASE lower(go.bookmaker)
+                                WHEN 'draftkings' THEN 1
+                                WHEN 'fanduel' THEN 2
+                                WHEN 'betmgm' THEN 3
+                                WHEN 'betonlineag' THEN 4
+                                WHEN 'sbro' THEN 5
+                                WHEN 'oddswarehouse' THEN 6
+                                ELSE 7
+                            END ASC
+                    ) AS rn
+                FROM game_odds go
+                INNER JOIN games gx ON gx.game_pk = go.game_pk
+                WHERE go.market_type = 'total'
+                  AND gx.game_start_utc IS NOT NULL
+                  AND TRIM(CAST(gx.game_start_utc AS TEXT)) != ''
+                  AND go.captured_at_utc <= gx.game_start_utc
+            ) z WHERE z.rn = 1
+        ) tot_snap ON tot_snap.game_pk = g.game_pk
+        LEFT JOIN v_closing_game_odds tot_close ON tot_close.game_pk = g.game_pk
+                                                  AND tot_close.market_type = 'total'
         LEFT JOIN v_closing_game_odds go_ml  ON go_ml.game_pk  = g.game_pk
                                              AND go_ml.market_type  = 'moneyline'
-        LEFT JOIN v_closing_game_odds go_tot ON go_tot.game_pk = g.game_pk
-                                             AND go_tot.market_type = 'total'
         LEFT JOIN v_closing_game_odds rl     ON rl.game_pk = g.game_pk
                                              AND rl.market_type = 'runline'
         WHERE  g.game_date_et = ?
