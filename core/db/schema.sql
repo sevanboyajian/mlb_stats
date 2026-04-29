@@ -855,6 +855,8 @@ CREATE TABLE IF NOT EXISTS bet_ledger (
     signal_at_time   TEXT,    -- 'top','next','avoid'
     session         TEXT,
     placed_at        TEXT,
+    total_line_at_bet REAL,    -- TOTAL market: line at signal time (from bet text)
+    late_signal     INTEGER NOT NULL DEFAULT 0,  -- 1 if recorded in last 30m before first pitch
     result          TEXT,     -- 'win','loss','push'
     pnl_units        REAL
 );
@@ -918,6 +920,7 @@ CREATE TABLE IF NOT EXISTS brief_picks (
     odds        INTEGER,
     total_line  REAL,
     total_line_at_bet REAL,
+    late_signal INTEGER NOT NULL DEFAULT 0,  -- 1 if pick recorded in last 30m before first pitch
     recorded_at TEXT    NOT NULL,
     model_version TEXT DEFAULT 'legacy',
     UNIQUE (game_date, session, game_pk, signal)

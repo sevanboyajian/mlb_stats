@@ -261,6 +261,36 @@ def _game_start_utc_dt(g: dict) -> datetime.datetime | None:
         return None
 
 
+def _late_signal_for_game_now(g: dict, now: datetime.datetime | None) -> int:
+    """
+    1 if ``now`` is within the last 30 minutes before scheduled first pitch (pregame),
+    else 0. Uses ``game_start_utc`` vs current time in UTC wall-clock (naive).
+    """
+    gst = _game_start_utc_dt(g)
+    if gst is None or now is None:
+        return 0
+    try:
+        now_utc = now.astimezone(datetime.timezone.utc)
+        now_naive = now_utc.replace(tzinfo=None)
+        minutes_to_start = (gst - now_naive).total_seconds() / 60.0
+    except Exception:
+        return 0
+    return 1 if 0.0 <= minutes_to_start <= 30.0 else 0
+
+
+def _ledger_total_line_at_bet(market_type: str, bet_text: str | None) -> float | None:
+    """For ``market_type=='total'``, parse total from bet text (e.g. OVER 7.5)."""
+    if (market_type or "").strip().lower() != "total":
+        return None
+    s = (bet_text or "").strip().upper()
+    if not (s.startswith("OVER") or s.startswith("UNDER")):
+        return None
+    try:
+        return float(s.split()[1])
+    except Exception:
+        return None
+
+
 def _game_started_or_in_progress_for_closing(game: dict, now: datetime.datetime) -> bool:
     """
     True if first pitch time is known and ``now`` is at or after start (UTC).
@@ -1072,7 +1102,7 @@ def load_season_pnl(conn: sqlite3.Connection, game_date: str) -> dict:
 
 def ensure_brief_picks(conn: sqlite3.Connection) -> None:
     """Create table that stores confirmed picks shown in each brief.
-    Migrates existing tables: total_line, total_line_at_bet, model_version."""
+    Migrates existing tables: total_line, total_line_at_bet, late_signal, model_version."""
     conn.execute("""
         CREATE TABLE IF NOT EXISTS brief_picks (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1086,6 +1116,7 @@ def ensure_brief_picks(conn: sqlite3.Connection) -> None:
             odds        INTEGER,
             total_line  REAL,              -- stored when market=TOTAL; enables movement alert
             total_line_at_bet REAL,         -- bet-time total line for grading (not closing)
+            late_signal INTEGER NOT NULL DEFAULT 0,  -- 1 if pick recorded inside T−30 → first pitch
             recorded_at TEXT    NOT NULL,
             model_version TEXT DEFAULT 'legacy',
             UNIQUE (game_date, session, game_pk, signal)
@@ -1102,6 +1133,10 @@ def ensure_brief_picks(conn: sqlite3.Connection) -> None:
             if "model_version" not in cols:
                 conn.execute(
                     "ALTER TABLE brief_picks ADD COLUMN model_version TEXT DEFAULT 'legacy'"
+                )
+            if "late_signal" not in cols:
+                conn.execute(
+                    "ALTER TABLE brief_picks ADD COLUMN late_signal INTEGER NOT NULL DEFAULT 0"
                 )
             # One-time backfill: older rows had total_line but not total_line_at_bet.
             try:
@@ -1179,6 +1214,8 @@ def ensure_bet_ledger(conn: sqlite3.Connection) -> None:
             signal_at_time TEXT,  -- 'top','next','avoid'
             session       TEXT,
             placed_at     TEXT,
+            total_line_at_bet REAL,
+            late_signal   INTEGER DEFAULT 0,
             result        TEXT,   -- 'win','loss','push'
             pnl_units     REAL
         )
@@ -1192,6 +1229,18 @@ def ensure_bet_ledger(conn: sqlite3.Connection) -> None:
         CREATE UNIQUE INDEX IF NOT EXISTS idx_bet_ledger_game_market_signal
         ON bet_ledger (game_pk, market_type, IFNULL(signal_at_time, ''))
     """)
+    try:
+        ledger_cols = [r[1] for r in conn.execute("PRAGMA table_info(bet_ledger)").fetchall()]
+        if ledger_cols:
+            if "total_line_at_bet" not in ledger_cols:
+                conn.execute("ALTER TABLE bet_ledger ADD COLUMN total_line_at_bet REAL")
+            if "late_signal" not in ledger_cols:
+                conn.execute(
+                    "ALTER TABLE bet_ledger ADD COLUMN late_signal INTEGER NOT NULL DEFAULT 0"
+                )
+            conn.commit()
+    except Exception:
+        pass
     conn.commit()
 
 
@@ -1767,6 +1816,23 @@ def _insert_bet_ledger_from_latest(
         mt = str(r["market_type"] or "")
         stake = 0.0 if sig_type == "avoid" else 1.0
         odds_val = None if sig_type == "avoid" else r["odds"]
+        rec_dt = _parse_recorded_at_et_ledger(r["recorded_at"])
+        g_stub: dict = {"game_start_utc": None}
+        try:
+            _gs = conn.execute(
+                "SELECT game_start_utc FROM games WHERE game_pk=?",
+                (int(r["game_pk"]),),
+            ).fetchone()
+            if _gs:
+                g_stub["game_start_utc"] = _gs[0]
+        except Exception:
+            pass
+        late_sig = (
+            _late_signal_for_game_now(g_stub, rec_dt)
+            if rec_dt is not None
+            else 0
+        )
+        tlb = _ledger_total_line_at_bet(mt, str(r["bet"] or ""))
 
         # If the staked ledger row already exists, still backfill the snapshot on reruns.
         if stake > 0 and (int(r["game_pk"]), mt) in already_staked:
@@ -1781,8 +1847,9 @@ def _insert_bet_ledger_from_latest(
                 """
                 INSERT OR IGNORE INTO bet_ledger
                     (game_date, game_pk, market_type, bet, odds_taken, stake_units,
-                     signal_at_time, session, placed_at, result, pnl_units)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                     signal_at_time, session, placed_at, total_line_at_bet, late_signal,
+                     result, pnl_units)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     game_date,
@@ -1794,6 +1861,8 @@ def _insert_bet_ledger_from_latest(
                     sig_type,
                     r["session"],
                     r["recorded_at"],
+                    tlb,
+                    late_sig,
                     None,
                     None,
                 ),
@@ -2563,13 +2632,14 @@ def save_brief_picks(
             if p.get("market") == "TOTAL":
                 total_line_val = entry["game"].get("total_line")
                 total_line_at_bet = entry["game"].get("total_line")
+            late_sig = _late_signal_for_game_now(g, now)
             try:
                 conn.execute(
                     """
                     INSERT INTO brief_picks
                         (game_date, session, game_pk, pick_rank, signal,
-                         bet, market, odds, total_line, total_line_at_bet, recorded_at, model_version)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                         bet, market, odds, total_line, total_line_at_bet, late_signal, recorded_at, model_version)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT(game_date, game_pk, market) DO UPDATE SET
                         session          = excluded.session,
                         pick_rank        = excluded.pick_rank,
@@ -2578,6 +2648,7 @@ def save_brief_picks(
                         odds             = excluded.odds,
                         total_line       = excluded.total_line,
                         total_line_at_bet= excluded.total_line_at_bet,
+                        late_signal      = excluded.late_signal,
                         recorded_at      = excluded.recorded_at,
                         model_version    = excluded.model_version
                     """,
@@ -2592,6 +2663,7 @@ def save_brief_picks(
                         odds_raw,
                         total_line_val,
                         total_line_at_bet,
+                        late_sig,
                         now_et,
                         model_version,
                     ),
@@ -2610,13 +2682,14 @@ def save_brief_picks(
                 continue
             market, bet_text, total_line_val = avoid_entry_bet_fields(entry)
             total_line_at_bet = total_line_val
+            late_sig = _late_signal_for_game_now(g, now)
             try:
                 conn.execute(
                     """
                     INSERT INTO brief_picks
                         (game_date, session, game_pk, pick_rank, signal,
-                         bet, market, odds, total_line, total_line_at_bet, recorded_at, model_version)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                         bet, market, odds, total_line, total_line_at_bet, late_signal, recorded_at, model_version)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT(game_date, game_pk, market) DO UPDATE SET
                         session          = excluded.session,
                         pick_rank        = excluded.pick_rank,
@@ -2625,6 +2698,7 @@ def save_brief_picks(
                         odds             = excluded.odds,
                         total_line       = excluded.total_line,
                         total_line_at_bet= excluded.total_line_at_bet,
+                        late_signal      = excluded.late_signal,
                         recorded_at      = excluded.recorded_at,
                         model_version    = excluded.model_version
                     """,
@@ -2639,6 +2713,7 @@ def save_brief_picks(
                         None,
                         total_line_val,
                         total_line_at_bet,
+                        late_sig,
                         now_et,
                         model_version,
                     ),
