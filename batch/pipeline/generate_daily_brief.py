@@ -348,6 +348,31 @@ def _brief_pick_exists_cross_session(
         return False
 
 
+def _brief_entry_late_first_fire_warning(
+    conn: sqlite3.Connection | None,
+    game_date: str | None,
+    now: datetime.datetime | None,
+    game: dict,
+    signal: str,
+    market: str,
+) -> bool:
+    """
+    True when this pick is a first-time appearance today (no prior brief_picks row
+    for game/signal/market) AND the run is inside the last 30 minutes before first pitch.
+    Carried-forward picks from earlier sessions suppress the flag.
+    """
+    if conn is None or not game_date or now is None:
+        return False
+    gpk = game.get("game_pk")
+    if gpk is None:
+        return False
+    if _late_signal_for_game_now(game, now) != 1:
+        return False
+    if _brief_pick_exists_cross_session(conn, game_date, int(gpk), signal, market):
+        return False
+    return True
+
+
 def _game_start_et(game: dict) -> str:
     """Return game start time as an ET string e.g. '7:10 PM ET'.
     Returns empty string if game_start_utc is missing or unparseable.
@@ -3899,7 +3924,7 @@ def color_text(text: str, color: str) -> str:
     return f"{c}{text}{r}"
 
 
-def format_bet_block(scored_game: object) -> str:
+def format_bet_block(scored_game: object, *, is_late_signal: bool = False) -> str:
     """
     ASCII pick card from a ``ScoredGame`` (primary / additional brief rows).
 
@@ -3907,6 +3932,8 @@ def format_bet_block(scored_game: object) -> str:
     BET shows the aggregate bucket id (e.g. ``AWAY_ML``). Signals: all
     ``signals_fired``, sorted by per-signal ``confidence_score``, grouped
     Core (≥7) / Support (5–6) / Minor (≤4) with ``humanize_signal`` labels.
+
+    When ``is_late_signal`` is True and stake > 0, appends a caution after the STAKE line.
     """
     tier = getattr(scored_game, "output_tier", None)
     stake = float(getattr(scored_game, "stake_multiplier", 0.0) or 0.0)
@@ -5286,7 +5313,11 @@ def build_primary_brief(games, streaks, starters, game_date,
         sg = top["sigs"].get("_scored_game")
         if sg is not None:
             lines.append("")
-            for bl in format_bet_block(sg).splitlines():
+            sig_str = ", ".join(top["sigs"]["signals"])
+            is_late = _brief_entry_late_first_fire_warning(
+                conn, game_date, now, g, sig_str, str(p.get("market") or "")
+            )
+            for bl in format_bet_block(sg, is_late_signal=is_late).splitlines():
                 lines.append("  " + bl)
         else:
             score_txt = format_aggregate_for_brief(
@@ -5348,7 +5379,11 @@ def build_primary_brief(games, streaks, starters, game_date,
         ind = "       "
         if sg2 is not None:
             lines.append("")
-            for bl in format_bet_block(sg2).splitlines():
+            sig_str2 = ", ".join(sigs["signals"])
+            is_late2 = _brief_entry_late_first_fire_warning(
+                conn, game_date, now, g, sig_str2, str(best.get("market") or "")
+            )
+            for bl in format_bet_block(sg2, is_late_signal=is_late2).splitlines():
                 lines.append(ind + bl)
         else:
             score_txt = format_aggregate_for_brief(
