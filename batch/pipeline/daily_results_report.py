@@ -132,9 +132,14 @@ def load_completed_games(con: sqlite3.Connection, game_date: str) -> list:
             ml.home_ml,
             ml.away_ml,
             ml.bookmaker    AS ml_bookmaker,
-            tot.total_line,
-            tot.over_odds,
-            tot.under_odds,
+            COALESCE(
+                bp_tot.total_line_at_bet,
+                bp_tot.total_line,
+                tot_snap.total_line,
+                tot_close.total_line
+            ) AS total_line,
+            COALESCE(tot_snap.over_odds, tot_close.over_odds) AS over_odds,
+            COALESCE(tot_snap.under_odds, tot_close.under_odds) AS under_odds,
             rl.home_rl_line AS home_rl,
             rl.away_rl_line AS away_rl,
             rl.home_rl_odds,
@@ -144,12 +149,44 @@ def load_completed_games(con: sqlite3.Connection, game_date: str) -> list:
         JOIN   teams  th     ON th.team_id  = g.home_team_id
         JOIN   teams  ta     ON ta.team_id  = g.away_team_id
         LEFT JOIN venues v   ON v.venue_id  = g.venue_id
+        LEFT JOIN brief_picks bp_tot
+               ON bp_tot.game_date = g.game_date_et
+              AND bp_tot.game_pk   = g.game_pk
+              AND bp_tot.market    = 'TOTAL'
+        LEFT JOIN (
+            SELECT z.game_pk, z.total_line, z.over_odds, z.under_odds FROM (
+                SELECT
+                    go.game_pk,
+                    go.total_line,
+                    go.over_odds,
+                    go.under_odds,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY go.game_pk
+                        ORDER BY go.captured_at_utc DESC,
+                            CASE lower(go.bookmaker)
+                                WHEN 'draftkings' THEN 1
+                                WHEN 'fanduel' THEN 2
+                                WHEN 'betmgm' THEN 3
+                                WHEN 'betonlineag' THEN 4
+                                WHEN 'sbro' THEN 5
+                                WHEN 'oddswarehouse' THEN 6
+                                ELSE 7
+                            END ASC
+                    ) AS rn
+                FROM game_odds go
+                INNER JOIN games gx ON gx.game_pk = go.game_pk
+                WHERE go.market_type = 'total'
+                  AND gx.game_start_utc IS NOT NULL
+                  AND TRIM(CAST(gx.game_start_utc AS TEXT)) != ''
+                  AND go.captured_at_utc <= gx.game_start_utc
+            ) z WHERE z.rn = 1
+        ) tot_snap ON tot_snap.game_pk = g.game_pk
+        LEFT JOIN v_closing_game_odds tot_close
+               ON tot_close.game_pk = g.game_pk
+              AND tot_close.market_type = 'total'
         LEFT JOIN v_closing_game_odds ml
                ON ml.game_pk    = g.game_pk
               AND ml.market_type = 'moneyline'
-        LEFT JOIN v_closing_game_odds tot
-               ON tot.game_pk   = g.game_pk
-              AND tot.market_type = 'total'
         LEFT JOIN v_closing_game_odds rl
                ON rl.game_pk    = g.game_pk
               AND rl.market_type = 'runline'
