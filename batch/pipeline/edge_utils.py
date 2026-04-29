@@ -189,7 +189,17 @@ def fractional_kelly(model_p: float, odds: int, fraction: float = 0.25) -> float
     return kelly * float(fraction)
 
 
+#
+# Edge tiering (betting guidance; does not change model scoring)
+# ------------------------------------------------------------
+# Natural interpretation of current thresholds:
+# - edge < EDGE_MIN:        no edge → never bet
+# - EDGE_MIN–<EDGE_CLEAR:   marginal → wait for primary confirmation
+# - EDGE_CLEAR–<EDGE_STRONG: clear → bet within ~1 hour of signal appearing
+# - edge >= EDGE_STRONG:    strong → bet immediately (no confirmation needed)
+#
 EDGE_MIN = 0.02
+EDGE_CLEAR = 0.06
 EDGE_STRONG = 0.06
 EDGE_MAX = 0.15
 
