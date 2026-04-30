@@ -679,6 +679,9 @@ def load_schedule(con: sqlite3.Connection, start_date: str, end_date: str,
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(game_pk) DO UPDATE SET
                     status          = excluded.status,
+                    -- Allow reschedules / MLB API corrections to update first pitch time.
+                    -- (Brief session filtering depends on game_start_utc being current.)
+                    game_start_utc  = COALESCE(excluded.game_start_utc, game_start_utc),
                     home_score      = COALESCE(excluded.home_score, home_score),
                     away_score      = COALESCE(excluded.away_score, away_score),
                     innings_played  = COALESCE(excluded.innings_played, innings_played),
