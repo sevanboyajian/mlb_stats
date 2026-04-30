@@ -400,7 +400,17 @@ def _send_smtp_email_alert(*, payload: dict[str, Any]) -> None:
         user = (os.getenv("PIPELINE_SMTP_USER") or "").strip()
         password = (os.getenv("PIPELINE_SMTP_PASS") or "").strip()
         mail_from = (os.getenv("PIPELINE_ALERT_FROM") or user or "").strip()
+        # Recipient resolution:
+        # - PIPELINE_ALERT_TO is an explicit override (comma-separated)
+        # - else, use DB subscription_type='system_alert'
         mail_to = (os.getenv("PIPELINE_ALERT_TO") or "").strip()
+        if not mail_to:
+            try:
+                from delivery.recipient_router import recipients_csv
+
+                mail_to = recipients_csv("system_alert")
+            except Exception:
+                mail_to = ""
         if not host or not mail_to or not mail_from:
             return
 

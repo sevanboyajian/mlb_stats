@@ -6545,8 +6545,18 @@ def _maybe_email_report_docx(*, docx_path: str, slate_date: str, session: str) -
     Non-fatal: never raises; SMTP/import failures are logged only.
     """
     try:
+        # Recipient resolution:
+        # - If BRIEF_EMAIL_TO / REPORT_EMAIL_TO is set, treat it as an explicit override.
+        # - Otherwise, use DB subscriptions (users/user_subscriptions).
         to_raw = (os.getenv("BRIEF_EMAIL_TO") or os.getenv("REPORT_EMAIL_TO") or "").strip()
         if not to_raw:
+            try:
+                from delivery.recipient_router import recipients_csv
+
+                to_raw = recipients_csv("group_brief")
+            except Exception:
+                to_raw = ""
+        if not to_raw.strip():
             return
         from delivery.email_sender import send_report_email
 

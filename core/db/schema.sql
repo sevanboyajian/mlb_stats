@@ -873,6 +873,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_bet_ledger_game_market
 CREATE TABLE IF NOT EXISTS users (
     user_id     INTEGER PRIMARY KEY,
     email       TEXT    UNIQUE NOT NULL,
+    first_name  TEXT,
+    last_name   TEXT,
     role        TEXT    NOT NULL CHECK (role IN ('admin','user','fe')),
     is_active   INTEGER NOT NULL DEFAULT 1,
     created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP

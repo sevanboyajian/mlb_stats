@@ -7,7 +7,8 @@ Email the run_pipeline log file as a text attachment.
 This is intentionally dumb: no pipeline business logic. It just attaches the log.
 
 Env:
-  BRIEF_EMAIL_TO (or REPORT_EMAIL_TO): recipients (comma-separated). If unset, exits 0 (no-op).
+  BRIEF_EMAIL_TO (or REPORT_EMAIL_TO): explicit recipient override (comma-separated).
+  If unset, recipients are resolved via DB subscription_type='admin_report'.
   SMTP_* as used by delivery.email_sender (Gmail App Password recommended).
 """
 
@@ -44,7 +45,14 @@ def main() -> int:
 
     to_raw = (os.getenv("BRIEF_EMAIL_TO") or os.getenv("REPORT_EMAIL_TO") or "").strip()
     if not to_raw:
-        # No-op by default (safe for automation)
+        try:
+            from delivery.recipient_router import recipients_csv
+
+            to_raw = recipients_csv("admin_report")
+        except Exception:
+            to_raw = ""
+    if not to_raw.strip():
+        # No recipients configured — safe no-op for automation.
         return 0
 
     jd = (str(args.date).strip() if args.date else "")
