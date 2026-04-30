@@ -545,7 +545,9 @@ PERSIST_WRITES = True
 
 # ── Output directory for saved briefs ──────────────────────────────────────
 # Standard location across the repo: <repo root>/outputs/briefs
-OUTPUT_DIR = Path(_REPO_ROOT) / "outputs" / "briefs"
+from core.utils.base_dir import get_base_dir
+
+OUTPUT_DIR = get_base_dir() / "outputs" / "briefs"
 
 
 def _default_brief_file_stem(

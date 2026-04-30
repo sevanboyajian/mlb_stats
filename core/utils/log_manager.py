@@ -42,12 +42,11 @@ from datetime import date
 from pathlib import Path
 from typing import Optional
 
+from core.utils.base_dir import get_base_dir
+
 # ── Configuration ─────────────────────────────────────────────────────────────
 DEFAULT_KEEP = 7          # number of log files to retain per prefix
 LOG_DIR_NAME = Path("outputs") / "logs"   # relative to repo root
-
-# core/utils/log_manager.py -> parents[2] == repository root
-_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _log_dir(script_path: Optional[Path] = None) -> Path:
@@ -55,7 +54,7 @@ def _log_dir(script_path: Optional[Path] = None) -> Path:
 
     `script_path` is accepted for backward compatibility but is no longer used.
     """
-    d = _REPO_ROOT / LOG_DIR_NAME
+    d = get_base_dir() / LOG_DIR_NAME
     d.mkdir(parents=True, exist_ok=True)
     return d
 

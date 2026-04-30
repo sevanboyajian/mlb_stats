@@ -21,18 +21,19 @@ from pathlib import Path
 from typing import Any
 
 from online.services.admin_paths import repo_root
+from core.utils.base_dir import get_base_dir
 
 
 def _state_path() -> Path:
-    return repo_root() / "logs" / "pipeline_admin_runner_state.json"
+    return get_base_dir() / "logs" / "pipeline_admin_runner_state.json"
 
 
 def _log_path() -> Path:
-    return repo_root() / "logs" / "pipeline_admin_runner_console.log"
+    return get_base_dir() / "logs" / "pipeline_admin_runner_console.log"
 
 
 def _ensure_logs() -> None:
-    d = repo_root() / "logs"
+    d = get_base_dir() / "logs"
     d.mkdir(parents=True, exist_ok=True)
 
 

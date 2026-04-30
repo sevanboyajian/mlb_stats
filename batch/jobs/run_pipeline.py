@@ -118,6 +118,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from core.db.connection import connect as db_connect, get_db_path
+from core.utils.base_dir import get_base_dir
 
 # Max automatic re-runs after a failed attempt (retry_count 0…N−1 re-queue; at N terminal fail).
 _MAX_FAILURE_RETRIES = 5
@@ -324,7 +325,7 @@ def _repo_root_path() -> Path:
 
 
 def _alert_log_path() -> Path:
-    return _repo_root_path() / "logs" / "alerts.log"
+    return get_base_dir() / "logs" / "alerts.log"
 
 
 def _print_failure_alert(*, payload: dict[str, Any]) -> None:
@@ -2336,7 +2337,7 @@ def main() -> None:
     # Tee runner output to a log file (still prints live to console).
     log_path = str(args.log_file).strip() if args.log_file else ""
     if not log_path and args.job_date_et:
-        log_path = str((_REPO_ROOT / "logs" / f"run_pipeline_{str(args.job_date_et).strip()}.txt").resolve())
+        log_path = str((get_base_dir() / "logs" / f"run_pipeline_{str(args.job_date_et).strip()}.txt").resolve())
     if not log_path:
         # Best-effort default: always log to today's ET date even if caller didn't pass --job-date-et.
         try:
@@ -2345,7 +2346,7 @@ def main() -> None:
             et_today = dt.datetime.now(ZoneInfo("America/New_York")).date().isoformat()
         except Exception:
             et_today = dt.date.today().isoformat()
-        log_path = str((_REPO_ROOT / "logs" / f"run_pipeline_{et_today}.txt").resolve())
+        log_path = str((get_base_dir() / "logs" / f"run_pipeline_{et_today}.txt").resolve())
     _log_fh = None
     if log_path:
         try:

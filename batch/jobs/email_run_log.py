@@ -35,6 +35,7 @@ except ImportError:
     pass
 
 from delivery.email_sender import send_report_email
+from core.utils.base_dir import get_base_dir
 
 
 def main() -> int:
@@ -62,7 +63,7 @@ def main() -> int:
 
         jd = dt.date.today().isoformat()
 
-    base_log_path = (_REPO_ROOT / "logs" / f"run_pipeline_{jd}.txt").resolve()
+    base_log_path = (get_base_dir() / "logs" / f"run_pipeline_{jd}.txt").resolve()
     if not base_log_path.is_file():
         ok, msg = send_report_email(
             None,
@@ -75,7 +76,7 @@ def main() -> int:
 
     # Attach a phase-specific snapshot so filenames clearly differentiate morning vs eod.
     # Keep the snapshot file on disk (useful for debugging when an email is missing).
-    snap_log_path = (_REPO_ROOT / "logs" / f"run_pipeline_{jd}_{args.kind}.txt").resolve()
+    snap_log_path = (get_base_dir() / "logs" / f"run_pipeline_{jd}_{args.kind}.txt").resolve()
     try:
         shutil.copyfile(str(base_log_path), str(snap_log_path))
     except Exception:

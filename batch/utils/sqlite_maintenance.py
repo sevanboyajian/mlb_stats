@@ -41,8 +41,9 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from core.db.connection import connect as db_connect, get_db_path
+from core.utils.base_dir import get_base_dir
 
-LOG_PATH = REPO_ROOT / "logs" / "sqlite_maintenance.log"
+LOG_PATH = get_base_dir() / "logs" / "sqlite_maintenance.log"
 
 
 def _reconfigure_stdio_utf8() -> None:

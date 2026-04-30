@@ -22,6 +22,9 @@ import sqlite3
 import os
 from pathlib import Path
 
+# BASE_DIR controls where runtime artifacts live (including default DB path).
+from core.utils.base_dir import get_base_dir
+
 # core/db/connection.py -> parents[2] == repository root
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -66,8 +69,10 @@ def get_db_path():
     if raw is not None:
         return _resolve_db_path(raw)
 
-    # 3. Safe fallback (current behavior)
-    return str(Path.cwd() / "mlb_stats.db")
+    # 3. Safe fallback:
+    # Prefer BASE_DIR/data/mlb_stats.db for portability; never depend on CWD.
+    base = get_base_dir()
+    return str((base / "data" / "mlb_stats.db").resolve())
 
 
 def connect(db_path: str | None = None, **kwargs):

@@ -29,9 +29,11 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from core.db.connection import get_db_path
+from core.utils.base_dir import get_base_dir
 
-BACKUP_DIR = REPO_ROOT / "backups" / "daily"
-LOG_PATH = REPO_ROOT / "logs" / "backup.log"
+BASE_DIR = get_base_dir()
+BACKUP_DIR = BASE_DIR / "backups" / "daily"
+LOG_PATH = BASE_DIR / "logs" / "backup.log"
 
 try:
     from zoneinfo import ZoneInfo as _ZI
