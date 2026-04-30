@@ -1306,12 +1306,25 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
     odds_txt = _fmt_odds(odds) if odds is not None else "NA"
     home_odds_txt = _fmt_odds(home_ml) if home_ml is not None else "NA"
     away_odds_txt = _fmt_odds(away_ml) if away_ml is not None else "NA"
-    data_flags = list(g.completeness.gaps) + extra_flags + [
-        f"CALIB score={int(score_for_model)} (agg={int(best_score)}) "
-        f"odds={odds_txt} odds_side={odds_side or 'NA'} "
-        f"home_ml={home_odds_txt} away_ml={away_odds_txt} "
-        f"model_p={model_p:.3f} implied_p={implied_txt} edge={edge_txt}"
-    ]
+    # Build human-readable model evaluation line (brief-visible).
+    # Treat best_score < publish threshold as "No signal" for user-facing display.
+    best_score_i = int(best_score or 0)
+    signal_label = str(best_signal_id or "").strip() if best_score_i >= 5 else "No signal"
+    if not signal_label:
+        signal_label = "No signal"
+    market_label = str(best_side or "").strip() or "none"
+    model_pct = f"{float(model_p) * 100:.1f}%" if model_p is not None else "N/A"
+    implied_pct = f"{float(implied_p) * 100:.1f}%" if implied_p is not None else "N/A"
+    edge_pct = f"{float(edge) * 100:+.1f}%" if edge is not None else "N/A"
+    score_label = f"score={best_score_i}" if best_score_i else "score=0"
+    odds_str = _fmt_odds(odds) if odds is not None else "N/A"
+    model_debug_line = (
+        f"MODEL: {signal_label} {score_label}"
+        f" | {market_label} {odds_str}"
+        f" | implied {implied_pct} → model {model_pct}"
+        f" | edge {edge_pct}"
+    )
+    data_flags = list(g.completeness.gaps) + extra_flags + [model_debug_line]
 
     stake_basis = "aggregated_scoring"
     if owm_standalone_ok and not diversity_ok:

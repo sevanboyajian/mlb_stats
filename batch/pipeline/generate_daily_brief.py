@@ -5354,7 +5354,11 @@ def build_primary_brief(games, streaks, starters, game_date,
         lines.append(f"\n  REASON: {textwrap.fill(p['reason'], width=66, subsequent_indent='          ')}")
         if top["sigs"]["data_flags"]:
             for f in top["sigs"]["data_flags"]:
-                lines.append(f"  ⚠ DATA: {f}")
+                if str(f).lstrip().startswith("MODEL:"):
+                    # On pick cards, this is a confirmation line (not a warning).
+                    lines.append(f"  {f}")
+                else:
+                    lines.append(f"  DATA: {f}")
         lines.append("")
 
     # ── Additional Picks ─────────────────────────────────────────────────
@@ -5420,7 +5424,10 @@ def build_primary_brief(games, streaks, starters, game_date,
         lines.append(f"       {textwrap.fill(best['reason'], width=66, subsequent_indent='       ')}")
         if sigs["data_flags"]:
             for f in sigs["data_flags"]:
-                lines.append(f"       ⚠ DATA: {f}")
+                if str(f).lstrip().startswith("MODEL:"):
+                    lines.append(f"       {f}")
+                else:
+                    lines.append(f"       DATA: {f}")
         lines.append("")
 
     # ── Hot pitcher streak (separate monitor; half-stake until N≥50) ──────
@@ -5553,7 +5560,10 @@ def build_closing_brief(games, streaks, starters, movement, game_date,
 
         if sigs["data_flags"]:
             for f in sigs["data_flags"]:
-                lines.append(f"  ⚠ DATA: {f}")
+                if str(f).lstrip().startswith("MODEL:"):
+                    lines.append(f"  {f}")
+                else:
+                    lines.append(f"  DATA: {f}")
         lines.append("")
 
     # ── Persist signal state (TOP / NEXT / AVOID) ─────────────────────────
