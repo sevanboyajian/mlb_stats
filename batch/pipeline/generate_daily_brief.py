@@ -6545,19 +6545,18 @@ def _maybe_email_report_docx(*, docx_path: str, slate_date: str, session: str) -
     Non-fatal: never raises; SMTP/import failures are logged only.
     """
     try:
-        # Recipient resolution:
-        # - If BRIEF_EMAIL_TO / REPORT_EMAIL_TO is set, treat it as an explicit override.
-        # - Otherwise, use DB subscriptions (users/user_subscriptions).
-        to_raw = (os.getenv("BRIEF_EMAIL_TO") or os.getenv("REPORT_EMAIL_TO") or "").strip()
-        if not to_raw:
-            try:
-                from delivery.recipient_router import recipients_csv
+        recipients: list[str] = []
+        try:
+            from delivery.recipient_resolver import get_recipients
 
-                to_raw = recipients_csv("group_brief")
-            except Exception:
-                to_raw = ""
-        if not to_raw.strip():
+            recipients = get_recipients("group_brief")
+        except Exception as exc:
+            print(f"  ⚠  [email] recipient resolve failed (non-fatal): {exc}")
+            recipients = []
+
+        if not recipients:
             return
+        print(f"  [email] recipients(group_brief)={recipients}")
         from delivery.email_sender import send_report_email
 
         subject = f"MLB brief {slate_date} ({session}) — {Path(docx_path).name}"
@@ -6566,7 +6565,7 @@ def _maybe_email_report_docx(*, docx_path: str, slate_date: str, session: str) -
             f"Session: {session}\n"
             f"Word report: {docx_path}\n"
         )
-        ok, msg = send_report_email(docx_path, subject, to_raw, body=body)
+        ok, msg = send_report_email(docx_path, subject, recipients, body=body)
         if ok:
             print(f"  ✓ [email] {msg}")
         else:
