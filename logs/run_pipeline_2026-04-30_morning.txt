@@ -1,0 +1,162 @@
+[run_pipeline] force-unlock: runner_lock not present (nothing to clear)
+[run_pipeline] db=C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\data\mlb_stats.db
+[run_pipeline] mode=loop poll_seconds=60 ghost=False stale_minutes=30 timeout_minutes=30 sleep_until_due=True scope_job_date_et='2026-04-30' exit_when_no_pending=True
+[run_pipeline] sleep-until-due: next pending at 2026-04-30 06:00 ET (~3420s)
+
+[job] id=1187 type=stats_pull job_date_et=2026-04-30 game_group_id=0 scheduled_time=2026-04-30 06:00 ET
+[job] command='python batch/ingestion/load_mlb_stats.py'
+[job] start_et=2026-04-30 06:00:46 ET (claimed)
+[job] end_et=2026-04-30 06:00:59 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-04-30 06:05 ET (~300s)
+
+[job] id=1188 type=load_today job_date_et=2026-04-30 game_group_id=0 scheduled_time=2026-04-30 06:05 ET
+[job] command='python batch/ingestion/load_today.py --date 2026-04-30'
+[job] start_et=2026-04-30 06:05:59 ET (claimed)
+[job] end_et=2026-04-30 06:06:03 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-04-30 06:07 ET (~60s)
+
+[job] id=1189 type=load_weather job_date_et=2026-04-30 game_group_id=0 scheduled_time=2026-04-30 06:07 ET
+[job] command='python batch/ingestion/load_weather.py --date 2026-04-30'
+[job] start_et=2026-04-30 06:07:03 ET (claimed)
+[job] end_et=2026-04-30 06:07:25 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-04-30 06:08 ET (~60s)
+
+[job] id=1190 type=odds_pull job_date_et=2026-04-30 game_group_id=0 scheduled_time=2026-04-30 06:08 ET
+[job] command='python batch/ingestion/load_odds.py --pregame --markets game --date 2026-04-30'
+[job] start_et=2026-04-30 06:08:25 ET (claimed)
+[job] end_et=2026-04-30 06:08:26 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-04-30 06:09 ET (~60s)
+
+[job] id=1191 type=build_team_wma job_date_et=2026-04-30 game_group_id=0 scheduled_time=2026-04-30 06:09 ET
+[job] command='python -m batch.pipeline.build_team_wma --seasons 2025 2026'
+[job] start_et=2026-04-30 06:09:26 ET (claimed)
+[job] end_et=2026-04-30 06:09:26 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-04-30 06:10 ET (~60s)
+
+[job] id=1193 type=day_setup job_date_et=2026-04-30 game_group_id=0 scheduled_time=2026-04-30 06:10 ET
+[job] command='python batch/jobs/schedule_pipeline_day.py --groups-only --date-et 2026-04-30'
+[job] start_et=2026-04-30 06:10:26 ET (claimed)
+[job] end_et=2026-04-30 06:10:27 ET status=complete rc=0
+
+[job] id=1198 type=odds_pull job_date_et=2026-04-29 game_group_id=1 scheduled_time=2026-04-29 17:05 ET
+[job] command='python batch/ingestion/load_odds.py --pregame --markets game --date 2026-04-29 --force'
+[job] context: group_id=1 window=[2026-04-29 17:00 ET -> 2026-04-29 17:10 ET]
+[job] start_et=2026-04-30 06:10:27 ET (claimed)
+[job] end_et=2026-04-30 06:10:27 ET status=complete rc=0
+
+[job] id=1204 type=odds_check job_date_et=2026-04-29 game_group_id=1 scheduled_time=2026-04-29 17:10 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-04-29'
+[job] context: group_id=1 window=[2026-04-29 17:00 ET -> 2026-04-29 17:15 ET]
+[job] start_et=2026-04-30 06:10:27 ET (claimed)
+[job] end_et=2026-04-30 06:10:28 ET failure rc=1
+[job] error_tail=⚠  No scheduled games found for 2026-04-29.
+     Run: python batch/ingestion/load_today.py --date YYYY-MM-DD
+     Or:  python batch/ingestion/load_mlb_stats.py  (schedule + boxscores)
+[job] RETRY — job_id=1204 attempt=1/5 (will run after next poll loop)
+
+[job] id=1210 type=weather job_date_et=2026-04-29 game_group_id=1 scheduled_time=2026-04-29 17:50 ET
+[job] command='python batch/ingestion/load_weather.py --date 2026-04-29'
+[job] context: group_id=1 window=[2026-04-29 17:35 ET -> 2026-04-29 18:05 ET]
+[job] start_et=2026-04-30 06:10:28 ET (claimed)
+[job] end_et=2026-04-30 06:10:28 ET status=complete rc=0
+
+[job] id=1216 type=group_brief job_date_et=2026-04-29 game_group_id=1 scheduled_time=2026-04-29 18:05 ET
+[job] command='python batch/pipeline/generate_daily_brief.py --session primary --date 2026-04-29 --as-of "2026-04-30 06:10" --game-group-id 1'
+[job] context: group_id=1 window=[2026-04-29 18:05 ET -> 2026-04-29 18:07 ET]
+[job] start_et=2026-04-30 06:10:28 ET (claimed)
+[job] end_et=2026-04-30 06:10:28 ET status=complete rc=0
+
+[job] id=1222 type=ledger_snapshot job_date_et=2026-04-29 game_group_id=1 scheduled_time=2026-04-29 18:07 ET
+[job] command='python batch/pipeline/daily_results_report.py --date 2026-04-29'
+[job] context: group_id=1 window=[2026-04-29 18:05 ET -> 2026-04-29 18:35 ET]
+[job] start_et=2026-04-30 06:10:28 ET (claimed)
+[job] end_et=2026-04-30 06:10:29 ET status=complete rc=0
+
+[job] id=1204 type=odds_check job_date_et=2026-04-29 game_group_id=1 scheduled_time=2026-04-29 17:10 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-04-29'
+[job] context: group_id=1 window=[2026-04-29 17:00 ET -> 2026-04-29 17:15 ET]
+[job] start_et=2026-04-30 06:10:29 ET (claimed)
+[job] end_et=2026-04-30 06:10:29 ET failure rc=1
+[job] error_tail=⚠  No scheduled games found for 2026-04-29.
+     Run: python batch/ingestion/load_today.py --date YYYY-MM-DD
+     Or:  python batch/ingestion/load_mlb_stats.py  (schedule + boxscores)
+[job] RETRY — job_id=1204 attempt=2/5 (will run after next poll loop)
+
+[job] id=1204 type=odds_check job_date_et=2026-04-29 game_group_id=1 scheduled_time=2026-04-29 17:10 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-04-29'
+[job] context: group_id=1 window=[2026-04-29 17:00 ET -> 2026-04-29 17:15 ET]
+[job] start_et=2026-04-30 06:10:29 ET (claimed)
+[job] end_et=2026-04-30 06:10:29 ET failure rc=1
+[job] error_tail=⚠  No scheduled games found for 2026-04-29.
+     Run: python batch/ingestion/load_today.py --date YYYY-MM-DD
+     Or:  python batch/ingestion/load_mlb_stats.py  (schedule + boxscores)
+[job] RETRY — job_id=1204 attempt=3/5 (will run after next poll loop)
+
+[job] id=1204 type=odds_check job_date_et=2026-04-29 game_group_id=1 scheduled_time=2026-04-29 17:10 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-04-29'
+[job] context: group_id=1 window=[2026-04-29 17:00 ET -> 2026-04-29 17:15 ET]
+[job] start_et=2026-04-30 06:10:29 ET (claimed)
+[job] end_et=2026-04-30 06:10:29 ET failure rc=1
+[job] error_tail=⚠  No scheduled games found for 2026-04-29.
+     Run: python batch/ingestion/load_today.py --date YYYY-MM-DD
+     Or:  python batch/ingestion/load_mlb_stats.py  (schedule + boxscores)
+[job] RETRY — job_id=1204 attempt=4/5 (will run after next poll loop)
+
+[job] id=1204 type=odds_check job_date_et=2026-04-29 game_group_id=1 scheduled_time=2026-04-29 17:10 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-04-29'
+[job] context: group_id=1 window=[2026-04-29 17:00 ET -> 2026-04-29 17:15 ET]
+[job] start_et=2026-04-30 06:10:29 ET (claimed)
+[job] end_et=2026-04-30 06:10:30 ET failure rc=1
+[job] error_tail=⚠  No scheduled games found for 2026-04-29.
+     Run: python batch/ingestion/load_today.py --date YYYY-MM-DD
+     Or:  python batch/ingestion/load_mlb_stats.py  (schedule + boxscores)
+[job] RETRY — job_id=1204 attempt=5/5 (will run after next poll loop)
+
+[job] id=1204 type=odds_check job_date_et=2026-04-29 game_group_id=1 scheduled_time=2026-04-29 17:10 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-04-29'
+[job] context: group_id=1 window=[2026-04-29 17:00 ET -> 2026-04-29 17:15 ET]
+[job] start_et=2026-04-30 06:10:30 ET (claimed)
+[job] end_et=2026-04-30 06:10:30 ET failure rc=1
+[job] error_tail=⚠  No scheduled games found for 2026-04-29.
+     Run: python batch/ingestion/load_today.py --date YYYY-MM-DD
+     Or:  python batch/ingestion/load_mlb_stats.py  (schedule + boxscores)
+[job] SKIPPED (terminal, max retries) job_id=1204 type=odds_check — status=skipped; downstream deps will proceed
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+! PIPELINE ALERT: JOB SKIPPED (terminal — max retries; deps unblocked)
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  time_utc:     2026-04-30T10:10:30Z
+  job_id:       1204
+  job_type:     odds_check
+  job_date_et:  2026-04-29
+  started_utc:  2026-04-30T10:10:30Z
+  finished_utc: 2026-04-30T10:10:30Z
+  error_tail:
+    rc=1 ⚠  No scheduled games found for 2026-04-29.
+         Run: python batch/ingestion/load_today.py --date YYYY-MM-DD
+         Or:  python batch/ingestion/load_mlb_stats.py  (schedule + boxscores) | terminal=skipped after 5 attempts (deps unblocked — assume manual follow-up)
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+[run_pipeline] sleep-until-due: next pending at 2026-04-30 06:11 ET (~60s)
+
+[job] id=1192 type=build_pitcher_wma job_date_et=2026-04-30 game_group_id=0 scheduled_time=2026-04-30 06:11 ET
+[job] command='python -m batch.pipeline.build_pitcher_wma --seasons 2025 2026'
+[job] start_et=2026-04-30 06:11:30 ET (claimed)
+[job] end_et=2026-04-30 06:11:31 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-04-30 06:15 ET (~240s)
+
+[job] id=1194 type=prior_report job_date_et=2026-04-30 game_group_id=0 scheduled_time=2026-04-30 06:15 ET
+[job] command='python batch/pipeline/generate_daily_brief.py --session prior --date 2026-04-30 --as-of "2026-04-30 06:15"'
+[job] start_et=2026-04-30 06:15:31 ET (claimed)
+[job] end_et=2026-04-30 06:15:34 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-04-30 06:20 ET (~300s)
+
+[job] id=1195 type=early_peek job_date_et=2026-04-30 game_group_id=0 scheduled_time=2026-04-30 06:20 ET
+[job] command='python batch/pipeline/generate_daily_brief.py --session morning --date 2026-04-30 --as-of "2026-04-30 06:20"'
+[job] start_et=2026-04-30 06:20:34 ET (claimed)
+[job] end_et=2026-04-30 06:20:38 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-04-30 06:22 ET (~120s)
+
+[job] id=1196 type=email_runlog_morning job_date_et=2026-04-30 game_group_id=0 scheduled_time=2026-04-30 06:22 ET
+[job] command='python batch/jobs/email_run_log.py --date 2026-04-30 --kind morning'
+[job] start_et=2026-04-30 06:22:38 ET (claimed)
