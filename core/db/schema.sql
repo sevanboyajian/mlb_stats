@@ -867,6 +867,32 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_bet_ledger_game_market
 
 
 -- ------------------------------------------------------------
+-- users
+-- Application users (for role-based email delivery and routing).
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS users (
+    user_id     INTEGER PRIMARY KEY,
+    email       TEXT    UNIQUE NOT NULL,
+    role        TEXT    NOT NULL CHECK (role IN ('admin','user','fe')),
+    is_active   INTEGER NOT NULL DEFAULT 1,
+    created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+
+-- ------------------------------------------------------------
+-- user_subscriptions
+-- Email subscription routing by user.
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS user_subscriptions (
+    sub_id              INTEGER PRIMARY KEY,
+    user_id             INTEGER NOT NULL REFERENCES users (user_id),
+    subscription_type   TEXT    NOT NULL,
+    is_enabled          INTEGER NOT NULL DEFAULT 1,
+    created_at          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+
+-- ------------------------------------------------------------
 -- brief_log
 -- One row per daily brief generation (generate_daily_brief.py).
 -- ------------------------------------------------------------

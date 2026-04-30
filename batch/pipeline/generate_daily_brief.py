@@ -677,6 +677,26 @@ CAVEAT = (
     + "\u2550" * 72 + "\n"
 )
 
+# ── Quick reference — appended above the caveat on every brief ────────────
+QUICK_REFERENCE_SIGNAL_TIMING = (
+    "\n"
+    "────────────────────────────────────────────────────────────────────────\n"
+    "  QUICK REFERENCE — SIGNAL TIMING\n"
+    "────────────────────────────────────────────────────────────────────────\n"
+    "  - Wind signals (Wind Boost (Over), Wind Fade (ML), Wind → Over):\n"
+    "      Bet when the signal first appears (any session). Don’t wait for “primary”.\n"
+    "  - Matchup signals (Offense Matchup, LHP Mismatch):\n"
+    "      Bet within ~1 hour if the edge is Clear/Strong. If starter info is not confirmed, wait.\n"
+    "  - Streak signals (Streak Fade, Streak Pressure):\n"
+    "      Prefer primary-session confirmation unless the game is <2 hours to first pitch.\n"
+    "\n"
+    "  Edge tiers:\n"
+    "  - Strong (edge ≥ 10%): bet immediately.\n"
+    "  - Clear  (edge ≥  6%): bet within 1 hour.\n"
+    "  - Marginal (edge ≥ 2%): wait for primary confirmation.\n"
+    "  - No edge (edge < 2%): pass.\n"
+)
+
 # H3b park whitelist — wind-out OVER only fires at venues where the effect
 # is historically strongest and wind readings are reliable open-air.
 # Oracle (SF), Tropicana (TB), loanDepot (MIA) are already SUPPRESSED.
@@ -4403,6 +4423,7 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
     if not games:
         lines.append(f"  No completed regular-season games found for {game_date}.")
         lines.append(f"  Ensure the 6 AM stats pull ran: python load_mlb_stats.py\n")
+        lines.append(QUICK_REFERENCE_SIGNAL_TIMING)
         lines.append(CAVEAT)
         return "\n".join(lines)
 
@@ -5003,6 +5024,7 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
         )
     lines.append("")
 
+    lines.append(QUICK_REFERENCE_SIGNAL_TIMING)
     lines.append(CAVEAT)
     return "\n".join(lines)
 
@@ -5483,6 +5505,7 @@ def build_primary_brief(games, streaks, starters, game_date,
         "  or Windy.com. Lines shown are from last odds pull.\n"
         "  ─────────────────────────────────────────────────────────────────\n"
     )
+    lines.append(QUICK_REFERENCE_SIGNAL_TIMING)
     lines.append(CAVEAT)
     return "\n".join(lines)
 

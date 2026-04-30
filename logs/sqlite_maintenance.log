@@ -1,0 +1,4 @@
+2026-04-30T17:38:49Z start db=C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\data\mlb_stats.db optimize=True vacuum=False vacuum_if_needed=False
+2026-04-30T17:38:49Z stats pages=354164 freelist=0 free_mb=0.00 pct=0.000
+2026-04-30T17:38:49Z PRAGMA optimize ok
+2026-04-30T17:38:49Z finish elapsed_s=0.0
