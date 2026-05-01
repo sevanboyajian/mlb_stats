@@ -38,6 +38,9 @@ Usage (from repo root):
   Write custom report paths::
     python -m batch.pipeline.backtest_contrarian_dog --seasons 2025 \\
         --output reports/contrarian_dog_2025.txt
+
+  Phase 2 conditional filters (A-D) append automatically when ``--seasons`` includes
+  2024 and/or 2025; omitted when only other years (e.g. 2026-only).
 """
 
 from __future__ import annotations
@@ -515,6 +518,92 @@ def run_validation_2026_sample(con, lines_out: list[str]) -> None:
         return
 
 
+# Phase 2: conditional slices (2024/2025 historical only; see main())
+PHASE2_SEASONS: frozenset[int] = frozenset({2024, 2025})
+P2_SMALL_SEASON = 20
+P2_VERDICT_N = 30
+
+
+def _p2_metrics(pairs: list[tuple[PackedGame, DogView]]) -> dict[str, float | int]:
+    n = len(pairs)
+    if n == 0:
+        return {
+            "n": 0,
+            "w": 0,
+            "l": 0,
+            "win_pct": 0.0,
+            "be_pct": 0.0,
+            "edge": 0.0,
+            "roi": 0.0,
+            "units": 0.0,
+        }
+    w = sum(1 for _, d in pairs if d.dog_won)
+    units = sum(ml_pnl_units(d.dog_ml, d.dog_won) for _, d in pairs)
+    avg_ml = sum(d.dog_ml for _, d in pairs) / n
+    be_impl = american_to_implied_prob(int(round(avg_ml)))
+    win_pct = 100.0 * w / n
+    be_pct = implied_to_breakeven_pct(be_impl) if be_impl else 0.0
+    edge = win_pct - be_pct
+    roi = 100.0 * units / n
+    return {
+        "n": n,
+        "w": w,
+        "l": n - w,
+        "win_pct": win_pct,
+        "be_pct": be_pct,
+        "edge": edge,
+        "roi": roi,
+        "units": units,
+    }
+
+
+def _p2_season_line(label: str, m: dict[str, float | int]) -> str:
+    if m["n"] == 0:
+        return f"  {label}:  0 games  --"
+    flag = f"  [!] Small sample (N={m['n']})" if m["n"] < P2_SMALL_SEASON else ""
+    return (
+        f"  {label}:  {int(m['n']):3d} games  {int(m['w']):2d}W-{int(m['l']):2d}L  "
+        f"win% {m['win_pct']:.1f}%  BE% {m['be_pct']:.1f}%  "
+        f"edge {m['edge']:+.1f}%  ROI {m['roi']:+.1f}%{flag}"
+    )
+
+
+def _p2_combined_line(m: dict[str, float | int]) -> str:
+    if m["n"] == 0:
+        return "  Combined:  0 games  --"
+    return (
+        f"  Combined:  {int(m['n']):3d} games  {int(m['w']):2d}W-{int(m['l']):2d}L  "
+        f"ROI {m['roi']:+.1f}%"
+    )
+
+
+def _p2_reading(m: dict[str, float | int]) -> str:
+    if m["n"] < P2_SMALL_SEASON:
+        return "INCONCLUSIVE"
+    if m["roi"] <= 0 or m["edge"] < 0:
+        return "NOT SUPPORTING"
+    if m["roi"] > 0 and m["edge"] > 0:
+        return "CONSISTENT WITH EDGE"
+    return "INCONCLUSIVE"
+
+
+def _p2_table_verdict(
+    n_by_season: dict[int, int],
+    season_allow: frozenset[int],
+    m_combined: dict[str, float | int],
+) -> str:
+    if m_combined["n"] == 0:
+        return "SMALL"
+    for y in (2024, 2025):
+        if y in season_allow and n_by_season.get(y, 0) < P2_VERDICT_N:
+            return "SMALL"
+    if m_combined["roi"] <= 0 or m_combined["edge"] < 0:
+        return "FAIL"
+    if m_combined["roi"] > 5.0:
+        return "PASS"
+    return "FAIL"
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description="Contrarian dog backtest (proxy No Signal v1).")
     p.add_argument("--seasons", nargs="+", type=int, default=[2024, 2025])
@@ -852,6 +941,145 @@ def main() -> None:
         nn = len(ctrl)
         uu = sum(ml_pnl_units(d.dog_ml, d.dog_won) for _, d in ctrl)
         lines.append(f" n={nn}  dogs {ww}-{nn - ww}  roi={uu/nn*100:+.2f}%")
+
+    # --- Phase 2: conditional filters (2024/2025 only; no new CLI flags) ----------
+    season_allow = frozenset(seasons) & PHASE2_SEASONS
+    if not season_allow:
+        lines.append("")
+        lines.append("PHASE 2 -- skipped (insufficient historical seasons)")
+    else:
+        p2_base = [(g, d) for g, d in dog_rows(nosig) if g.season in season_allow]
+
+        lines.append("")
+        lines.append("PHASE 2 -- CONDITIONAL FILTER ANALYSIS")
+        lines.append("-" * 44)
+        lines.append("Pool: proxy no-signal only (same structural definition as Phase 1).")
+        lines.append(
+            "[!] N<20: flagged on season lines; N<30 in any listed season -> verdict SMALL; "
+            "verdict PASS needs combined ROI > +5%, both seasons N>=30 when both in run."
+        )
+
+        if 2024 in season_allow:
+            e24 = [g for g in enriched if g.season == 2024]
+            c24 = sum(1 for g in e24 if g.data_quality == "complete")
+            denom = len(e24)
+            rate = 100.0 * c24 / denom if denom else 0.0
+            lines.append(
+                f"2024 WMA join rate (full home OPS + away SP, enriched w/ odds): "
+                f"{rate:.1f}% ({c24}/{denom})"
+            )
+            if rate < 100.0:
+                lines.append(
+                    "[!] 2024 WMA join rate below full coverage -- signal proxy incomplete; "
+                    "2024 Phase 2 rows directional only."
+                )
+
+        def _p2_n_by_season(pairs: list[tuple[PackedGame, DogView]]) -> dict[int, int]:
+            out: dict[int, int] = {y: 0 for y in season_allow}
+            for g, _ in pairs:
+                if g.season in out:
+                    out[g.season] = out.get(g.season, 0) + 1
+            return out
+
+        def _p2_emit_filter(
+            title: str,
+            subtitle: str,
+            pairs: list[tuple[PackedGame, DogView]],
+            table_label: str,
+            table_rows: list[tuple[str, int, float, str]],
+        ) -> None:
+            lines.append("")
+            lines.append(title)
+            lines.append(subtitle)
+            nbs = _p2_n_by_season(pairs)
+            for y in sorted(season_allow):
+                sub = [(g, d) for g, d in pairs if g.season == y]
+                lines.append(_p2_season_line(str(y), _p2_metrics(sub)))
+            m_all = _p2_metrics(pairs)
+            lines.append(_p2_combined_line(m_all))
+            warn30 = any(nbs.get(y, 0) < P2_VERDICT_N for y in season_allow)
+            if warn30:
+                parts = [f"{y} N={nbs.get(y, 0)}" for y in sorted(season_allow)]
+                lines.append(f"  [!] Small sample (N<30 per season: {', '.join(parts)})")
+            lines.append(f"  Reading: [{_p2_reading(m_all)}]")
+            tv = _p2_table_verdict(nbs, season_allow, m_all)
+            table_rows.append((table_label, int(m_all["n"]), float(m_all["roi"]), tv))
+
+        p2_table: list[tuple[str, int, float, str]] = []
+
+        # Filter A
+        fa = [
+            (g, d)
+            for g, d in p2_base
+            if 150 <= d.dog_ml <= 199
+            and g.total_open is not None
+            and g.total_open <= 8.0
+        ]
+        _p2_emit_filter(
+            "Filter A -- Low total + heavy dog (O/U <= 8.0, dog +150-199)",
+            "------------------------------------------------------------",
+            fa,
+            "A -- Low total + heavy dog",
+            p2_table,
+        )
+
+        # Filter B
+        fb = [
+            (g, d)
+            for g, d in p2_base
+            if d.dog_ml >= 150 and _game_month(g.game_date_et) in (7, 8)
+        ]
+        _p2_emit_filter(
+            "Filter B -- Midsummer window (Jul-Aug, dog +150+)",
+            "------------------------------------------------------------",
+            fb,
+            "B -- Midsummer window",
+            p2_table,
+        )
+
+        # Filter C
+        fc = [
+            (g, d)
+            for g, d in p2_base
+            if d.dog_ml >= 150
+            and d.dog_side == "away"
+            and g.total_open is not None
+            and g.total_open <= 8.5
+        ]
+        _p2_emit_filter(
+            "Filter C -- Away dog + low-mid total (total <= 8.5, dog +150+)",
+            "------------------------------------------------------------",
+            fc,
+            "C -- Away dog + low-mid total",
+            p2_table,
+        )
+
+        # Filter D
+        fd = [
+            (g, d)
+            for g, d in p2_base
+            if 150 <= d.dog_ml <= 199
+            and d.dog_side == "away"
+            and _game_month(g.game_date_et) in {5, 6, 7, 8, 9}
+            and g.total_open is not None
+            and g.total_open <= 8.5
+        ]
+        _p2_emit_filter(
+            "Filter D -- All combined (May-Sep ex Apr; away; +150-199; total<=8.5)",
+            "------------------------------------------------------------",
+            fd,
+            "D -- All combined",
+            p2_table,
+        )
+
+        lines.append("")
+        lines.append("PHASE 2 VERDICT SUMMARY")
+        lines.append("------------------------")
+        lines.append(
+            f"{'Filter':<36} {'Combined N':>12} {'Combined ROI':>14} {'Verdict':>8}"
+        )
+        for name, n_c, roi_c, v in p2_table:
+            lines.append(f"{name:<36} {n_c:>12} {roi_c:>+13.1f}% {v:>8}")
 
     run_validation_2026_sample(con, lines)
 
