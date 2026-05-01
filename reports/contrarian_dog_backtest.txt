@@ -1,0 +1,112 @@
+
+================================================================================
+  CONTRARIAN DOG BACKTEST - PROXY NO-SIGNAL v1 (NOT BRIEF-IDENTICAL)
+  Seasons: 2026
+  Calendar months: Apr, May, Jun, Jul, Aug, Sep
+  Generated: 2026-05-01 15:07 local
+  Filter: Proxy no-signal only | EDGE_MIN ref=0.02 (informational)
+
+  Wind gates: MV-F => wind IN >=10mph at HIGH wind-effect outdoor parks (dome / Oracle excluded). MV-B / H3b proxy => wind OUT >=10mph, HIGH/MODERATE effect, PF>=98, H3b whitelist venues, opening total present.
+================================================================================
+
+SUMMARY
+----------------------------------------
+Total schedule rows fetched:          313
+Rows with earliest pregame ML:        292
+Rows dropped (missing ML):              21
+Proxy no-signal games:                 236
+Games analyzed (selected filter):      236
+Dog in [+150,9999] on filter:    35
+
+DATA QUALITY
+----------------------------------------
+Full WMA join (home OPS + away SP, pre-game):   157 / 292 with odds
+Full WMA join (schedule fetch):                   157 / 313
+Schedule rows missing home/SP WMA gate:           156
+
+* WMA keyed by game_pk reflects pre-game state for that slate game.
+
+PRIMARY - dogs ML in [150, 9999] (opening)
+------------------------------------------
+Dog record:           17W 18L  (48.6%)
+Breakeven (avg odds): 35.2%
+Edge vs BE:           +13.4%
+Units P/L (flat 1u):  +14.02u
+ROI per game bet:    +40.1%
+Reading:              INCONCLUSIVE -- need more data
+
+Breakpoints: <120, 120-150, 150-200, 200+
+Bucket             N    W   L    Win%     BE%    Edge      P&L     ROI
++150-199          26   13  13   50.0%   37.3%  +12.7%   +9.74u   +37.5%
++200+              9    4   5   44.4%   30.2%  +14.2%   +4.28u   +47.6%  [small sample N<20]
+
+SEASON SPLIT
+------------
+  2026: n=  35  dog win%=48.6%  roi=+40.06%
+
+MONTH SPLIT
+-----------
+  April: n=  35  17W-18L  roi=+40.06%
+
+HOME vs AWAY DOG
+----------------
+  Home dog: 7W-8L  roi=+31.53%
+  Away dog: 10W-10L  roi=+46.45%
+
+VENUE TYPE SPLIT
+----------------
+  wind-active    n=  29  14W-15L  roi=+41.86%
+  wind-neutral   n=   6  3W-3L  roi=+31.33%
+
+WIND-OUT QUALIFIED STRUCTURAL ROWS (within filter): 0
+
+SUB - +120-149 trap band on proxy No-Signal
+-------------------------------------------
+Dog record:           27W 31L  (46.6%)
+Breakeven (avg odds): 43.1%
+Edge vs BE:           +3.4%
+Units P/L (flat 1u):  +4.00u
+ROI per game bet:    +6.9%
+Reading:              INCONCLUSIVE -- need more data
+
+Breakpoints: <120, 120-150, 150-200, 200+
+Bucket             N    W   L    Win%     BE%    Edge      P&L     ROI
++120-149          58   27  31   46.6%   43.1%   +3.4%   +4.00u    +6.9%
+
+SEASON SPLIT
+------------
+  2026: n=  58  dog win%=46.6%  roi=+6.90%
+
+MONTH SPLIT
+-----------
+  April: n=  58  27W-31L  roi=+6.90%
+
+HOME vs AWAY DOG
+----------------
+  Home dog: 11W-13L  roi=+6.00%
+  Away dog: 16W-18L  roi=+7.53%
+
+VENUE TYPE SPLIT
+----------------
+  wind-active    n=  43  19W-24L  roi=+1.58%
+  wind-neutral   n=  15  8W-7L  roi=+22.13%
+
+WIND-OUT QUALIFIED STRUCTURAL ROWS (within filter): 0
+
+HIGH TOTAL OPEN >=9 (11)
+  roi=+42.55%
+
+LOW TOTAL OPEN <=7 (0)
+
+SUB-ANALYSIS: ALL SCHEDULE ROWS WITH ODDS - matched dog threshold (control)
+--------------------------------------------------------------------------
+ n=47  dogs 22-25  roi=+33.72%
+
+PHASE 2 -- skipped (insufficient historical seasons)
+
+APR 2026 PARITY NOTE (sparse)
+2026Apr sample present -- compare live brief vs proxy externally; scorer path not replayed.
+
+================================================================================
+  END
+================================================================================

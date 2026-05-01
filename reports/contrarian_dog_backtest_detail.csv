@@ -1,0 +1,293 @@
+game_date_et,game_pk,away_abbr,home_abbr,venue,season,dog_side,dog_ml,fav_ml,dog_win,signal_proxy_structural_any,struct_owm,struct_lhp,struct_mvf,struct_mvb,struct_h3b,wind_mph,wind_dir_raw,wind_effect,away_era_wma,home_ops_wma,away_throws,opening_total_line,bucket,units_pl_data_row,data_quality
+2026-04-01,822835,COL,TOR,Rogers Centre,2026,home,227,-255,0,0,0,0,0,0,0,0,"0 mph, None",LOW,,0.8342,,8.50,+200+,-1.0000,incomplete
+2026-04-01,823078,NYM,STL,Busch Stadium,2026,away,134,-158,0,0,0,0,0,0,0,7,"7 mph, L To R",MODERATE,,0.6778,,8.50,+120-149,-1.0000,incomplete
+2026-04-01,823157,NYY,SEA,T-Mobile Park,2026,away,-104,-112,1,0,0,0,0,0,0,0,"0 mph, None",MODERATE,,0.5815,,7.00,<+120,0.9615,incomplete
+2026-04-01,823321,SF,SD,Petco Park,2026,home,122,-144,1,0,0,0,0,0,0,10,"10 mph, L To R",MODERATE,,0.5023,,7.50,+120-149,1.2200,incomplete
+2026-04-01,823483,WSH,PHI,Citizens Bank Park,2026,away,154,-184,0,0,0,0,0,0,0,10,"10 mph, L To R",HIGH,,0.6017,,9.00,+150-199,-1.0000,incomplete
+2026-04-01,823806,TB,MIL,American Family Field,2026,away,118,-138,0,0,0,0,0,0,0,0,"0 mph, None",LOW,,0.7908,,7.50,<+120,-1.0000,incomplete
+2026-04-01,823889,CWS,MIA,loanDepot park,2026,home,128,-152,1,0,0,0,0,0,0,0,"0 mph, None",SUPPRESSED,,0.8070,,8.50,+120-149,1.2800,incomplete
+2026-04-01,823970,CLE,LAD,Dodger Stadium,2026,home,215,-260,0,0,0,0,0,0,0,12,"12 mph, Varies",MODERATE,,0.6766,,8.00,+200+,-1.0000,incomplete
+2026-04-01,824136,MIN,KC,Kauffman Stadium,2026,home,100,-118,1,0,0,0,0,0,0,6,"6 mph, In From RF",HIGH,,0.6411,,8.50,<+120,1.0000,incomplete
+2026-04-01,824211,BOS,HOU,Daikin Park,2026,home,134,-158,1,0,0,0,0,0,0,0,"0 mph, None",LOW,,0.9676,,7.50,+120-149,1.3400,incomplete
+2026-04-01,824536,PIT,CIN,Great American Ball Park,2026,away,-108,-108,1,0,0,0,0,0,0,8,"8 mph, R To L",HIGH,,0.6521,,9.00,<+120,0.9259,incomplete
+2026-04-01,824698,LAA,CHC,Wrigley Field,2026,away,120,-142,0,1,0,0,1,0,0,21,"21 mph, In From LF",HIGH,,0.6190,,7.50,+120-149,-1.0000,incomplete
+2026-04-01,824860,TEX,BAL,Oriole Park at Camden Yards,2026,home,112,-132,1,0,0,0,0,0,0,5,"5 mph, Out To RF",MODERATE,,0.6689,,8.50,<+120,1.1200,incomplete
+2026-04-01,824940,ATH,ATL,Truist Park,2026,home,190,-230,1,0,0,0,0,0,0,3,"3 mph, Out To LF",MODERATE,,0.6738,,7.50,+150-199,1.9000,incomplete
+2026-04-01,825106,DET,AZ,Chase Field,2026,home,138,-152,1,0,0,0,0,0,0,11,"11 mph, Varies",LOW,,0.7834,,7.50,+120-149,1.3800,incomplete
+2026-04-02,823242,NYM,SF,Oracle Park,2026,away,111,-122,0,0,0,0,0,0,0,12,"12 mph, Out To CF",SUPPRESSED,,0.6284,,7.50,<+120,-1.0000,incomplete
+2026-04-02,824133,MIN,KC,Kauffman Stadium,2026,home,100,-118,0,0,0,0,0,0,0,14,"14 mph, R To L",HIGH,,0.8217,,8.50,<+120,-1.0000,incomplete
+2026-04-02,825105,ATL,AZ,Chase Field,2026,home,-104,-106,0,0,0,0,0,0,0,0,"0 mph, None",LOW,,0.7528,,9.00,<+120,-1.0000,incomplete
+2026-04-03,822919,CIN,TEX,Globe Life Field,2026,home,142,-157,0,0,0,0,0,0,0,0,"0 mph, None",LOW,,0.7622,,8.00,+120-149,-1.0000,incomplete
+2026-04-03,823240,NYM,SF,Oracle Park,2026,away,111,-122,1,0,0,0,0,0,0,8,"8 mph, Out To CF",SUPPRESSED,,0.7553,,7.50,<+120,1.1100,incomplete
+2026-04-03,823406,BAL,PIT,PNC Park,2026,away,106,-124,0,1,0,0,0,1,0,16,"16 mph, Out To LF",MODERATE,,0.7239,,8.50,<+120,-1.0000,incomplete
+2026-04-03,823568,MIA,NYY,Yankee Stadium,2026,home,146,-174,1,0,0,0,0,0,0,8,"8 mph, Out To LF",MODERATE,,0.6298,,8.00,+120-149,1.4600,incomplete
+2026-04-03,823732,TB,MIN,Target Field,2026,away,100,-118,0,0,0,0,0,0,0,9,"9 mph, In From LF",HIGH,,0.7713,,7.50,<+120,-1.0000,incomplete
+2026-04-03,824134,MIL,KC,Kauffman Stadium,2026,away,100,-118,0,0,0,0,0,0,0,15,"15 mph, L To R",HIGH,,0.7419,,8.50,<+120,-1.0000,incomplete
+2026-04-03,824299,STL,DET,Comerica Park,2026,away,154,-184,0,0,0,0,0,0,0,18,"18 mph, Out To LF",MODERATE,,0.5422,,7.50,+150-199,-1.0000,incomplete
+2026-04-03,824377,PHI,COL,Coors Field,2026,home,160,-190,0,1,0,0,1,0,0,19,"19 mph, In From LF",HIGH,,0.6204,,10.00,+150-199,-1.0000,incomplete
+2026-04-03,824786,SD,BOS,Fenway Park,2026,away,102,-120,0,0,0,0,0,0,0,6,"6 mph, Out To CF",HIGH,,0.5853,,8.50,<+120,-1.0000,incomplete
+2026-04-03,825026,HOU,ATH,Sutter Health Park,2026,home,-104,-112,1,0,0,0,0,0,0,3,"3 mph, Out To RF",HIGH,,0.5225,,10.00,<+120,0.9615,incomplete
+2026-04-03,825103,ATL,AZ,Chase Field,2026,home,102,-120,0,0,0,0,0,0,0,4,"4 mph, In From CF",LOW,,0.7178,,9.00,<+120,-1.0000,incomplete
+2026-04-04,822757,LAD,WSH,Nationals Park,2026,away,223,-250,1,0,0,0,0,0,0,5,"5 mph, Out To LF",HIGH,,0.7627,,9.50,+200+,2.2300,incomplete
+2026-04-04,822920,CIN,TEX,Globe Life Field,2026,home,151,-167,0,0,0,0,0,0,0,0,"0 mph, None",LOW,,0.7521,,7.50,+150-199,-1.0000,incomplete
+2026-04-04,823239,NYM,SF,Oracle Park,2026,away,110,-130,1,0,0,0,0,0,0,10,"10 mph, Out To CF",SUPPRESSED,,0.6597,,7.50,<+120,1.1000,incomplete
+2026-04-04,823404,BAL,PIT,PNC Park,2026,away,106,-124,0,1,0,0,0,1,0,15,"15 mph, Out To LF",MODERATE,,0.7262,,8.50,<+120,-1.0000,incomplete
+2026-04-04,823569,MIA,NYY,Yankee Stadium,2026,home,150,-178,1,0,0,0,0,0,0,14,"14 mph, L To R",MODERATE,,0.7372,,8.00,+150-199,1.5000,incomplete
+2026-04-04,823730,TB,MIN,Target Field,2026,away,-104,-112,1,1,0,0,0,1,1,14,"14 mph, Out To RF",HIGH,,0.7726,,7.50,<+120,0.9615,incomplete
+2026-04-04,824054,SEA,LAA,Angel Stadium,2026,home,136,-162,1,0,0,0,0,0,0,8,"8 mph, Out To LF",MODERATE,,0.3390,,8.00,+120-149,1.3600,incomplete
+2026-04-04,824132,MIL,KC,Kauffman Stadium,2026,home,-106,-110,0,0,0,0,0,0,0,15,"15 mph, L To R",HIGH,,0.8165,,9.00,<+120,-1.0000,incomplete
+2026-04-04,824295,STL,DET,Comerica Park,2026,away,146,-174,0,0,0,0,0,0,0,15,"15 mph, In From RF",MODERATE,,0.6457,,7.50,+120-149,-1.0000,incomplete
+2026-04-04,824378,PHI,COL,Coors Field,2026,home,168,-200,0,0,0,0,0,0,0,7,"7 mph, R To L",HIGH,,0.5387,,10.00,+150-199,-1.0000,incomplete
+2026-04-04,824460,CHC,CLE,Progressive Field,2026,away,108,-119,0,0,0,0,0,0,0,16,"16 mph, L To R",MODERATE,,0.6819,,7.50,<+120,-1.0000,incomplete
+2026-04-04,824622,TOR,CWS,Rate Field,2026,home,176,-210,1,1,0,0,0,1,1,16,"16 mph, Out To LF",HIGH,,0.5194,,7.50,+150-199,1.7600,incomplete
+2026-04-04,824782,SD,BOS,Fenway Park,2026,away,104,-122,1,1,0,0,1,0,0,13,"13 mph, In From RF",HIGH,,0.6700,,8.50,<+120,1.0400,incomplete
+2026-04-04,825027,HOU,ATH,Sutter Health Park,2026,home,-104,-112,0,0,0,0,0,0,0,4,"4 mph, Out To RF",HIGH,,0.7039,,10.00,<+120,-1.0000,incomplete
+2026-04-04,825104,ATL,AZ,Chase Field,2026,away,-108,-108,0,0,0,0,0,0,0,1,"1 mph, Varies",LOW,,0.5594,,9.50,<+120,-1.0000,incomplete
+2026-04-05,822756,LAD,WSH,Nationals Park,2026,away,240,-295,1,0,0,0,0,0,0,4,"4 mph, In From LF",HIGH,,0.7444,,9.50,+200+,2.4000,incomplete
+2026-04-05,822917,CIN,TEX,Globe Life Field,2026,home,122,-144,0,0,0,0,0,0,0,12,"12 mph, Varies",LOW,,0.6291,,8.50,+120-149,-1.0000,incomplete
+2026-04-05,823238,NYM,SF,Oracle Park,2026,away,100,-118,1,0,0,0,0,0,0,11,"11 mph, Varies",SUPPRESSED,,0.5164,,7.50,<+120,1.0000,incomplete
+2026-04-05,823405,BAL,PIT,PNC Park,2026,away,-106,-110,0,1,0,0,0,1,0,16,"16 mph, Out To LF",MODERATE,,0.7271,,8.50,<+120,-1.0000,incomplete
+2026-04-05,823566,MIA,NYY,Yankee Stadium,2026,home,158,-188,0,0,0,0,0,0,0,6,"6 mph, L To R",MODERATE,,0.7463,,7.50,+150-199,-1.0000,incomplete
+2026-04-05,823729,TB,MIN,Target Field,2026,away,-106,-110,1,0,0,0,0,0,0,13,"13 mph, R To L",HIGH,,0.6167,,7.50,<+120,0.9434,incomplete
+2026-04-05,824053,SEA,LAA,Angel Stadium,2026,home,132,-156,1,0,0,0,0,0,0,2,"2 mph, Calm",MODERATE,,0.4032,,9.50,+120-149,1.3200,incomplete
+2026-04-05,824131,MIL,KC,Kauffman Stadium,2026,home,100,-118,0,0,0,0,0,0,0,10,"10 mph, L To R",HIGH,,0.7833,,8.50,<+120,-1.0000,incomplete
+2026-04-05,824296,STL,DET,Comerica Park,2026,away,134,-158,1,0,0,0,0,0,0,15,"15 mph, Out To LF",MODERATE,,0.8889,,7.50,+120-149,1.3400,incomplete
+2026-04-05,824379,PHI,COL,Coors Field,2026,home,190,-230,1,0,0,0,0,0,0,9,"9 mph, In From CF",HIGH,,0.4728,,10.00,+150-199,1.9000,incomplete
+2026-04-05,824459,CHC,CLE,Progressive Field,2026,away,120,-132,1,0,0,0,0,0,0,15,"15 mph, L To R",MODERATE,,0.7517,,8.00,+120-149,1.2000,incomplete
+2026-04-05,824620,TOR,CWS,Rate Field,2026,home,124,-146,1,0,0,0,0,0,0,4,"4 mph, Out To LF",HIGH,,0.6034,,8.50,+120-149,1.2400,incomplete
+2026-04-05,824781,SD,BOS,Fenway Park,2026,away,122,-144,1,0,0,0,0,0,0,2,"2 mph, Out To RF",HIGH,,0.6508,,8.00,+120-149,1.2200,incomplete
+2026-04-13,823073,CLE,STL,Busch Stadium,2026,home,-102,-116,0,0,0,0,0,0,0,15,"15 mph, Out To LF",MODERATE,2.2400,0.5812,R,8.00,<+120,-1.0000,complete
+2026-04-13,823153,HOU,SEA,T-Mobile Park,2026,away,142,-168,0,0,0,0,0,0,0,7,"7 mph, Out To LF",MODERATE,4.2984,0.6398,R,7.50,+120-149,-1.0000,complete
+2026-04-13,823400,WSH,PIT,PNC Park,2026,away,188,-225,0,1,0,0,0,1,0,14,"14 mph, Out To LF",MODERATE,3.0691,0.8081,,7.50,+150-199,-1.0000,complete
+2026-04-13,823481,CHC,PHI,Citizens Bank Park,2026,away,160,-190,0,1,0,0,0,1,1,16,"16 mph, Out To RF",HIGH,3.2500,0.7179,R,8.00,+150-199,-1.0000,complete
+2026-04-13,823563,LAA,NYY,Yankee Stadium,2026,away,164,-196,0,1,0,1,0,1,0,15,"15 mph, Out To CF",MODERATE,4.8037,0.7195,L,9.00,+150-199,-1.0000,complete
+2026-04-13,823725,BOS,MIN,Target Field,2026,home,144,-172,1,1,0,0,0,1,1,14,"14 mph, Out To LF",HIGH,3.3000,0.5648,L,7.50,+120-149,1.4400,complete
+2026-04-13,823964,NYM,LAD,Dodger Stadium,2026,away,150,-178,0,1,1,1,0,0,0,2,"2 mph, Out To RF",MODERATE,6.7915,0.8713,L,9.00,+150-199,-1.0000,complete
+2026-04-13,824856,AZ,BAL,Oriole Park at Camden Yards,2026,away,110,-130,0,0,0,0,0,0,0,8,"8 mph, Out To RF",MODERATE,4.7228,0.7226,R,8.50,<+120,-1.0000,complete
+2026-04-13,824937,MIA,ATL,Truist Park,2026,away,126,-148,1,1,1,0,0,0,0,7,"7 mph, R To L",MODERATE,5.0411,0.8227,,8.50,+120-149,1.2600,complete
+2026-04-13,825024,TEX,ATH,Sutter Health Park,2026,home,112,-132,0,0,0,0,0,0,0,5,"5 mph, Out To RF",HIGH,8.2714,0.7248,R,9.00,<+120,-1.0000,complete
+2026-04-14,823072,CLE,STL,Busch Stadium,2026,home,102,-120,1,0,0,0,0,0,0,15,"15 mph, Out To LF",MODERATE,2.9038,0.6441,L,8.50,<+120,1.0200,complete
+2026-04-14,823315,SEA,SD,Petco Park,2026,home,104,-122,1,0,0,0,0,0,0,11,"11 mph, L To R",MODERATE,1.4000,0.9159,R,7.00,<+120,1.0400,complete
+2026-04-14,823398,WSH,PIT,PNC Park,2026,away,158,-188,1,1,1,0,0,0,0,10,"10 mph, Varies",MODERATE,11.6954,0.9187,R,8.50,+150-199,1.5800,complete
+2026-04-14,823478,CHC,PHI,Citizens Bank Park,2026,away,124,-146,1,1,0,0,0,1,1,15,"15 mph, Out To CF",HIGH,,0.8184,,9.00,+120-149,1.2400,incomplete
+2026-04-14,823562,LAA,NYY,Yankee Stadium,2026,away,142,-168,1,1,0,1,0,0,0,16,"16 mph, R To L",MODERATE,2.5714,0.8983,L,8.50,+120-149,1.4200,complete
+2026-04-14,823723,BOS,MIN,Target Field,2026,home,116,-136,1,0,0,0,0,0,0,4,"4 mph, R To L",HIGH,3.8400,0.7473,R,8.00,<+120,1.1600,complete
+2026-04-14,823802,TOR,MIL,American Family Field,2026,away,100,-118,1,0,0,0,0,0,0,0,"0 mph, None",LOW,3.3107,0.8402,R,7.00,<+120,1.0000,complete
+2026-04-14,823965,NYM,LAD,Dodger Stadium,2026,away,172,-205,0,0,0,0,0,0,0,8,"8 mph, Out To RF",MODERATE,3.4500,0.8557,R,7.50,+150-199,-1.0000,complete
+2026-04-14,824210,COL,HOU,Daikin Park,2026,away,159,-194,0,0,0,0,0,0,0,0,"0 mph, None",LOW,,0.7002,,8.50,+150-199,-1.0000,incomplete
+2026-04-14,824292,KC,DET,Comerica Park,2026,away,-102,-116,0,0,0,0,0,0,0,10,"10 mph, Out To LF",MODERATE,3.2073,0.9049,L,7.00,<+120,-1.0000,complete
+2026-04-14,824531,SF,CIN,Great American Ball Park,2026,away,-108,-108,0,1,0,0,1,0,0,13,"13 mph, In From LF",HIGH,5.6936,0.6051,L,8.50,<+120,-1.0000,complete
+2026-04-14,824616,TB,CWS,Rate Field,2026,home,112,-132,0,1,0,0,1,0,0,21,"21 mph, In From RF",HIGH,,0.7344,L,7.50,<+120,-1.0000,incomplete
+2026-04-14,824853,AZ,BAL,Oriole Park at Camden Yards,2026,away,136,-162,1,1,1,0,0,0,0,7,"7 mph, Out To CF",MODERATE,8.2855,0.7942,R,9.00,+120-149,1.3600,complete
+2026-04-14,824935,MIA,ATL,Truist Park,2026,away,128,-152,0,0,0,0,0,0,0,6,"6 mph, In From RF",MODERATE,5.7057,0.7757,R,8.50,+120-149,-1.0000,complete
+2026-04-14,825022,TEX,ATH,Sutter Health Park,2026,home,-102,-116,1,0,0,0,0,0,0,8,"8 mph, Out To RF",HIGH,3.2400,0.6533,L,8.50,<+120,0.9804,complete
+2026-04-15,823071,CLE,STL,Busch Stadium,2026,away,-102,-116,0,0,0,0,0,0,0,10,"10 mph, R To L",MODERATE,5.5466,0.7307,R,8.50,<+120,-1.0000,complete
+2026-04-15,823314,SEA,SD,Petco Park,2026,away,-104,-112,0,0,0,0,0,0,0,9,"9 mph, L To R",MODERATE,1.6900,0.8926,R,8.00,<+120,-1.0000,complete
+2026-04-15,823399,WSH,PIT,PNC Park,2026,away,149,-181,0,1,1,0,0,0,0,8,"8 mph, Out To LF",MODERATE,7.4700,0.8964,R,9.50,+120-149,-1.0000,complete
+2026-04-15,823477,CHC,PHI,Citizens Bank Park,2026,away,116,-136,1,1,0,0,0,1,1,14,"14 mph, Out To RF",HIGH,6.1412,0.7567,L,8.50,<+120,1.1600,complete
+2026-04-15,823561,LAA,NYY,Yankee Stadium,2026,away,153,-186,0,0,0,0,0,0,0,10,"10 mph, R To L",MODERATE,11.3000,0.7393,R,10.50,+150-199,-1.0000,complete
+2026-04-15,823722,BOS,MIN,Target Field,2026,home,108,-126,0,0,0,0,0,0,0,3,"3 mph, In From LF",HIGH,3.3825,0.8458,L,7.50,<+120,-1.0000,complete
+2026-04-15,823803,TOR,MIL,American Family Field,2026,home,106,-124,1,0,0,0,0,0,0,0,"0 mph, None",LOW,3.0946,0.8681,R,7.50,<+120,1.0600,complete
+2026-04-15,823963,NYM,LAD,Dodger Stadium,2026,away,176,-210,0,0,0,0,0,0,0,7,"7 mph, Out To RF",MODERATE,1.1471,0.6745,R,8.00,+150-199,-1.0000,complete
+2026-04-15,824209,COL,HOU,Daikin Park,2026,away,154,-184,0,1,0,1,0,0,0,0,"0 mph, None",LOW,6.0848,0.6933,L,8.50,+150-199,-1.0000,complete
+2026-04-15,824291,KC,DET,Comerica Park,2026,away,108,-126,0,1,1,0,0,0,0,7,"7 mph, R To L",MODERATE,5.2110,0.7979,R,8.00,<+120,-1.0000,complete
+2026-04-15,824532,SF,CIN,Great American Ball Park,2026,away,-108,-108,0,1,0,0,1,0,0,13,"13 mph, In From RF",HIGH,4.9835,0.6200,R,9.00,<+120,-1.0000,complete
+2026-04-15,824615,TB,CWS,Rate Field,2026,away,-104,-112,1,1,0,0,1,0,0,14,"14 mph, In From RF",HIGH,5.0833,0.7287,R,8.00,<+120,0.9615,complete
+2026-04-15,824855,AZ,BAL,Oriole Park at Camden Yards,2026,away,116,-134,1,0,0,0,0,0,0,5,"5 mph, Out To RF",MODERATE,2.1000,0.7804,L,9.00,<+120,1.1600,complete
+2026-04-15,824936,MIA,ATL,Truist Park,2026,away,136,-162,0,0,0,0,0,0,0,5,"5 mph, Out To LF",MODERATE,7.5415,0.7755,R,8.50,+120-149,-1.0000,complete
+2026-04-15,825021,TEX,ATH,Sutter Health Park,2026,away,-102,-116,0,0,0,0,0,0,0,9,"9 mph, Out To CF",HIGH,4.9236,0.5929,R,9.50,<+120,-1.0000,complete
+2026-04-16,823313,SEA,SD,Petco Park,2026,home,102,-120,1,0,0,0,0,0,0,9,"9 mph, Out To RF",MODERATE,2.8000,0.8936,R,8.00,<+120,1.0200,complete
+2026-04-16,823396,WSH,PIT,PNC Park,2026,away,140,-166,1,1,0,1,0,1,0,13,"13 mph, Out To LF",MODERATE,2.6000,0.7657,L,8.50,+120-149,1.4000,complete
+2026-04-16,823560,LAA,NYY,Yankee Stadium,2026,away,215,-260,1,1,0,0,0,1,0,10,"10 mph, Out To LF",MODERATE,0.0000,0.7182,L,9.50,+200+,2.1500,complete
+2026-04-16,823801,TOR,MIL,American Family Field,2026,away,106,-124,0,0,0,0,0,0,0,8,"8 mph, In From LF",LOW,4.3003,0.7441,L,8.50,<+120,-1.0000,complete
+2026-04-16,824208,COL,HOU,Daikin Park,2026,away,160,-190,1,0,0,0,0,0,0,0,"0 mph, None",LOW,,0.6752,R,8.50,+150-199,1.6000,incomplete
+2026-04-16,824289,KC,DET,Comerica Park,2026,home,100,-118,1,0,0,0,0,0,0,8,"8 mph, Out To LF",MODERATE,3.6924,0.7309,L,8.00,<+120,1.0000,complete
+2026-04-16,824453,BAL,CLE,Progressive Field,2026,away,112,-132,0,0,0,0,0,0,0,9,"9 mph, L To R",MODERATE,2.0400,0.7160,R,8.00,<+120,-1.0000,complete
+2026-04-16,824530,SF,CIN,Great American Ball Park,2026,away,106,-124,1,0,0,0,0,0,0,11,"11 mph, R To L",HIGH,6.3143,0.7780,R,8.50,<+120,1.0600,complete
+2026-04-16,824614,TB,CWS,Rate Field,2026,home,104,-122,0,1,0,0,0,1,1,15,"15 mph, Out To LF",HIGH,3.0600,0.6988,L,8.50,<+120,-1.0000,complete
+2026-04-16,825023,TEX,ATH,Sutter Health Park,2026,home,100,-118,0,0,0,0,0,0,0,17,"17 mph, L To R",HIGH,3.0313,0.6789,R,8.50,<+120,-1.0000,complete
+2026-04-17,822752,SF,WSH,Nationals Park,2026,home,134,-158,0,0,0,0,0,0,0,6,"6 mph, In From LF",HIGH,4.0886,0.6351,R,8.00,+120-149,-1.0000,complete
+2026-04-17,823152,TEX,SEA,T-Mobile Park,2026,away,116,-134,1,0,0,0,0,0,0,7,"7 mph, L To R",MODERATE,3.8600,0.6570,R,6.50,<+120,1.1600,complete
+2026-04-17,823397,TB,PIT,PNC Park,2026,away,120,-142,0,0,0,0,0,0,0,2,"2 mph, Out To CF",MODERATE,2.9357,0.7934,R,8.50,+120-149,-1.0000,complete
+2026-04-17,823476,ATL,PHI,Citizens Bank Park,2026,away,-108,-108,1,1,0,0,1,0,0,11,"11 mph, In From LF",HIGH,5.3127,0.7048,L,9.00,<+120,0.9259,complete
+2026-04-17,823559,KC,NYY,Yankee Stadium,2026,away,138,-164,0,0,0,0,0,0,0,8,"8 mph, L To R",MODERATE,2.8860,0.7599,R,8.50,+120-149,-1.0000,complete
+2026-04-17,823720,CIN,MIN,Target Field,2026,away,150,-178,1,1,0,1,0,1,1,14,"14 mph, Out To RF",HIGH,,0.8287,L,7.50,+150-199,1.5000,incomplete
+2026-04-17,823883,MIL,MIA,loanDepot park,2026,away,-104,-112,1,0,0,0,0,0,0,10,"10 mph, In From LF",SUPPRESSED,,0.7271,,8.50,<+120,0.9615,incomplete
+2026-04-17,824048,SD,LAA,Angel Stadium,2026,away,116,-136,0,0,0,0,0,0,0,9,"9 mph, Out To RF",MODERATE,,0.9287,R,8.50,<+120,-1.0000,incomplete
+2026-04-17,824207,STL,HOU,Daikin Park,2026,away,118,-138,1,0,0,0,0,0,0,0,"0 mph, None",LOW,3.6935,0.6323,R,8.50,<+120,1.1800,complete
+2026-04-17,824373,LAD,COL,Coors Field,2026,home,250,-310,0,0,0,0,0,0,0,3,"3 mph, R To L",HIGH,2.8500,0.6640,R,9.50,+200+,-1.0000,complete
+2026-04-17,824454,BAL,CLE,Progressive Field,2026,away,110,-130,1,0,0,0,0,0,0,3,"3 mph, In From RF",MODERATE,4.9908,0.7366,R,8.00,<+120,1.1000,complete
+2026-04-17,824693,NYM,CHC,Wrigley Field,2026,away,120,-142,0,1,1,0,0,1,1,15,"15 mph, Out To LF",HIGH,5.1674,0.9049,R,9.50,+120-149,-1.0000,complete
+2026-04-17,824778,DET,BOS,Fenway Park,2026,away,110,-130,0,0,0,0,0,0,0,3,"3 mph, R To L",HIGH,3.0858,0.7541,R,8.00,<+120,-1.0000,complete
+2026-04-17,825019,CWS,ATH,Sutter Health Park,2026,away,132,-156,1,0,0,0,0,0,0,2,"2 mph, L To R",HIGH,3.5262,0.7199,R,9.50,+120-149,1.3200,complete
+2026-04-17,825101,TOR,AZ,Chase Field,2026,away,112,-132,0,0,0,0,0,0,0,3,"3 mph, R To L",LOW,,0.8240,,9.00,<+120,-1.0000,incomplete
+2026-04-18,822751,SF,WSH,Nationals Park,2026,home,-102,-116,0,0,0,0,0,0,0,4,"4 mph, R To L",HIGH,5.0214,0.6635,R,9.50,<+120,-1.0000,complete
+2026-04-18,823151,TEX,SEA,T-Mobile Park,2026,away,122,-144,0,0,0,0,0,0,0,6,"6 mph, Out To RF",MODERATE,5.8714,0.6008,R,7.00,+120-149,-1.0000,complete
+2026-04-18,823394,TB,PIT,PNC Park,2026,away,146,-174,1,1,0,0,0,1,0,17,"17 mph, Out To LF",MODERATE,2.0000,0.8317,R,7.00,+120-149,1.4600,complete
+2026-04-18,823474,ATL,PHI,Citizens Bank Park,2026,away,108,-126,1,1,0,0,0,1,1,13,"13 mph, Out To RF",HIGH,1.7118,0.6443,L,7.00,<+120,1.0800,complete
+2026-04-18,823558,KC,NYY,Yankee Stadium,2026,away,138,-164,0,1,0,1,0,0,0,8,"8 mph, L To R",MODERATE,4.8011,0.7388,L,8.00,+120-149,-1.0000,complete
+2026-04-18,823721,CIN,MIN,Target Field,2026,away,112,-132,1,1,0,0,0,1,1,19,"19 mph, Out To CF",HIGH,9.3691,0.7253,L,7.50,<+120,1.1200,complete
+2026-04-18,823882,MIL,MIA,loanDepot park,2026,away,-108,-108,1,0,0,0,0,0,0,10,"10 mph, In From RF",SUPPRESSED,2.5123,0.7480,R,7.50,<+120,0.9259,complete
+2026-04-18,824049,SD,LAA,Angel Stadium,2026,home,-106,-110,0,1,1,0,0,0,0,8,"8 mph, R To L",MODERATE,9.5173,0.9522,R,9.50,<+120,-1.0000,complete
+2026-04-18,824206,STL,HOU,Daikin Park,2026,away,130,-154,1,0,0,0,0,0,0,0,"0 mph, None",LOW,6.3200,0.6839,R,8.50,+120-149,1.3000,complete
+2026-04-18,824372,LAD,COL,Coors Field,2026,home,225,-275,1,0,0,0,0,0,0,6,"6 mph, Out To CF",HIGH,5.2951,0.5446,R,11.00,+200+,2.2500,complete
+2026-04-18,824451,BAL,CLE,Progressive Field,2026,away,112,-132,0,0,0,0,0,0,0,15,"15 mph, L To R",MODERATE,3.2353,0.7088,R,7.50,<+120,-1.0000,complete
+2026-04-18,824694,NYM,CHC,Wrigley Field,2026,home,-106,-110,1,0,0,0,0,0,0,16,"16 mph, L To R",HIGH,2.9700,1.0052,R,8.50,<+120,0.9434,complete
+2026-04-18,824775,DET,BOS,Fenway Park,2026,home,154,-184,0,0,0,0,0,0,0,9,"9 mph, R To L",HIGH,1.0929,0.6434,L,7.50,+150-199,-1.0000,complete
+2026-04-18,825020,CWS,ATH,Sutter Health Park,2026,away,132,-156,0,0,0,0,0,0,0,1,"1 mph, Calm",HIGH,6.6923,0.6549,R,9.50,+120-149,-1.0000,complete
+2026-04-18,825098,TOR,AZ,Chase Field,2026,away,102,-120,0,0,0,0,0,0,0,1,"1 mph, Varies",LOW,4.8477,0.8135,R,9.00,<+120,-1.0000,complete
+2026-04-19,822750,SF,WSH,Nationals Park,2026,home,126,-148,1,0,0,0,0,0,0,8,"8 mph, L To R",HIGH,4.8107,0.6696,L,8.00,+120-149,1.2600,complete
+2026-04-19,823150,TEX,SEA,T-Mobile Park,2026,away,126,-148,0,0,0,0,0,0,0,7,"7 mph, L To R",MODERATE,3.4007,0.6738,L,7.00,+120-149,-1.0000,complete
+2026-04-19,823393,TB,PIT,PNC Park,2026,away,102,-120,0,1,0,0,0,1,0,15,"15 mph, Out To CF",MODERATE,3.7143,0.7429,L,7.50,<+120,-1.0000,complete
+2026-04-19,823475,ATL,PHI,Citizens Bank Park,2026,away,104,-122,1,0,0,0,0,0,0,13,"13 mph, L To R",HIGH,4.8300,0.5545,R,8.00,<+120,1.0400,complete
+2026-04-19,823556,KC,NYY,Yankee Stadium,2026,away,116,-136,0,1,0,0,0,1,0,14,"14 mph, Out To RF",MODERATE,2.0400,0.8746,L,7.50,<+120,-1.0000,complete
+2026-04-19,823718,CIN,MIN,Target Field,2026,away,108,-126,1,1,0,0,0,1,1,12,"12 mph, Out To RF",HIGH,4.3400,0.6870,R,8.00,<+120,1.0800,complete
+2026-04-19,823881,MIL,MIA,loanDepot park,2026,home,102,-120,1,0,0,0,0,0,0,0,"0 mph, None",SUPPRESSED,3.4195,0.6592,,7.50,<+120,1.0200,complete
+2026-04-19,824047,SD,LAA,Angel Stadium,2026,home,100,-118,0,0,0,0,0,0,0,8,"8 mph, R To L",MODERATE,3.7941,0.8099,R,8.50,<+120,-1.0000,complete
+2026-04-19,824205,STL,HOU,Daikin Park,2026,away,120,-142,1,0,0,0,0,0,0,0,"0 mph, None",LOW,3.6000,0.6918,L,8.50,+120-149,1.2000,complete
+2026-04-19,824371,LAD,COL,Coors Field,2026,home,190,-230,1,0,0,0,0,0,0,7,"7 mph, R To L",HIGH,6.6900,0.5732,R,11.50,+150-199,1.9000,complete
+2026-04-19,824452,BAL,CLE,Progressive Field,2026,away,100,-118,0,0,0,0,0,0,0,10,"10 mph, L To R",MODERATE,5.7714,0.6307,L,7.00,<+120,-1.0000,complete
+2026-04-19,824691,NYM,CHC,Wrigley Field,2026,away,-102,-116,0,0,0,0,0,0,0,4,"4 mph, L To R",HIGH,2.7345,0.9058,R,8.50,<+120,-1.0000,complete
+2026-04-19,824777,DET,BOS,Fenway Park,2026,away,124,-146,1,1,0,0,0,1,1,10,"10 mph, Out To RF",HIGH,1.5429,0.5485,L,7.00,+120-149,1.2400,complete
+2026-04-19,825018,CWS,ATH,Sutter Health Park,2026,away,126,-148,1,0,0,0,0,0,0,7,"7 mph, Out To LF",HIGH,,0.7343,,9.00,+120-149,1.2600,incomplete
+2026-04-19,825100,TOR,AZ,Chase Field,2026,home,-106,-110,0,0,0,0,0,0,0,0,"0 mph, None",LOW,3.8326,0.7833,R,8.00,<+120,-1.0000,complete
+2026-04-20,822749,ATL,WSH,Nationals Park,2026,home,136,-162,0,1,0,0,1,0,0,13,"13 mph, In From LF",HIGH,0.6000,0.6625,R,8.50,+120-149,-1.0000,complete
+2026-04-20,822994,CIN,TB,Tropicana Field,2026,away,102,-120,1,0,0,0,0,0,0,0,"0 mph, None",SUPPRESSED,2.5875,0.6180,R,8.00,<+120,1.0200,complete
+2026-04-20,823149,ATH,SEA,T-Mobile Park,2026,away,136,-162,1,0,0,0,0,0,0,5,"5 mph, Out To CF",MODERATE,4.9614,0.7665,R,8.00,+120-149,1.3600,complete
+2026-04-20,823879,STL,MIA,loanDepot park,2026,away,108,-126,0,0,0,0,0,0,0,0,"0 mph, None",SUPPRESSED,4.1143,0.6583,R,8.00,<+120,-1.0000,complete
+2026-04-20,824046,TOR,LAA,Angel Stadium,2026,home,106,-124,0,0,0,0,0,0,0,9,"9 mph, Out To CF",MODERATE,2.0852,0.6595,R,7.50,<+120,-1.0000,complete
+2026-04-20,824125,BAL,KC,Kauffman Stadium,2026,away,-108,-108,1,0,0,0,0,0,0,13,"13 mph, R To L",HIGH,5.8714,0.5796,R,8.50,<+120,0.9259,complete
+2026-04-20,824370,LAD,COL,Coors Field,2026,home,210,-255,0,0,0,0,0,0,0,7,"7 mph, In From LF",HIGH,3.4000,0.7533,L,11.50,+200+,-1.0000,complete
+2026-04-20,824450,HOU,CLE,Progressive Field,2026,away,-102,-116,1,0,0,0,0,0,0,3,"3 mph, In From LF",MODERATE,2.9543,0.6734,R,7.50,<+120,0.9804,complete
+2026-04-20,824692,PHI,CHC,Wrigley Field,2026,away,-106,-110,0,0,0,0,0,0,0,11,"11 mph, R To L",HIGH,3.8590,0.8042,R,7.50,<+120,-1.0000,complete
+2026-04-20,824776,DET,BOS,Fenway Park,2026,away,110,-130,0,0,0,0,0,0,0,9,"9 mph, Out To RF",HIGH,5.2815,0.5583,R,8.00,<+120,-1.0000,complete
+2026-04-21,822747,ATL,WSH,Nationals Park,2026,home,116,-136,1,0,0,0,0,0,0,9,"9 mph, Out To CF",HIGH,3.5357,0.5767,R,8.50,<+120,1.1600,complete
+2026-04-21,822914,PIT,TEX,Globe Life Field,2026,away,-104,-112,0,0,0,0,0,0,0,0,"0 mph, None",LOW,1.8593,0.7353,R,8.50,<+120,-1.0000,complete
+2026-04-21,822995,CIN,TB,Tropicana Field,2026,away,-108,-108,1,0,0,0,0,0,0,0,"0 mph, None",SUPPRESSED,0.9176,0.5666,R,7.50,<+120,0.9259,complete
+2026-04-21,823148,ATH,SEA,T-Mobile Park,2026,away,140,-166,1,1,0,1,0,0,0,6,"6 mph, Out To LF",MODERATE,4.6115,0.7976,L,7.50,+120-149,1.4000,complete
+2026-04-21,823236,LAD,SF,Oracle Park,2026,home,152,-180,1,0,0,0,0,0,0,14,"14 mph, Out To CF",SUPPRESSED,1.7913,0.6915,R,7.50,+150-199,1.5200,complete
+2026-04-21,823640,MIN,NYM,Citi Field,2026,away,154,-184,1,0,0,0,0,0,0,11,"11 mph, Out To LF",MODERATE,4.9200,0.5956,R,7.50,+150-199,1.5400,complete
+2026-04-21,823880,STL,MIA,loanDepot park,2026,away,-104,-112,1,0,0,0,0,0,0,0,"0 mph, None",SUPPRESSED,9.3150,0.6852,R,8.50,<+120,0.9615,complete
+2026-04-21,824045,TOR,LAA,Angel Stadium,2026,away,-104,-112,1,0,0,0,0,0,0,9,"9 mph, Out To CF",MODERATE,3.4171,0.5701,L,9.50,<+120,0.9615,complete
+2026-04-21,824127,BAL,KC,Kauffman Stadium,2026,away,116,-136,0,0,0,0,0,0,0,14,"14 mph, R To L",HIGH,3.3500,0.6395,R,9.00,<+120,-1.0000,complete
+2026-04-21,824290,MIL,DET,Comerica Park,2026,away,-102,-116,1,0,0,0,0,0,0,9,"9 mph, R To L",MODERATE,3.6050,0.7499,L,8.00,<+120,0.9804,complete
+2026-04-21,824369,SD,COL,Coors Field,2026,home,124,-146,0,0,0,0,0,0,0,8,"8 mph, Out To LF",HIGH,3.4000,0.7879,R,11.00,+120-149,-1.0000,complete
+2026-04-21,824448,HOU,CLE,Progressive Field,2026,away,112,-132,0,0,0,0,0,0,0,11,"11 mph, Out To RF",MODERATE,2.7273,0.6700,R,8.00,<+120,-1.0000,complete
+2026-04-21,824690,PHI,CHC,Wrigley Field,2026,away,100,-118,0,0,0,0,0,0,0,3,"3 mph, Out To RF",HIGH,7.0029,0.7774,L,8.50,<+120,-1.0000,complete
+2026-04-21,824773,NYY,BOS,Fenway Park,2026,away,-108,-108,1,0,0,0,0,0,0,9,"9 mph, Out To LF",HIGH,4.9886,0.6592,R,8.50,<+120,0.9259,complete
+2026-04-21,825099,CWS,AZ,Chase Field,2026,away,128,-152,1,0,0,0,0,0,0,9,"9 mph, R To L",LOW,4.5769,0.7562,R,9.50,+120-149,1.2800,complete
+2026-04-22,822748,ATL,WSH,Nationals Park,2026,home,118,-138,0,0,0,0,0,0,0,7,"7 mph, Out To RF",HIGH,6.7062,0.6938,R,9.00,<+120,-1.0000,complete
+2026-04-22,822913,PIT,TEX,Globe Life Field,2026,away,-108,-108,1,0,0,0,0,0,0,0,"0 mph, None",LOW,2.6127,0.7272,R,8.00,<+120,0.9259,complete
+2026-04-22,822993,CIN,TB,Tropicana Field,2026,away,108,-126,0,0,0,0,0,0,0,0,"0 mph, None",SUPPRESSED,6.0803,0.6148,L,8.00,<+120,-1.0000,complete
+2026-04-22,823147,ATH,SEA,T-Mobile Park,2026,away,164,-196,0,0,0,0,0,0,0,0,"0 mph, None",MODERATE,4.3343,0.7655,R,7.50,+150-199,-1.0000,complete
+2026-04-22,823231,LAD,SF,Oracle Park,2026,home,176,-210,1,0,0,0,0,0,0,12,"12 mph, Out To CF",SUPPRESSED,0.5000,0.6269,R,7.50,+150-199,1.7600,complete
+2026-04-22,823641,MIN,NYM,Citi Field,2026,away,134,-158,0,0,0,0,0,0,0,3,"3 mph, In From RF",MODERATE,,0.5463,,7.50,+120-149,-1.0000,incomplete
+2026-04-22,823878,STL,MIA,loanDepot park,2026,away,110,-130,0,0,0,0,0,0,0,0,"0 mph, None",SUPPRESSED,4.3636,0.6812,R,8.50,<+120,-1.0000,complete
+2026-04-22,824044,TOR,LAA,Angel Stadium,2026,away,134,-158,0,0,0,0,0,0,0,6,"6 mph, Out To RF",MODERATE,4.3629,0.4981,,8.00,+120-149,-1.0000,complete
+2026-04-22,824123,BAL,KC,Kauffman Stadium,2026,away,106,-124,1,0,0,0,0,0,0,8,"8 mph, R To L",HIGH,3.7015,0.7399,R,9.00,<+120,1.0600,complete
+2026-04-22,824286,MIL,DET,Comerica Park,2026,away,112,-132,0,0,0,0,0,0,0,7,"7 mph, In From LF",MODERATE,2.0000,0.7253,L,7.50,<+120,-1.0000,complete
+2026-04-22,824367,SD,COL,Coors Field,2026,home,136,-162,1,0,0,0,0,0,0,11,"11 mph, L To R",HIGH,3.1200,0.6229,R,12.00,+120-149,1.3600,complete
+2026-04-22,824449,HOU,CLE,Progressive Field,2026,away,110,-130,1,0,0,0,0,0,0,8,"8 mph, In From LF",MODERATE,,0.7625,R,8.00,<+120,1.1000,incomplete
+2026-04-22,824688,PHI,CHC,Wrigley Field,2026,away,146,-174,0,0,0,0,0,0,0,9,"9 mph, In From CF",HIGH,,0.8306,,8.00,+120-149,-1.0000,incomplete
+2026-04-22,824774,NYY,BOS,Fenway Park,2026,home,128,-152,0,1,0,0,0,1,1,12,"12 mph, Out To LF",HIGH,3.9782,0.5750,L,7.50,+120-149,-1.0000,complete
+2026-04-22,825097,CWS,AZ,Chase Field,2026,away,128,-152,0,1,0,1,0,0,0,9,"9 mph, Varies",LOW,4.0219,0.7965,L,9.00,+120-149,-1.0000,complete
+2026-04-23,822745,ATL,WSH,Nationals Park,2026,home,116,-136,0,0,0,0,0,0,0,4,"4 mph, In From LF",HIGH,,0.7645,,9.00,<+120,-1.0000,incomplete
+2026-04-23,822912,PIT,TEX,Globe Life Field,2026,away,136,-162,0,0,0,0,0,0,0,0,"0 mph, None",LOW,2.0618,0.6790,,8.00,+120-149,-1.0000,complete
+2026-04-23,823233,LAD,SF,Oracle Park,2026,home,136,-162,0,0,0,0,0,0,0,8,"8 mph, Out To CF",SUPPRESSED,2.3086,0.6211,R,7.50,+120-149,-1.0000,complete
+2026-04-23,823639,MIN,NYM,Citi Field,2026,home,-106,-110,1,0,0,0,0,0,0,8,"8 mph, L To R",MODERATE,4.0400,0.6057,R,7.50,<+120,0.9434,complete
+2026-04-23,824288,MIL,DET,Comerica Park,2026,away,168,-200,0,1,1,0,0,0,0,7,"7 mph, In From RF",MODERATE,8.8968,0.7918,R,6.50,+150-199,-1.0000,complete
+2026-04-23,824368,SD,COL,Coors Field,2026,home,129,-156,0,0,0,0,0,0,0,8,"8 mph, In From CF",HIGH,11.6104,0.7764,R,12.50,+120-149,-1.0000,complete
+2026-04-23,824689,PHI,CHC,Wrigley Field,2026,home,106,-124,1,0,0,0,0,0,0,14,"14 mph, R To L",HIGH,1.1375,0.8818,L,8.00,<+120,1.0600,complete
+2026-04-23,824770,NYY,BOS,Fenway Park,2026,home,134,-158,0,0,0,0,0,0,0,14,"14 mph, R To L",HIGH,1.4400,0.5343,,8.50,+120-149,-1.0000,complete
+2026-04-23,825096,CWS,AZ,Chase Field,2026,away,132,-156,1,0,0,0,0,0,0,0,"0 mph, None",LOW,2.6393,0.9782,R,8.50,+120-149,1.3200,complete
+2026-04-24,822827,CLE,TOR,Rogers Centre,2026,home,102,-120,0,0,0,0,0,0,0,0,"0 mph, None",LOW,2.3086,0.7292,R,7.50,<+120,-1.0000,complete
+2026-04-24,822909,ATH,TEX,Globe Life Field,2026,away,122,-144,1,0,0,0,0,0,0,0,"0 mph, None",LOW,7.0525,0.7304,R,8.50,+120-149,1.2200,complete
+2026-04-24,822992,MIN,TB,Tropicana Field,2026,away,-102,-116,0,0,0,0,0,0,0,0,"0 mph, None",SUPPRESSED,1.8569,0.6905,R,7.50,<+120,-1.0000,complete
+2026-04-24,823069,SEA,STL,Busch Stadium,2026,home,124,-146,0,0,0,0,0,0,0,2,"2 mph, In From RF",MODERATE,2.7955,0.5820,R,8.00,+120-149,-1.0000,complete
+2026-04-24,823232,MIA,SF,Oracle Park,2026,home,-104,-112,0,0,0,0,0,0,0,12,"12 mph, Out To CF",SUPPRESSED,4.7714,0.4260,R,7.50,<+120,-1.0000,complete
+2026-04-24,823638,COL,NYM,Citi Field,2026,away,184,-220,1,0,0,0,0,0,0,8,"8 mph, Out To LF",MODERATE,10.7480,0.7116,R,7.50,+150-199,1.8400,complete
+2026-04-24,823800,PIT,MIL,American Family Field,2026,home,116,-136,0,0,0,0,0,0,0,0,"0 mph, None",LOW,1.2509,0.6716,R,7.00,<+120,-1.0000,complete
+2026-04-24,823962,CHC,LAD,Dodger Stadium,2026,away,138,-164,1,0,0,0,0,0,0,3,"3 mph, L To R",MODERATE,3.1857,0.5911,R,9.00,+120-149,1.3800,complete
+2026-04-24,824124,LAA,KC,Kauffman Stadium,2026,away,100,-118,0,1,1,0,0,0,0,8,"8 mph, L To R",HIGH,5.2413,0.8209,L,8.50,<+120,-1.0000,complete
+2026-04-24,824204,NYY,HOU,Daikin Park,2026,home,130,-154,0,0,0,0,0,0,0,0,"0 mph, None",LOW,2.2494,0.7349,R,9.00,+120-149,-1.0000,complete
+2026-04-24,824529,DET,CIN,Great American Ball Park,2026,home,114,-134,1,0,0,0,0,0,0,10,"10 mph, R To L",HIGH,1.1286,0.6973,L,8.50,<+120,1.1400,complete
+2026-04-24,824611,WSH,CWS,Rate Field,2026,away,114,-134,0,0,0,0,0,0,0,9,"9 mph, Out To CF",HIGH,,0.9363,,9.00,<+120,-1.0000,incomplete
+2026-04-24,824854,BOS,BAL,Oriole Park at Camden Yards,2026,away,102,-120,0,0,0,0,0,0,0,3,"3 mph, R To L",MODERATE,6.5786,0.7442,R,8.50,<+120,-1.0000,complete
+2026-04-24,824932,PHI,ATL,Truist Park,2026,away,110,-130,0,0,0,0,0,0,0,4,"4 mph, R To L",MODERATE,3.8344,0.8355,R,8.50,<+120,-1.0000,complete
+2026-04-25,822826,CLE,TOR,Rogers Centre,2026,away,118,-138,0,0,0,0,0,0,0,0,"0 mph, None",LOW,3.9324,0.7500,L,7.50,<+120,-1.0000,complete
+2026-04-25,822910,ATH,TEX,Globe Life Field,2026,away,116,-136,0,0,0,0,0,0,0,0,"0 mph, None",LOW,5.4490,0.6775,L,8.00,<+120,-1.0000,complete
+2026-04-25,822989,MIN,TB,Tropicana Field,2026,away,108,-126,0,0,0,0,0,0,0,0,"0 mph, None",SUPPRESSED,3.8500,0.7902,R,8.00,<+120,-1.0000,complete
+2026-04-25,823070,SEA,STL,Busch Stadium,2026,home,126,-148,0,0,0,0,0,0,0,6,"6 mph, In From LF",MODERATE,2.2857,0.5584,R,7.50,+120-149,-1.0000,complete
+2026-04-25,823229,MIA,SF,Oracle Park,2026,away,-102,-116,0,0,0,0,0,0,0,10,"10 mph, Out To CF",SUPPRESSED,4.4518,0.5209,,7.50,<+120,-1.0000,complete
+2026-04-25,823799,PIT,MIL,American Family Field,2026,away,110,-130,1,0,0,0,0,0,0,0,"0 mph, None",LOW,4.6208,0.4832,R,8.00,<+120,1.1000,complete
+2026-04-25,823960,CHC,LAD,Dodger Stadium,2026,away,118,-138,0,0,0,0,0,0,0,11,"11 mph, Out To CF",MODERATE,2.9900,0.5731,R,9.50,<+120,-1.0000,complete
+2026-04-25,824121,LAA,KC,Kauffman Stadium,2026,away,130,-154,0,0,0,0,0,0,0,7,"7 mph, In From RF",HIGH,,0.7959,,8.50,+120-149,-1.0000,incomplete
+2026-04-25,824203,NYY,HOU,Daikin Park,2026,home,130,-154,0,0,0,0,0,0,0,0,"0 mph, None",LOW,4.7925,0.7684,L,9.00,+120-149,-1.0000,complete
+2026-04-25,824527,DET,CIN,Great American Ball Park,2026,away,-108,-108,0,0,0,0,0,0,0,7,"7 mph, Out To RF",HIGH,3.6192,0.8274,R,9.50,<+120,-1.0000,complete
+2026-04-25,824613,WSH,CWS,Rate Field,2026,away,116,-136,1,1,1,0,0,1,1,13,"13 mph, Out To RF",HIGH,6.3400,0.9090,R,8.50,<+120,1.1600,complete
+2026-04-25,824851,BOS,BAL,Oriole Park at Camden Yards,2026,away,-104,-112,1,1,1,0,0,0,0,13,"13 mph, In From RF",MODERATE,5.2200,0.9988,L,8.00,<+120,0.9615,complete
+2026-04-25,824933,PHI,ATL,Truist Park,2026,away,102,-120,1,0,0,0,0,0,0,3,"3 mph, Calm",MODERATE,4.1071,0.8244,R,8.50,<+120,1.0200,complete
+2026-04-25,825093,SD,AZ,Estadio Alfredo Harp Helu,2026,away,-102,-116,1,1,1,0,0,0,0,11,"11 mph, L To R",,6.6352,0.8706,R,16.00,<+120,0.9804,complete
+2026-04-26,822824,CLE,TOR,Rogers Centre,2026,away,112,-132,0,0,0,0,0,0,0,0,"0 mph, None",LOW,6.4615,,R,8.50,<+120,-1.0000,incomplete
+2026-04-26,822911,ATH,TEX,Globe Life Field,2026,away,108,-126,1,0,0,0,0,0,0,0,"0 mph, None",LOW,5.0784,,R,8.50,<+120,1.0800,incomplete
+2026-04-26,822991,MIN,TB,Tropicana Field,2026,away,112,-132,0,0,0,0,0,0,0,0,"0 mph, None",SUPPRESSED,5.4300,,R,8.50,<+120,-1.0000,incomplete
+2026-04-26,823068,SEA,STL,Busch Stadium,2026,home,120,-142,0,0,0,0,0,0,0,9,"9 mph, R To L",MODERATE,2.8700,,R,8.00,+120-149,-1.0000,incomplete
+2026-04-26,823230,MIA,SF,Oracle Park,2026,away,116,-134,0,0,0,0,0,0,0,13,"13 mph, Varies",SUPPRESSED,4.5364,,R,7.50,<+120,-1.0000,incomplete
+2026-04-26,823635,COL,NYM,Citi Field,2026,away,190,-230,1,0,0,0,0,0,0,9,"9 mph, In From RF",MODERATE,6.5444,,L,7.50,+150-199,1.9000,incomplete
+2026-04-26,823637,COL,NYM,Citi Field,2026,away,164,-196,1,0,0,0,0,0,0,8,"8 mph, In From RF",MODERATE,2.2354,,R,8.50,+150-199,1.6400,incomplete
+2026-04-26,823797,PIT,MIL,American Family Field,2026,away,106,-124,0,0,0,0,0,0,0,0,"0 mph, None",LOW,4.7868,,R,8.00,<+120,-1.0000,incomplete
+2026-04-26,823959,CHC,LAD,Dodger Stadium,2026,away,112,-132,0,0,0,0,0,0,0,12,"12 mph, Out To RF",MODERATE,2.9956,,L,9.50,<+120,-1.0000,incomplete
+2026-04-26,824122,LAA,KC,Kauffman Stadium,2026,away,102,-120,0,0,0,0,0,0,0,15,"15 mph, R To L",HIGH,3.3367,,L,8.50,<+120,-1.0000,incomplete
+2026-04-26,824202,NYY,HOU,Daikin Park,2026,home,116,-136,1,0,0,0,0,0,0,0,"0 mph, None",LOW,3.5543,,R,9.50,<+120,1.1600,incomplete
+2026-04-26,824528,DET,CIN,Great American Ball Park,2026,away,-102,-116,1,0,0,0,0,0,0,6,"6 mph, In From LF",HIGH,4.8959,,R,9.00,<+120,0.9804,incomplete
+2026-04-26,824612,WSH,CWS,Rate Field,2026,away,110,-130,1,0,0,0,0,0,0,3,"3 mph, L To R",HIGH,4.4357,,L,8.50,<+120,1.1000,incomplete
+2026-04-26,824852,BOS,BAL,Oriole Park at Camden Yards,2026,away,116,-136,1,0,0,0,0,0,0,14,"14 mph, In From LF",MODERATE,3.4525,,L,8.00,<+120,1.1600,incomplete
+2026-04-26,824934,PHI,ATL,Truist Park,2026,away,140,-166,0,0,0,0,0,0,0,5,"5 mph, Out To CF",MODERATE,5.9808,,R,8.00,+120-149,-1.0000,incomplete
+2026-04-26,825094,SD,AZ,Estadio Alfredo Harp Helu,2026,home,114,-134,1,0,0,0,0,0,0,1,"1 mph, Varies",,1.6706,,R,15.00,<+120,1.1400,incomplete
+2026-04-27,822825,BOS,TOR,Rogers Centre,2026,away,114,-134,1,0,0,0,0,0,0,0,"0 mph, None",LOW,5.8945,,L,7.00,<+120,1.1400,incomplete
+2026-04-27,822906,NYY,TEX,Globe Life Field,2026,home,148,-176,0,0,0,0,0,0,0,0,"0 mph, None",LOW,3.0600,,L,8.00,+120-149,-1.0000,incomplete
+2026-04-27,823311,CHC,SD,Petco Park,2026,home,-104,-112,1,0,0,0,0,0,0,13,"13 mph, L To R",MODERATE,5.9047,,L,8.00,<+120,0.9615,incomplete
+2026-04-27,823395,STL,PIT,PNC Park,2026,away,108,-126,1,0,0,0,0,0,0,10,"10 mph, In From CF",MODERATE,6.7425,,R,8.50,<+120,1.0800,incomplete
+2026-04-27,823719,SEA,MIN,Target Field,2026,home,106,-124,1,1,0,0,0,1,1,13,"13 mph, Out To RF",HIGH,3.2045,,R,8.50,<+120,1.0600,incomplete
+2026-04-27,823961,MIA,LAD,Dodger Stadium,2026,away,245,-300,0,0,0,0,0,0,0,2,"2 mph, Calm",MODERATE,7.1967,,R,8.50,+200+,-1.0000,incomplete
+2026-04-27,824446,TB,CLE,Progressive Field,2026,away,120,-142,1,0,0,0,0,0,0,13,"13 mph, Out To LF",MODERATE,6.1600,,L,7.50,+120-149,1.2000,incomplete
+2026-04-27,824609,LAA,CWS,Rate Field,2026,home,-102,-118,1,0,0,0,0,0,0,12,"12 mph, R To L",HIGH,4.9094,,R,9.00,<+120,0.9804,incomplete
+2026-04-28,822823,BOS,TOR,Rogers Centre,2026,away,102,-120,0,0,0,0,0,0,0,0,"0 mph, None",LOW,4.2321,,L,7.50,<+120,-1.0000,incomplete
+2026-04-28,822908,NYY,TEX,Globe Life Field,2026,home,100,-118,0,0,0,0,0,0,0,0,"0 mph, None",LOW,1.4550,,,7.50,<+120,-1.0000,incomplete
+2026-04-28,823310,CHC,SD,Petco Park,2026,home,100,-118,0,0,0,0,0,0,0,10,"10 mph, L To R",MODERATE,2.4857,,R,8.00,<+120,-1.0000,incomplete
+2026-04-28,823390,STL,PIT,PNC Park,2026,away,138,-164,1,0,0,0,0,0,0,7,"7 mph, Out To LF",MODERATE,5.5200,,R,8.50,+120-149,1.3800,incomplete
+2026-04-28,823473,SF,PHI,Citizens Bank Park,2026,away,146,-174,0,0,0,0,0,0,0,6,"6 mph, Out To LF",HIGH,7.3200,,R,8.00,+120-149,-1.0000,incomplete
+2026-04-28,823636,WSH,NYM,Citi Field,2026,away,158,-188,0,0,0,0,0,0,0,7,"7 mph, Out To LF",MODERATE,9.7286,,R,7.50,+150-199,-1.0000,incomplete
+2026-04-28,823716,SEA,MIN,Target Field,2026,home,108,-126,0,1,0,0,0,1,1,11,"11 mph, Out To LF",HIGH,4.8696,,R,7.50,<+120,-1.0000,incomplete
+2026-04-28,823798,AZ,MIL,American Family Field,2026,away,-104,-112,0,0,0,0,0,0,0,0,"0 mph, None",LOW,10.4023,,R,8.00,<+120,-1.0000,incomplete
+2026-04-28,823956,MIA,LAD,Dodger Stadium,2026,away,240,-295,1,0,0,0,0,0,0,9,"9 mph, Out To RF",MODERATE,2.5236,,R,8.50,+200+,2.4000,incomplete
+2026-04-28,824447,TB,CLE,Progressive Field,2026,away,110,-130,1,0,0,0,0,0,0,8,"8 mph, L To R",MODERATE,2.4250,,R,7.50,<+120,1.1000,incomplete
+2026-04-28,824526,COL,CIN,Great American Ball Park,2026,away,172,-205,0,0,0,0,0,0,0,7,"7 mph, Out To LF",HIGH,3.4430,,L,9.00,+150-199,-1.0000,incomplete
+2026-04-28,824610,LAA,CWS,Rate Field,2026,home,116,-136,1,0,0,0,0,0,0,2,"2 mph, Out To RF",HIGH,0.0000,,R,7.50,<+120,1.1600,incomplete
+2026-04-28,824849,HOU,BAL,Oriole Park at Camden Yards,2026,away,116,-134,0,0,0,0,0,0,0,8,"8 mph, Out To LF",MODERATE,4.6100,,R,9.00,<+120,-1.0000,incomplete
+2026-04-28,824931,DET,ATL,Truist Park,2026,away,104,-122,0,0,0,0,0,0,0,6,"6 mph, In From RF",MODERATE,1.4966,,R,9.00,<+120,-1.0000,incomplete
+2026-04-28,825017,KC,ATH,Sutter Health Park,2026,home,102,-120,0,0,0,0,0,0,0,3,"3 mph, In From LF",HIGH,5.7114,,L,9.50,<+120,-1.0000,incomplete
+2026-04-29,822821,BOS,TOR,Rogers Centre,2026,away,110,-130,0,0,0,0,0,0,0,0,"0 mph, None",LOW,11.6657,,R,8.50,<+120,-1.0000,incomplete
+2026-04-29,822907,NYY,TEX,Globe Life Field,2026,home,-102,-116,1,0,0,0,0,0,0,0,"0 mph, None",LOW,,,,8.50,<+120,0.9804,incomplete
+2026-04-29,823312,CHC,SD,Petco Park,2026,away,-104,-112,1,0,0,0,0,0,0,13,"13 mph, L To R",MODERATE,4.7000,,R,9.00,<+120,0.9615,incomplete
+2026-04-29,823392,STL,PIT,PNC Park,2026,away,120,-142,1,0,0,0,0,0,0,7,"7 mph, Out To CF",MODERATE,5.1675,,R,8.50,+120-149,1.2000,incomplete
+2026-04-29,823633,WSH,NYM,Citi Field,2026,away,138,-164,1,0,0,0,0,0,0,8,"8 mph, Out To LF",MODERATE,3.0545,,,7.50,+120-149,1.3800,incomplete
+2026-04-29,823717,SEA,MIN,Target Field,2026,home,108,-126,0,0,0,0,0,0,0,12,"12 mph, R To L",HIGH,2.7931,,R,8.00,<+120,-1.0000,incomplete
+2026-04-29,823796,AZ,MIL,American Family Field,2026,away,102,-120,1,0,0,0,0,0,0,0,"0 mph, None",LOW,4.8200,,L,8.50,<+120,1.0200,incomplete
+2026-04-29,823958,MIA,LAD,Dodger Stadium,2026,away,184,-220,1,0,0,0,0,0,0,2,"2 mph, Calm",MODERATE,5.0400,,R,8.50,+150-199,1.8400,incomplete
+2026-04-29,824445,TB,CLE,Progressive Field,2026,away,-102,-116,0,0,0,0,0,0,0,11,"11 mph, In From CF",MODERATE,3.4782,,R,6.50,<+120,-1.0000,incomplete
+2026-04-29,824525,COL,CIN,Great American Ball Park,2026,away,126,-148,1,1,0,0,0,1,1,11,"11 mph, Out To CF",HIGH,4.6404,,R,9.50,+120-149,1.2600,incomplete
+2026-04-29,824608,LAA,CWS,Rate Field,2026,home,102,-120,1,1,0,0,0,1,1,12,"12 mph, Out To RF",HIGH,6.5619,,L,8.50,<+120,1.0200,incomplete
+2026-04-29,824930,DET,ATL,Truist Park,2026,home,122,-144,1,0,0,0,0,0,0,9,"9 mph, Out To LF",MODERATE,2.8414,,L,8.00,+120-149,1.2200,incomplete
+2026-04-29,825015,KC,ATH,Sutter Health Park,2026,away,102,-120,0,0,0,0,0,0,0,5,"5 mph, R To L",HIGH,4.8950,,R,10.00,<+120,-1.0000,incomplete
+2026-04-30,823391,STL,PIT,PNC Park,2026,away,184,-220,1,1,0,0,0,1,0,11,"11 mph, Out To CF",MODERATE,4.7200,,R,7.50,+150-199,1.8400,incomplete
+2026-04-30,823471,SF,PHI,Citizens Bank Park,2026,away,116,-136,0,0,0,0,0,0,0,9,"9 mph, L To R",HIGH,9.8620,,R,7.00,<+120,-1.0000,incomplete
+2026-04-30,823472,SF,PHI,Citizens Bank Park,2026,away,120,-142,0,1,0,0,1,0,0,10,"10 mph, In From LF",HIGH,4.4628,,R,8.50,+120-149,-1.0000,incomplete
+2026-04-30,823634,WSH,NYM,Citi Field,2026,away,190,-230,1,0,0,0,0,0,0,4,"4 mph, Out To RF",MODERATE,6.7825,,R,7.50,+150-199,1.9000,incomplete
+2026-04-30,823714,TOR,MIN,Target Field,2026,home,116,-136,1,0,0,0,0,0,0,11,"11 mph, R To L",HIGH,2.8800,,R,8.00,<+120,1.1600,incomplete
+2026-04-30,823795,AZ,MIL,American Family Field,2026,away,106,-124,0,0,0,0,0,0,0,0,"0 mph, None",LOW,2.0057,,R,7.50,<+120,-1.0000,incomplete
+2026-04-30,824524,COL,CIN,Great American Ball Park,2026,away,146,-174,0,0,0,0,0,0,0,8,"8 mph, Out To RF",HIGH,8.3111,,R,9.50,+120-149,-1.0000,incomplete
+2026-04-30,824848,HOU,BAL,Oriole Park at Camden Yards,2026,away,108,-126,0,0,0,0,0,0,0,13,"13 mph, L To R",MODERATE,3.2000,,R,9.50,<+120,-1.0000,incomplete
+2026-04-30,824850,HOU,BAL,Oriole Park at Camden Yards,2026,away,106,-124,1,0,0,0,0,0,0,14,"14 mph, Out To RF",MODERATE,6.6414,,,9.00,<+120,1.0600,incomplete
+2026-04-30,824929,DET,ATL,Truist Park,2026,away,-108,-108,1,0,0,0,0,0,0,9,"9 mph, R To L",MODERATE,2.1417,,L,8.50,<+120,0.9259,incomplete
+2026-04-30,825016,KC,ATH,Sutter Health Park,2026,away,108,-126,0,0,0,0,0,0,0,2,"2 mph, Out To RF",HIGH,6.7343,,L,9.50,<+120,-1.0000,incomplete
