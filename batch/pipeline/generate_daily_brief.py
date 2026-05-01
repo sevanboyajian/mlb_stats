@@ -6,6 +6,9 @@ Reads from mlb_stats.db and outputs the formatted betting brief.
 
 CHANGE LOG (latest first)
 ──────────────────────────
+2026-05-01  Shadow Filter B paper track: midsummer Jul/Aug NO SIGNAL games with dog ML >= +150,
+            tracked from ``2026-07-01`` in ``shadow_filter_b_watch``. Primary/closing briefs show
+            a ``[Shadow B]`` inline tag (not a ranked pick). Outcomes backfilled when games Final.
 2026-04-22  Session windows: removed clock-derived ``closing`` (18:45–20:15 → ``primary``); run
             closing only with ``--session closing``. Word ``build_docx_from_text`` bolds Signal stack
             / Core / Support / Minor lines under the pick card.
@@ -1243,6 +1246,204 @@ def ensure_signal_state(conn: sqlite3.Connection) -> None:
         )
     """)
     conn.commit()
+
+
+# --- Shadow Filter B (backtest midsummer sleeve; paper track only) ─────────────
+SHADOW_FILTER_B_TRACK_START = datetime.date(2026, 7, 1)
+SHADOW_FILTER_B_MONTHS = frozenset({7, 8})
+SHADOW_FILTER_B_MIN_DOG_ML = 150
+
+
+def _shadow_filter_b_calendar_date(game: dict, slate_date_fallback: str) -> str:
+    raw = game.get("game_date_et") or slate_date_fallback
+    s = (raw if raw is not None else "").strip()
+    return (s[:10] if len(s) >= 10 else (slate_date_fallback or "")[:10])
+
+
+def shadow_filter_b_calendar_qualifies(cal_date_iso: str) -> bool:
+    try:
+        d = datetime.datetime.strptime(cal_date_iso[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return False
+    if d < SHADOW_FILTER_B_TRACK_START:
+        return False
+    return d.month in SHADOW_FILTER_B_MONTHS
+
+
+def shadow_filter_b_dog_moneyline(
+    game: dict,
+) -> tuple[str, str, int, int] | None:
+    """Dog side = lower implied prob; returns (dog_side, dog_abbr, dog_ml, fav_ml)."""
+    try:
+        from batch.pipeline.edge_utils import american_to_implied_prob
+
+        hm = game.get("home_ml")
+        am = game.get("away_ml")
+        if hm is None or am is None:
+            return None
+        hml, aml = int(hm), int(am)
+        hi = american_to_implied_prob(hml)
+        ai = american_to_implied_prob(aml)
+        if hi is None or ai is None:
+            return None
+        ha = str(game.get("home_abbr") or "HOME").strip()
+        aa = str(game.get("away_abbr") or "AWAY").strip()
+        if float(hi) < float(ai):
+            return ("home", ha, hml, aml)
+        return ("away", aa, aml, hml)
+    except Exception:
+        return None
+
+
+def ensure_shadow_filter_b_watch(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS shadow_filter_b_watch (
+            id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+            game_date            TEXT NOT NULL,
+            game_pk              INTEGER NOT NULL,
+            away_abbr            TEXT,
+            home_abbr            TEXT,
+            dog_side             TEXT NOT NULL,
+            dog_ml               INTEGER NOT NULL,
+            fav_ml               INTEGER,
+            total_line           REAL,
+            first_session        TEXT,
+            first_recorded_at    TEXT NOT NULL,
+            home_score           INTEGER,
+            away_score           INTEGER,
+            dog_won              INTEGER,
+            result_graded_at     TEXT,
+            UNIQUE (game_pk)
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_shadow_filter_b_watch_date "
+        "ON shadow_filter_b_watch (game_date)"
+    )
+    conn.commit()
+
+
+def update_shadow_filter_b_outcomes(conn: sqlite3.Connection) -> int:
+    """Fill dog_won when games are Final. Returns count of rows updated."""
+    ensure_shadow_filter_b_watch(conn)
+    rows = conn.execute(
+        """
+        SELECT w.id, w.dog_side, g.home_score, g.away_score
+        FROM shadow_filter_b_watch w
+        JOIN games g ON g.game_pk = w.game_pk
+        WHERE w.dog_won IS NULL
+          AND g.status = 'Final'
+          AND g.home_score IS NOT NULL
+          AND g.away_score IS NOT NULL
+        """
+    ).fetchall()
+    n = 0
+    graded = _now_et().strftime("%Y-%m-%d %H:%M:%S ET")
+    for rid, dog_side, hs, aws in rows:
+        hi, ai = int(hs), int(aws)
+        if dog_side == "home":
+            won = 1 if hi > ai else 0
+        elif dog_side == "away":
+            won = 1 if ai > hi else 0
+        else:
+            continue
+        conn.execute(
+            """
+            UPDATE shadow_filter_b_watch SET
+              home_score = ?,
+              away_score = ?,
+              dog_won = ?,
+              result_graded_at = ?
+            WHERE id = ?
+            """,
+            (hi, ai, won, graded, rid),
+        )
+        n += 1
+    if n:
+        conn.commit()
+    return n
+
+
+def log_shadow_filter_b_candidate(
+    conn: sqlite3.Connection,
+    *,
+    slate_date: str,
+    session: str,
+    game: dict,
+) -> None:
+    """Persist first-seen snapshot when calendar + dog rules pass (caller = NO SIGNAL context)."""
+    if conn is None or not PERSIST_WRITES:
+        return
+    ensure_shadow_filter_b_watch(conn)
+
+    eff = _shadow_filter_b_calendar_date(game, slate_date)
+    if not shadow_filter_b_calendar_qualifies(eff):
+        return
+    tup = shadow_filter_b_dog_moneyline(game)
+    if tup is None:
+        return
+    dog_side, _dog_abbr, dog_ml, fav_ml = tup
+    if dog_ml < SHADOW_FILTER_B_MIN_DOG_ML:
+        return
+
+    gpk_raw = game.get("game_pk")
+    if gpk_raw is None:
+        return
+    gpk = int(gpk_raw)
+    aa = str(game.get("away_abbr") or "")
+    ha = str(game.get("home_abbr") or "")
+    tl = game.get("total_line")
+    try:
+        tl_f = float(tl) if tl is not None else None
+    except (TypeError, ValueError):
+        tl_f = None
+    stamp = _now_et().strftime("%Y-%m-%d %H:%M:%S ET")
+    sess = (session or "unknown").strip() or "unknown"
+
+    conn.execute(
+        """
+        INSERT INTO shadow_filter_b_watch (
+            game_date, game_pk, away_abbr, home_abbr,
+            dog_side, dog_ml, fav_ml, total_line,
+            first_session, first_recorded_at
+        ) VALUES (?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(game_pk) DO NOTHING
+        """,
+        (
+            eff,
+            gpk,
+            aa or None,
+            ha or None,
+            dog_side,
+            dog_ml,
+            fav_ml,
+            tl_f,
+            sess,
+            stamp,
+        ),
+    )
+    conn.commit()
+
+
+def shadow_filter_b_brief_notice_line(game: dict, slate_date: str) -> str:
+    """Inline brief line for qualifying NO SIGNAL games (safe for --dry-run)."""
+    eff = _shadow_filter_b_calendar_date(game, slate_date)
+    if not shadow_filter_b_calendar_qualifies(eff):
+        return ""
+    tup = shadow_filter_b_dog_moneyline(game)
+    if tup is None:
+        return ""
+    _side, dog_abbr, dog_ml, _fml = tup
+    if dog_ml < SHADOW_FILTER_B_MIN_DOG_ML:
+        return ""
+    o = fmt_odds(dog_ml)
+    return (
+        f"    [Shadow B] PAPER TRACK ONLY: dog {dog_abbr} ML {o} on NO SIGNAL slate "
+        f"(Jul-Aug study from {SHADOW_FILTER_B_TRACK_START.isoformat()}; Sep review). "
+        "Not a ranked pick."
+    )
 
 
 def ensure_bet_ledger(conn: sqlite3.Connection) -> None:
@@ -5314,6 +5515,14 @@ def build_primary_brief(games, streaks, starters, game_date,
         if tracker_block:
             lines.append(tracker_block)
 
+    # Shadow Filter B paper track: refresh outcomes once (live runs only).
+    if conn is not None and PERSIST_WRITES:
+        try:
+            ensure_shadow_filter_b_watch(conn)
+            update_shadow_filter_b_outcomes(conn)
+        except Exception:
+            pass
+
     # ── Top Pick ─────────────────────────────────────────────────────────
     lines.append(section("🔺  TOP PICK  —  Highest Probability Signal"))
     if not all_picks:
@@ -5489,10 +5698,33 @@ def build_primary_brief(games, streaks, starters, game_date,
     # ── No-signal slate ──────────────────────────────────────────────────
     if no_signal:
         lines.append(section(f"—  NO SIGNAL  ({len(no_signal)} games — market efficient or insufficient data)"))
+        sess_key = session or session_label or "primary"
+        sb_count = sum(
+            1
+            for e in no_signal
+            if shadow_filter_b_brief_notice_line(e["game"], game_date)
+        )
+        if sb_count:
+            lines.append(
+                color_text(
+                    "  Shadow Filter B (paper track only): "
+                    f"{sb_count} game(s) flagged below — midsummer sleeve "
+                    f"(Jul/Aug game dates ≥ {SHADOW_FILTER_B_TRACK_START.isoformat()}, "
+                    f"dog ML ≥ +{SHADOW_FILTER_B_MIN_DOG_ML}; Sep review). Not ranked picks.",
+                    "dim",
+                )
+            )
+            lines.append("")
         for entry in no_signal:
             g = entry["game"]
             lines.append(f"  {matchup_line(g)}  |  {weather_line(g)}")
             lines.append(f"    {odds_summary_line(g)}")
+            log_shadow_filter_b_candidate(
+                conn, slate_date=game_date, session=str(sess_key), game=g,
+            )
+            sb_line = shadow_filter_b_brief_notice_line(g, game_date)
+            if sb_line:
+                lines.append(sb_line)
             for wma_line in _wma_context_lines(g, entry["sigs"]):
                 lines.append(wma_line)
             if entry["sigs"]["data_flags"]:
@@ -5534,6 +5766,13 @@ def build_closing_brief(games, streaks, starters, movement, game_date,
     # For persistence (does not affect output)
     all_picks_entries = []
 
+    if conn is not None and PERSIST_WRITES:
+        try:
+            ensure_shadow_filter_b_watch(conn)
+            update_shadow_filter_b_outcomes(conn)
+        except Exception:
+            pass
+
     for game in games:
         if _game_started_or_in_progress_for_closing(game, now):
             continue
@@ -5565,6 +5804,15 @@ def build_closing_brief(games, streaks, starters, movement, game_date,
             lines.append(
                 "  — NO SIGNAL at these lines (best aggregated score < 5; no published bet card)."
             )
+            log_shadow_filter_b_candidate(
+                conn,
+                slate_date=game_date,
+                session=str(session or "closing"),
+                game=g,
+            )
+            sb_line = shadow_filter_b_brief_notice_line(g, game_date)
+            if sb_line:
+                lines.append(sb_line)
 
         # Persistable classifications (no change to signal logic)
         entry = {

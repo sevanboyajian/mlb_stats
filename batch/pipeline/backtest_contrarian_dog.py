@@ -22,6 +22,10 @@ POINT-IN-TIME DATA
   keyed by ``(game_pk, …)`` and are built as **pre-game** metrics for that game
   (see ``build_team_wma.py`` / ``build_pitcher_wma.py``). Joining them is the
   no-lookahead analogue of restricting to starts before ``game_date``.
+  If ``rolling_ops_wma`` was never filled for a season (common for historical
+  years), the backtest falls back to ``team_rolling_stats.rolling_ops`` so rows
+  are not falsely marked incomplete; rerun ``python -m batch.pipeline.build_team_wma
+  --seasons YYYY`` to populate the WMA column for parity with the live brief scorer.
 
 Dependencies: ``games``, ``venues``, ``game_odds``, ``game_probable_pitchers``,
 ``players``, ``team_rolling_stats`` (rolling_ops_wma), ``pitcher_rolling_stats``.
@@ -41,6 +45,18 @@ Usage (from repo root):
 
   Phase 2 conditional filters (A-D) append automatically when ``--seasons`` includes
   2024 and/or 2025; omitted when only other years (e.g. 2026-only).
+
+Live operations — FILTER B AS SHADOW SIGNAL (production)
+──────────────────────────────────────────────────────────
+Filter B from this study (proxy **NO SIGNAL** pool, midsummer calendar **July–August** only,
+backing the **moneyline underdog at ≥ +150**) is treated as **research / shadow-only** —
+**not** a ranked model pick.
+
+From **2026-07-01** forward, qualifying games meeting the production brief gates are **paper-tracked**
+in SQLite table ``shadow_filter_b_watch`` (first session per ``game_pk`` wins; wins/losses filled when
+``games.status = 'Final'``). Primary and closing ASCII briefs (and derived Word exports) prepend a single
+inline ``[Shadow B]`` callout next to flagged NO SIGNAL games. Plan **September** review versus this ledger.
+See ``docs/Generate_Daily_Brief_Guide_2026-04.md`` (shadow section) for detail.
 """
 
 from __future__ import annotations
@@ -213,7 +229,8 @@ def fetch_games(con, seasons: tuple[int, ...], months: frozenset[int]) -> list[P
             g.away_score,
             g.wind_mph,
             g.wind_direction,
-            trs.rolling_ops_wma AS home_ops_wma,
+            trs.rolling_ops_wma AS home_ops_wma_exact,
+            trs.rolling_ops     AS home_ops_roll_eq,
             trs.games_in_window AS home_trs_games,
             prs.era_wma         AS away_era_wma,
             prs.starts_in_window AS away_starts_win,
@@ -248,7 +265,17 @@ def fetch_games(con, seasons: tuple[int, ...], months: frozenset[int]) -> list[P
     for r in rows:
         notes: list[str] = []
 
-        hops = r[idx["home_ops_wma"]]
+        hops_wm = r[idx["home_ops_wma_exact"]]
+        hops_eq = r[idx["home_ops_roll_eq"]]
+        hops: float | None
+        if hops_wm is not None:
+            hops = float(hops_wm)
+        elif hops_eq is not None:
+            hops = float(hops_eq)
+            notes.append("home_team_ops_equal_weight_fallback")
+        else:
+            hops = None
+
         hgames = r[idx["home_trs_games"]]
         aera = r[idx["away_era_wma"]]
         ast = r[idx["away_starts_win"]]
@@ -256,7 +283,7 @@ def fetch_games(con, seasons: tuple[int, ...], months: frozenset[int]) -> list[P
         dq = "complete"
         if hops is None or hgames is None or int(hgames or 0) < 2:
             dq = "incomplete"
-            notes.append("home_ops_wma_missing")
+            notes.append("home_team_ops_missing")
         if aera is None or ast is None or int(ast or 0) < 2:
             dq = "incomplete"
             notes.append("away_pitcher_wma_missing")
@@ -765,15 +792,27 @@ def main() -> None:
     lines.append("-" * 40)
     dq_enriched = sum(1 for g in enriched if g.data_quality == "complete")
     lines.append(
-        f"Full WMA join (home OPS + away SP, pre-game): {dq_enriched:>5d} / {len(enriched)} with odds"
+        f"OPS+pitcher gates met (OPS WMA OR rolling OPS + away ERA WMA): "
+        f"{dq_enriched:>5d} / {len(enriched)} with odds"
     )
     lines.append(
-        f"Full WMA join (schedule fetch):                 {dq_complete_games:>5d} / {len(games)}"
+        f"Same gates on schedule fetch (pre-odds dropped): "
+        f"{dq_complete_games:>5d} / {len(games)}"
     )
     incom = len(games) - dq_complete_games
     lines.append(f"Schedule rows missing home/SP WMA gate:         {incom:>5d}")
     lines.append("")
     lines.append("* WMA keyed by game_pk reflects pre-game state for that slate game.")
+    ops_fb = sum(
+        1
+        for gg in enriched
+        if "home_team_ops_equal_weight_fallback" in gg.completeness_notes
+    )
+    if ops_fb:
+        lines.append(
+            f"* Home OPS: used equal-weight rolling_ops where rolling_ops_wma was NULL "
+            f"({ops_fb} enriched rows). Prefer build_team_wma for scorer parity."
+        )
 
     def section_pairs(title: str, prs: list[tuple[PackedGame, DogView]]) -> None:
         lines.append("")
@@ -965,13 +1004,19 @@ def main() -> None:
             denom = len(e24)
             rate = 100.0 * c24 / denom if denom else 0.0
             lines.append(
-                f"2024 WMA join rate (full home OPS + away SP, enriched w/ odds): "
+                f"2024 OPS+pitcher completeness (enriched w/ odds, data_quality=complete): "
                 f"{rate:.1f}% ({c24}/{denom})"
             )
-            if rate < 100.0:
+            if rate < 50.0:
                 lines.append(
-                    "[!] 2024 WMA join rate below full coverage -- signal proxy incomplete; "
-                    "2024 Phase 2 rows directional only."
+                    "[!] 2024 home+away WMA join critically low -- check DB (team OPS WMA / "
+                    "pitcher rows / probable starters)."
+                )
+            elif rate < 100.0:
+                gap = denom - c24
+                lines.append(
+                    f"Note: {gap:d} enriched 2024 row(s) still missing full home OPS chain or "
+                    f"pitcher WMA (probable-starter/IP gaps). Expect modest proxy noise."
                 )
 
         def _p2_n_by_season(pairs: list[tuple[PackedGame, DogView]]) -> dict[int, int]:

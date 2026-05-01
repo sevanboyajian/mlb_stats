@@ -26,7 +26,8 @@
 --    3. Stats         : player_game_stats, pitcher_rolling_stats, play_by_play, standings, team_rolling_stats
 --    4. Odds          : game_odds, game_odds_f5, player_props, line_movement
 --    5. Backtesting   : model_predictions, backtest_results
---    6. Operations    : ingest_log, odds_ingest_log, signal_state, bet_ledger,
+--    6. Operations    : ingest_log, odds_ingest_log, signal_state,
+--                      shadow_filter_b_watch, bet_ledger,
 --                       brief_log, daily_pnl, brief_picks
 --    7. Pipeline      : pipeline_jobs, pipeline_job_runs, runner_lock
 -- ============================================================
@@ -838,6 +839,34 @@ CREATE TABLE IF NOT EXISTS signal_state (
     session         TEXT,     -- morning, early, primary, etc.
     recorded_at     TEXT
 );
+
+
+-- ------------------------------------------------------------
+-- shadow_filter_b_watch
+-- Paper-track log: NO SIGNAL slate + MLB dog +150+ (Jul/Aug study from 2026-07-01).
+-- Not a ranked model pick rows appear in Primary/Closing briefs with [Shadow B] tag.
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS shadow_filter_b_watch (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_date            TEXT    NOT NULL,   -- calendar date (YYYY-MM-DD) for the matchup
+    game_pk              INTEGER NOT NULL,
+    away_abbr            TEXT,
+    home_abbr            TEXT,
+    dog_side             TEXT    NOT NULL,   -- 'home' | 'away'
+    dog_ml               INTEGER NOT NULL,
+    fav_ml               INTEGER,
+    total_line           REAL,
+    first_session        TEXT,
+    first_recorded_at    TEXT    NOT NULL,
+    home_score           INTEGER,
+    away_score           INTEGER,
+    dog_won              INTEGER,
+    result_graded_at     TEXT,
+    UNIQUE (game_pk)
+);
+
+CREATE INDEX IF NOT EXISTS idx_shadow_filter_b_watch_date ON shadow_filter_b_watch (game_date);
+
 
 -- ------------------------------------------------------------
 -- bet_ledger

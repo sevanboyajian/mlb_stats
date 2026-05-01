@@ -125,6 +125,30 @@ The script sets **UTF-8** on stdout/stderr when possible so box-drawing characte
 
 ---
 
+## Shadow Filter B paper track (`shadow_filter_b_watch`)
+
+Contrarian dog backtest **Filter B** (midsummer **July–August** only, proxy NO SIGNAL universe, ML **dog ≥ +150**) is modeled in `batch/pipeline/backtest_contrarian_dog.py`. In production it is explicitly **shadow / research-only** — not a ranked signal.
+
+From **2026-07-01** through August, when the brief classifies a game as **NO SIGNAL** and the matchup qualifies (calendar + ML underdog per implied probability at least **+150**), the next primary or closing brief run (without `--dry-run`) **inserts one row per `game_pk`** into **`shadow_filter_b_watch`** (`ON CONFLICT DO NOTHING`; first qualifying session persists). **`dog_win`** outcomes are filled when the game row is **`Final`** in **`games`**.
+
+**Brief indicator:** flagged games carry an ASCII line **`[Shadow B] PAPER TRACK ONLY`** plus the dog side and ML (dim summary line counts how many flagged games appear that day).
+
+**September review (example SQL):**
+
+```sql
+SELECT game_date,
+       COUNT(*) AS n,
+       ROUND(100.0 * SUM(COALESCE(dog_won, 0)) / NULLIF(COUNT(*), 0), 2) AS dog_win_pct,
+       ROUND(AVG(CASE WHEN dog_won = 1 THEN CAST(dog_ml AS REAL)/100.0 ELSE -1.0 END), 4) AS flat_units_per_play
+FROM shadow_filter_b_watch
+WHERE game_date >= '2026-07-01' AND substr(game_date, 6, 2) IN ('07', '08')
+GROUP BY game_date ORDER BY game_date;
+```
+
+Morning (`early_peek`) briefs skip signal evaluation — there is **no** shadow logging from that session unless that changes later.
+
+---
+
 ## Related documents
 
 - `docs/Pipeline_Operations_Guide_2026-04.md` — full pipeline
