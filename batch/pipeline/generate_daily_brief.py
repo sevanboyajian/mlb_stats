@@ -6,6 +6,12 @@ Reads from mlb_stats.db and outputs the formatted betting brief.
 
 CHANGE LOG (latest first)
 ──────────────────────────
+2026-05-02  ``main()`` no longer re-calls ``evaluate_signals`` after ``build_primary_brief``
+            / ``build_closing_brief`` solely for ``brief_log`` / ``save_brief_picks`` —
+            reuse ``evaluated_entries`` (one ``score_game`` pass per slate game). Closing
+            ``picks_count`` matches rows evaluated inside ``build_closing_brief``. Action
+            briefs pass the real CLI ``session`` into ``evaluate_signals`` (was hardcoded
+            ``"primary"`` for early/afternoon/late).
 2026-05-04  ``brief_picks.model_version``: auto ``v2`` for slate dates >= ``2026-04-28``,
             ``legacy`` before (``MODEL_V2_START_DATE`` next to ``EDGE_MIN`` / ``EDGE_CLEAR`` imports).
             ``ON CONFLICT`` no longer overwrites ``model_version`` (first insert wins).
@@ -5413,7 +5419,7 @@ def build_primary_brief(games, streaks, starters, game_date,
                         session_label="PRIMARY", s6_fires=None,
                         conn=None, session=None, now: datetime.datetime | None = None,
                         verbose: bool = False,
-                        debug_wind: bool = False):
+                        debug_wind: bool = False) -> tuple[str, list]:
     if s6_fires is None:
         s6_fires = {}
     _action = {
@@ -5438,10 +5444,11 @@ def build_primary_brief(games, streaks, starters, game_date,
     evaluated_entries: list[dict] = []
     all_picks: list[dict] = []
     no_signal: list[dict] = []
+    sess_key = session or "primary"
 
     for game in games:
         sigs = evaluate_signals(
-            conn, game, streaks, "primary", starters,
+            conn, game, streaks, sess_key, starters,
             verbose=verbose, debug_wind=debug_wind,
         )
         if os.getenv("DEBUG_SCORE_GAME") == "1":
@@ -5771,7 +5778,6 @@ def build_primary_brief(games, streaks, starters, game_date,
     # ── No-signal slate ──────────────────────────────────────────────────
     if no_signal:
         lines.append(section(f"—  NO SIGNAL  ({len(no_signal)} games — market efficient or insufficient data)"))
-        sess_key = session or session_label or "primary"
         sb_count = sum(
             1
             for e in no_signal
@@ -5814,14 +5820,14 @@ def build_primary_brief(games, streaks, starters, game_date,
     )
     lines.append(QUICK_REFERENCE_SIGNAL_TIMING)
     lines.append(CAVEAT)
-    return "\n".join(lines)
+    return "\n".join(lines), evaluated_entries
 
 
 def build_closing_brief(games, streaks, starters, movement, game_date,
                         conn=None, session=None,
                         now: datetime.datetime | None = None,
                         verbose: bool = False,
-                        debug_wind: bool = False):
+                        debug_wind: bool = False) -> tuple[str, int]:
     lines = []
     if now is None:
         now = _now_et()
@@ -5838,6 +5844,7 @@ def build_closing_brief(games, streaks, starters, movement, game_date,
 
     # For persistence (does not affect output)
     all_picks_entries = []
+    closing_picks_logged = 0  # sum of len(picks) per evaluated game — mirrors brief_log semantics
 
     if conn is not None and PERSIST_WRITES:
         try:
@@ -5853,6 +5860,7 @@ def build_closing_brief(games, streaks, starters, movement, game_date,
             conn, game, streaks, "closing", starters,
             verbose=verbose, debug_wind=debug_wind,
         )
+        closing_picks_logged += len(list(sigs.get("picks") or []))
         g    = game
         lines.append(f"\n  {matchup_line(g)}")
         lines.append(f"  {weather_line(g)}")
@@ -5931,8 +5939,7 @@ def build_closing_brief(games, streaks, starters, movement, game_date,
         "  ─────────────────────────────────────────────────────────────────\n"
     )
     lines.append(CAVEAT)
-    return "\n".join(lines)
-
+    return "\n".join(lines), closing_picks_logged
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -7217,6 +7224,9 @@ def main():
                 print(f"\n  [verbose] S6 check failed (non-fatal): {e}")
 
     # ── Generate brief ───────────────────────────────────────────────────
+    evaluated_entries_for_log: list | None = None
+    closing_pick_row_count = 0
+
     if session == "morning":
         brief_text = build_morning_brief(
             games, streaks, starters, today,
@@ -7226,14 +7236,14 @@ def main():
     elif session in ("early", "afternoon", "primary", "late"):
         label = {"early": "EARLY GAMES", "afternoon": "AFTERNOON",
                  "primary": "PRIMARY", "late": "LATE GAMES"}.get(session, "PRIMARY")
-        brief_text = build_primary_brief(
+        brief_text, evaluated_entries_for_log = build_primary_brief(
             games, streaks, starters, today,
             session_label=label, s6_fires=s6_fires,
             conn=conn, session=session, now=now,
             verbose=args.verbose, debug_wind=args.debug_wind,
         )
     else:
-        brief_text = build_closing_brief(
+        brief_text, closing_pick_row_count = build_closing_brief(
             games, streaks, starters, movement, today,
             conn=conn, session=session, now=now,
             verbose=args.verbose, debug_wind=args.debug_wind,
@@ -7283,29 +7293,24 @@ def main():
         # to brief_picks for confirmed prior-report grading.
         pick_entries_for_log = None
         if session in ("primary", "early", "afternoon", "late"):
-            all_sig = []
-            for g in games:
-                sigs = evaluate_signals(
-                    conn, g, streaks, session, starters,
-                    verbose=args.verbose, debug_wind=False,
+            # Reuse evaluate_signals results from build_primary_brief — no second score_game pass.
+            all_sig = [
+                e for e in (evaluated_entries_for_log or [])
+                if list((e.get("sigs") or {}).get("picks") or [])
+            ]
+            try:
+                all_sig.sort(
+                    key=lambda e: min(p["priority"] for p in e["sigs"]["picks"])
                 )
-                if sigs["picks"]:
-                    all_sig.append({"game": g, "sigs": sigs})
-            all_sig.sort(key=lambda e: min(p["priority"]
-                                          for p in e["sigs"]["picks"]))
+            except Exception:
+                pass
             pick_entries_for_log = all_sig
             picks_count = sum(
                 1 for e in all_sig if _scored_pick_stake_units(e) > 0
             )
         else:
-            picks_count = 0
-            for g in games:
-                picks_count += len(
-                    evaluate_signals(
-                        conn, g, streaks, session, starters,
-                        verbose=args.verbose, debug_wind=False,
-                    )["picks"]
-                )
+            pick_entries_for_log = None
+            picks_count = int(closing_pick_row_count)
         log_brief(
             conn,
             today,
