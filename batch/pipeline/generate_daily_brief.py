@@ -6,6 +6,9 @@ Reads from mlb_stats.db and outputs the formatted betting brief.
 
 CHANGE LOG (latest first)
 ──────────────────────────
+2026-05-03  brief_picks: INSERT only when ``ScoredGame.stake_multiplier > 0`` (matches brief NO BET /
+            STAKE 0). Prints ``[SUPPRESSED]`` with gate context when picks render but stake is zero.
+            ``total_line_at_bet`` preserved on ``ON CONFLICT`` (first-fire line for grading).
 2026-05-01  Shadow Filter B paper track: midsummer Jul/Aug NO SIGNAL games with dog ML >= +150,
             tracked from ``2026-07-01`` in ``shadow_filter_b_watch``. Primary/closing briefs show
             a ``[Shadow B]`` inline tag (not a ranked pick). Outcomes backfilled when games Final.
@@ -2853,6 +2856,96 @@ def grade_bet_ledger(conn: sqlite3.Connection, game_date: str | None = None) -> 
     return updated
 
 
+def _brief_pick_suppression_reason(scored: object | None, pick: dict) -> str:
+    """Short diagnostic for stdout when stake=0 despite a rendered pick card."""
+    parts: list[str] = []
+    if scored is None:
+        return "no ScoredGame on entry"
+
+    mkt_u = str(pick.get("market") or "").upper()
+    mk = "ML" if mkt_u == "ML" else ("TOTAL" if mkt_u == "TOTAL" else None)
+    me = getattr(scored, "market_evals", None) or {}
+    if mk and isinstance(me.get(mk), dict):
+        mm = me[mk]
+        ev = mm.get("eval_status")
+        if ev is not None:
+            parts.append(f"market {mk} eval_status={ev}")
+
+    gid = getattr(scored, "eval_status", None)
+    if gid is not None:
+        parts.append(f"aggregate_eval_status={gid}")
+
+    sid = pick.get("signal_id")
+    if sid:
+        blocked = getattr(scored, "signals_blocked", None) or ()
+        for bf in blocked:
+            if getattr(bf, "signal_id", None) != sid:
+                continue
+            eb = str(getattr(bf, "edge_basis", "") or "").replace("\n", " ").strip()
+            if eb:
+                parts.append(f"{sid}: {eb[:180]}")
+            break
+
+    mkt_lb = pick.get("market")
+    bs = pick.get("bet_side")
+    if str(mkt_lb) == "ML" and bs == "away_ml":
+        for bf in getattr(scored, "signals_blocked", None) or ():
+            if getattr(bf, "signal_id", None) != "LHP_FADE":
+                continue
+            eb = str(getattr(bf, "edge_basis", "") or "").replace("\n", " ").strip()
+            if eb:
+                tag = f"LHP_FADE_blocked: {eb[:180]}"
+                if tag not in parts:
+                    parts.append(tag)
+            break
+
+    mkt_snap = getattr(getattr(scored, "game", None), "market", None)
+    try:
+        if mkt_snap is not None and getattr(mkt_snap, "home_impl", None) is not None:
+            hip = float(mkt_snap.home_impl)
+            parts.append(f"home_implied_prob {hip:.3f}")
+    except Exception:
+        pass
+
+    return " | ".join(parts) if parts else "stake_multiplier=0 (see score_game gates)"
+
+
+def _log_suppressed_brief_pick(entry: dict, pick: dict, scored: object | None) -> None:
+    """One line when a pick card rendered but stake is zero (parity with brief NO BET)."""
+    try:
+        g = entry["game"]
+        aa = str(g.get("away_abbr") or "").strip()
+        ha = str(g.get("home_abbr") or "").strip()
+        matchup = f"{aa}@{ha}" if aa or ha else f"pk={g.get('game_pk')}"
+        bet = str(pick.get("bet") or "").strip()
+        sigs = entry.get("sigs") or {}
+        sig_lbl = ", ".join(sigs.get("signals") or []) or str(pick.get("signal_id") or "")
+        agg = int(pick.get("aggregate_score") or sigs.get("best_aggregate_score") or 0)
+        edge_pct = ""
+        try:
+            e = getattr(scored, "edge", None) if scored is not None else None
+            if e is not None:
+                edge_pct = f" edge={float(e) * 100:+.1f}%"
+        except Exception:
+            pass
+        detail = _brief_pick_suppression_reason(scored, pick)
+        msg = (
+            f"[SUPPRESSED] {matchup} {bet} ({sig_lbl}) score={agg}"
+            f"{edge_pct} - gate/context: {detail}"
+        )
+        print(f"  {msg}")
+    except Exception:
+        pass
+
+
+def _scored_pick_stake_units(entry: dict) -> float:
+    sg = (entry.get("sigs") or {}).get("_scored_game")
+    try:
+        return float(getattr(sg, "stake_multiplier", 0.0) or 0.0) if sg is not None else 0.0
+    except Exception:
+        return 0.0
+
+
 def save_brief_picks(
     conn: sqlite3.Connection,
     game_date: str,
@@ -2866,12 +2959,14 @@ def save_brief_picks(
     """Record picks shown in this brief for prior-report grading.
     pick_entries: sorted list of entry dicts from the brief builder.
     Records top pick (rank 1) and additional picks (ranks 2-6).
+    **Only rows with ``ScoredGame.stake_multiplier > 0`` are written** (parity with
+    brief STAKE / NO BET). Suppressed cards log ``[SUPPRESSED]`` to stdout.
+    ``total_line_at_bet`` is set on first INSERT only; later sessions do not overwrite it.
     Also records AVOID flags for research as pick_rank=0 with signal='AVOID'.
     AVOID rows sync into bet_ledger via signal_state + backfill (stake 0).
-    Idempotent — INSERT OR IGNORE on (game_date, session, game_pk, signal).
 
-    Skips insert when the game has already started (vs ``now``) or when the same
-    game_date + game_pk + signal + market was stored in an earlier session.
+    Skips insert when the game has already started (vs ``now``).
+    Dedupes on (game_date, game_pk, market) conflict while preserving bet-time total.
     """
     if now is None:
         now = _now_et()
@@ -2882,13 +2977,23 @@ def save_brief_picks(
     wrote_any = False
 
     if pick_entries:
-        for rank, entry in enumerate(pick_entries[:6], start=1):
+        saved_rank = 0
+        for entry in pick_entries:
+            if saved_rank >= 6:
+                break
             g = entry["game"]
             # Use highest-priority pick for this game
             p = sorted(entry["sigs"]["picks"], key=lambda x: x["priority"])[0]
+            stake_u = _scored_pick_stake_units(entry)
+            sg = entry["sigs"].get("_scored_game")
+            if stake_u <= 0:
+                _log_suppressed_brief_pick(entry, p, sg)
+                continue
             signal = ", ".join(entry["sigs"]["signals"])
             if _game_already_started_for_brief_picks(g, now):
                 continue
+            saved_rank += 1
+            rank = saved_rank
             odds_raw = _parse_odds(p.get("odds", ""))
             total_line_val = None
             total_line_at_bet = None
@@ -2904,16 +3009,15 @@ def save_brief_picks(
                          bet, market, odds, total_line, total_line_at_bet, late_signal, recorded_at, model_version)
                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT(game_date, game_pk, market) DO UPDATE SET
-                        session          = excluded.session,
-                        pick_rank        = excluded.pick_rank,
-                        signal           = excluded.signal,
-                        bet              = excluded.bet,
-                        odds             = excluded.odds,
-                        total_line       = excluded.total_line,
-                        total_line_at_bet= excluded.total_line_at_bet,
-                        late_signal      = excluded.late_signal,
-                        recorded_at      = excluded.recorded_at,
-                        model_version    = excluded.model_version
+                        session       = excluded.session,
+                        pick_rank     = excluded.pick_rank,
+                        signal        = excluded.signal,
+                        bet           = excluded.bet,
+                        odds          = excluded.odds,
+                        total_line    = excluded.total_line,
+                        late_signal   = excluded.late_signal,
+                        recorded_at   = excluded.recorded_at,
+                        model_version = excluded.model_version
                     """,
                     (
                         game_date,
@@ -2954,16 +3058,15 @@ def save_brief_picks(
                          bet, market, odds, total_line, total_line_at_bet, late_signal, recorded_at, model_version)
                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT(game_date, game_pk, market) DO UPDATE SET
-                        session          = excluded.session,
-                        pick_rank        = excluded.pick_rank,
-                        signal           = excluded.signal,
-                        bet              = excluded.bet,
-                        odds             = excluded.odds,
-                        total_line       = excluded.total_line,
-                        total_line_at_bet= excluded.total_line_at_bet,
-                        late_signal      = excluded.late_signal,
-                        recorded_at      = excluded.recorded_at,
-                        model_version    = excluded.model_version
+                        session       = excluded.session,
+                        pick_rank     = excluded.pick_rank,
+                        signal        = excluded.signal,
+                        bet           = excluded.bet,
+                        odds          = excluded.odds,
+                        total_line    = excluded.total_line,
+                        late_signal   = excluded.late_signal,
+                        recorded_at   = excluded.recorded_at,
+                        model_version = excluded.model_version
                     """,
                     (
                         game_date,
@@ -7221,14 +7324,18 @@ def main():
             all_sig.sort(key=lambda e: min(p["priority"]
                                           for p in e["sigs"]["picks"]))
             pick_entries_for_log = all_sig
-        picks_count = 0
-        for g in games:
-            picks_count += len(
-                evaluate_signals(
-                    conn, g, streaks, session, starters,
-                    verbose=args.verbose, debug_wind=False,
-                )["picks"]
+            picks_count = sum(
+                1 for e in all_sig if _scored_pick_stake_units(e) > 0
             )
+        else:
+            picks_count = 0
+            for g in games:
+                picks_count += len(
+                    evaluate_signals(
+                        conn, g, streaks, session, starters,
+                        verbose=args.verbose, debug_wind=False,
+                    )["picks"]
+                )
         log_brief(
             conn,
             today,

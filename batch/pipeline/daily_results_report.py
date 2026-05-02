@@ -132,6 +132,7 @@ def load_completed_games(con: sqlite3.Connection, game_date: str) -> list:
             ml.home_ml,
             ml.away_ml,
             ml.bookmaker    AS ml_bookmaker,
+            -- First-fire total from brief_picks (not overwritten on session upsert); else snapshots.
             COALESCE(
                 bp_tot.total_line_at_bet,
                 bp_tot.total_line,
