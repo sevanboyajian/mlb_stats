@@ -886,6 +886,7 @@ CREATE TABLE IF NOT EXISTS bet_ledger (
     placed_at        TEXT,
     total_line_at_bet REAL,    -- TOTAL market: line at signal time (from bet text)
     late_signal     INTEGER NOT NULL DEFAULT 0,  -- 1 if recorded in last 30m before first pitch
+    model_version   TEXT NOT NULL DEFAULT 'legacy', -- 'legacy' | 'v2' (MODEL_V2_START_DATE in generator)
     result          TEXT,     -- 'win','loss','push'
     pnl_units        REAL
 );

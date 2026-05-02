@@ -6,6 +6,10 @@ Reads from mlb_stats.db and outputs the formatted betting brief.
 
 CHANGE LOG (latest first)
 ──────────────────────────
+2026-05-02  ``bet_ledger.model_version``: new column (`legacy` vs `v2` by ``MODEL_V2_START_DATE``);
+            ``ensure_bet_ledger`` migrates existing DBs and applies idempotent backfill UPDATEs.
+            Prior report season-to-date block shows overall + v2 + legacy subsets (graded staked bets
+            only, same semantics as ``_summarise_bets``).
 2026-05-02  ``main()`` no longer re-calls ``evaluate_signals`` after ``build_primary_brief``
             / ``build_closing_brief`` solely for ``brief_log`` / ``save_brief_picks`` —
             reuse ``evaluated_entries`` (one ``score_game`` pass per slate game). Closing
@@ -1487,6 +1491,7 @@ def ensure_bet_ledger(conn: sqlite3.Connection) -> None:
             placed_at     TEXT,
             total_line_at_bet REAL,
             late_signal   INTEGER DEFAULT 0,
+            model_version TEXT NOT NULL DEFAULT 'legacy',
             result        TEXT,   -- 'win','loss','push'
             pnl_units     REAL
         )
@@ -1509,10 +1514,97 @@ def ensure_bet_ledger(conn: sqlite3.Connection) -> None:
                 conn.execute(
                     "ALTER TABLE bet_ledger ADD COLUMN late_signal INTEGER NOT NULL DEFAULT 0"
                 )
+            if "model_version" not in ledger_cols:
+                try:
+                    conn.execute(
+                        "ALTER TABLE bet_ledger ADD COLUMN model_version TEXT NOT NULL DEFAULT 'legacy'"
+                    )
+                except sqlite3.OperationalError:
+                    try:
+                        conn.execute(
+                            "ALTER TABLE bet_ledger ADD COLUMN model_version TEXT DEFAULT 'legacy'"
+                        )
+                    except sqlite3.OperationalError:
+                        pass
             conn.commit()
     except Exception:
         pass
+    # Backfill / repair tags by slate date (idempotent).
+    try:
+        conn.execute(
+            "UPDATE bet_ledger SET model_version = ? WHERE game_date >= ?",
+            ("v2", MODEL_V2_START_DATE),
+        )
+        conn.execute(
+            """UPDATE bet_ledger SET model_version = 'legacy'
+               WHERE TRIM(COALESCE(game_date, '')) = ''
+                  OR game_date < ?""",
+            (MODEL_V2_START_DATE,),
+        )
+        conn.commit()
+    except Exception:
+        pass
     conn.commit()
+
+
+def bet_ledger_has_model_version(conn: sqlite3.Connection) -> bool:
+    """True when ``bet_ledger`` has been migrated with a ``model_version`` column."""
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(bet_ledger)").fetchall()]
+        return bool(cols) and ("model_version" in cols)
+    except Exception:
+        return False
+
+
+def ledger_season_staked_graded_stats(
+    conn: sqlite3.Connection,
+    season_int: int,
+    through_date: str,
+    *,
+    model_version: str | None = None,
+) -> dict:
+    """
+    Season-to-date ``bet_ledger`` slice for prior-report P&L: excludes ``avoid`` rows and
+    only counts graded staked bets (``win`` / ``loss`` / ``push``), aligned with ``_summarise_bets``.
+    """
+    ver_clause = ""
+    extra_params: tuple = ()
+    if model_version is not None:
+        ver_clause = " AND COALESCE(bl.model_version, 'legacy') = ? "
+        extra_params = (model_version,)
+    sql = f"""
+        SELECT
+            COUNT(*) AS n,
+            SUM(CASE WHEN bl.result = 'win' THEN 1 ELSE 0 END) AS wins,
+            SUM(CASE WHEN bl.result = 'loss' THEN 1 ELSE 0 END) AS losses,
+            SUM(CASE WHEN bl.result = 'push' THEN 1 ELSE 0 END) AS pushes,
+            ROUND(COALESCE(SUM(bl.pnl_units), 0), 2) AS units
+        FROM bet_ledger bl
+        JOIN games g ON g.game_pk = bl.game_pk
+        WHERE g.season = ?
+          AND g.game_type = 'R'
+          AND g.game_date_et <= ?
+          AND lower(trim(coalesce(bl.signal_at_time, ''))) != 'avoid'
+          AND lower(trim(coalesce(bl.result, ''))) IN ('win', 'loss', 'push')
+          {ver_clause}
+    """
+    row = conn.execute(sql, (season_int, through_date) + extra_params).fetchone()
+    if row is None or (row["n"] is None) or int(row["n"] or 0) <= 0:
+        return {"n": 0, "wins": 0, "losses": 0, "pushes": 0, "units": 0.0, "roi": 0.0}
+    n      = int(row["n"])
+    wins   = int(row["wins"] or 0)
+    losses = int(row["losses"] or 0)
+    pushes = int(row["pushes"] or 0)
+    units  = float(row["units"] or 0.0)
+    roi    = (100.0 * units / n) if n else 0.0
+    return {
+        "n": n,
+        "wins": wins,
+        "losses": losses,
+        "pushes": pushes,
+        "units": units,
+        "roi": roi,
+    }
 
 
 def ensure_bet_snapshots(conn: sqlite3.Connection) -> None:
@@ -2104,6 +2196,7 @@ def _insert_bet_ledger_from_latest(
             else 0
         )
         tlb = _ledger_total_line_at_bet(mt, str(r["bet"] or ""))
+        ledger_mv = model_version_for_brief_pick_date(game_date)
 
         # If the staked ledger row already exists, still backfill the snapshot on reruns.
         if stake > 0 and (int(r["game_pk"]), mt) in already_staked:
@@ -2119,8 +2212,8 @@ def _insert_bet_ledger_from_latest(
                 INSERT OR IGNORE INTO bet_ledger
                     (game_date, game_pk, market_type, bet, odds_taken, stake_units,
                      signal_at_time, session, placed_at, total_line_at_bet, late_signal,
-                     result, pnl_units)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                     model_version, result, pnl_units)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     game_date,
@@ -2134,6 +2227,7 @@ def _insert_bet_ledger_from_latest(
                     r["recorded_at"],
                     tlb,
                     late_sig,
+                    ledger_mv,
                     None,
                     None,
                 ),
@@ -5269,28 +5363,57 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
         season_int = int(str(game_date)[:4])
 
     try:
-        srows = conn.execute(
-            """
-            SELECT
-                bl.game_date, bl.game_pk, bl.market_type, bl.bet, bl.odds_taken,
-                bl.stake_units, bl.signal_at_time, bl.session, bl.placed_at,
-                bl.result, bl.pnl_units
-            FROM bet_ledger bl
-            JOIN games g ON g.game_pk = bl.game_pk
-            WHERE g.season = ?
-              AND g.game_type = 'R'
-              AND g.game_date_et <= ?
-            ORDER BY g.game_date_et, bl.placed_at
-            """,
-            (season_int, game_date),
-        ).fetchall()
-        srows = [dict(r) for r in srows]
-        ssummary = _summarise_bets(srows)
-        lines.append(
-            f"\n  Season-to-date ({season_int} through {game_date}): {ssummary['bets']} bet(s)   "
-            f"{ssummary['wins']}W {ssummary['losses']}L {ssummary['pushes']}P   "
-            f"Units: {ssummary['units']:+.2f}u   ROI: {ssummary['roi']:.1f}%"
-        )
+        if bet_ledger_has_model_version(conn):
+            ov = ledger_season_staked_graded_stats(
+                conn, season_int, game_date, model_version=None
+            )
+            v2s = ledger_season_staked_graded_stats(
+                conn, season_int, game_date, model_version="v2"
+            )
+            legs = ledger_season_staked_graded_stats(
+                conn, season_int, game_date, model_version="legacy"
+            )
+
+            def _seg_line(d: dict) -> str:
+                n = int(d["n"])
+                pu = int(d.get("pushes") or 0)
+                return (
+                    f"{n} bet(s)   {int(d['wins'])}W {int(d['losses'])}L {pu}P   "
+                    f"Units: {float(d['units']):+.2f}u   ROI: {float(d['roi']):.1f}%"
+                )
+
+            lines.append(
+                f"\n  Season-to-date ({season_int} through {game_date}): {_seg_line(ov)}"
+            )
+            lines.append(
+                f"  ├─ v2 model ({MODEL_V2_START_DATE}+): {_seg_line(v2s)}"
+            )
+            lines.append(
+                f"  └─ Legacy (before {MODEL_V2_START_DATE}): {_seg_line(legs)}"
+            )
+        else:
+            srows = conn.execute(
+                """
+                SELECT
+                    bl.game_date, bl.game_pk, bl.market_type, bl.bet, bl.odds_taken,
+                    bl.stake_units, bl.signal_at_time, bl.session, bl.placed_at,
+                    bl.result, bl.pnl_units
+                FROM bet_ledger bl
+                JOIN games g ON g.game_pk = bl.game_pk
+                WHERE g.season = ?
+                  AND g.game_type = 'R'
+                  AND g.game_date_et <= ?
+                ORDER BY g.game_date_et, bl.placed_at
+                """,
+                (season_int, game_date),
+            ).fetchall()
+            srows = [dict(r) for r in srows]
+            ssummary = _summarise_bets(srows)
+            lines.append(
+                f"\n  Season-to-date ({season_int} through {game_date}): {ssummary['bets']} bet(s)   "
+                f"{ssummary['wins']}W {ssummary['losses']}L {ssummary['pushes']}P   "
+                f"Units: {ssummary['units']:+.2f}u   ROI: {ssummary['roi']:.1f}%"
+            )
     except Exception:
         pass
 
