@@ -7,7 +7,8 @@ Reads from mlb_stats.db and outputs the formatted betting brief.
 CHANGE LOG (latest first)
 ──────────────────────────
 2026-05-04  ``brief_picks.model_version``: auto ``v2`` for slate dates >= ``2026-04-28``,
-            ``legacy`` before; constant ``MODEL_V2_START_DATE``.
+            ``legacy`` before (``MODEL_V2_START_DATE`` next to ``EDGE_MIN`` / ``EDGE_CLEAR`` imports).
+            ``ON CONFLICT`` no longer overwrites ``model_version`` (first insert wins).
 2026-05-03  brief_picks: INSERT only when ``ScoredGame.stake_multiplier > 0`` (matches brief NO BET /
             STAKE 0). Prints ``[SUPPRESSED]`` with gate context when picks render but stake is zero.
             ``total_line_at_bet`` preserved on ``ON CONFLICT`` (first-fire line for grading).
@@ -82,8 +83,9 @@ CHANGE LOG (latest first)
             to the legacy dict and attaches output_tier / tier_basis / stake_multiplier.
 2026-04-17  Ops: --sync-bet-ledger-only (no brief) + run_pipeline job_type bet_ledger_sync
             for recurring T−30 bet_ledger materialization without re-running briefs.
-2026-04-17  Research: persist AVOID calls into brief_picks (pick_rank=0, signal='AVOID')
-            so they can be tracked/grated later without generating bets.
+2026-04-17  Research: persisted AVOID calls into brief_picks (historical).
+2026-05-01  brief_picks holds staked picks only; AVOID/environment flags live in
+            signal_state (not brief_picks). Legacy OTHER/ENV rows removed from DB.
 2026-04-17  Fix starters column name: players.throws (was throw_hand). Update
             load_starters() SELECT + mapping, and enrich_game_with_starters().
 2026-04-20  Run line analysis complete (OW era 2022-2025).
@@ -230,6 +232,16 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from core.db.connection import connect as db_connect, get_db_path
+from batch.pipeline.edge_utils import EDGE_CLEAR, EDGE_MIN
+
+# brief_picks lineage: v2 model live on this slate date (inclusive). Edge gates live in edge_utils.
+MODEL_V2_START_DATE = "2026-04-28"
+
+
+def model_version_for_brief_pick_date(game_date: str) -> str:
+    """``v2`` if ``game_date >= MODEL_V2_START_DATE`` else ``legacy`` (ISO date string order)."""
+    return "v2" if str(game_date) >= MODEL_V2_START_DATE else "legacy"
+
 
 # ── Optional .env support ────────────────────────────────────────────────────
 try:
@@ -651,14 +663,6 @@ PAPER_STAKE_TOP     =  10.00   # Top pick stake ($)
 PAPER_STAKE_ADD     =   5.00   # Additional picks #2-#6 stake ($)
 PAPER_STAKE_REST    =   0.00   # 7th pick onward — not wagered
 PAPER_LATE_FACTOR   =   0.50   # Half-stake multiplier for late-season H3b (Aug/Sep)
-
-# Prior-report / brief_picks lineage: v2 model went live this slate date (inclusive).
-MODEL_V2_START_DATE = "2026-04-28"
-
-
-def model_version_for_brief_pick_date(game_date: str) -> str:
-    """Label brief_picks rows: ``v2`` from MODEL_V2_START_DATE onward, else ``legacy``."""
-    return "v2" if str(game_date) >= MODEL_V2_START_DATE else "legacy"
 
 # July OVER signal constants — data shows 52.3% OVER rate in July
 # (p=0.0006, n=875) vs 46.1% for all other months. Market consistently
@@ -2970,9 +2974,12 @@ def save_brief_picks(
     Records top pick (rank 1) and additional picks (ranks 2-6).
     **Only rows with ``ScoredGame.stake_multiplier > 0`` are written** (parity with
     brief STAKE / NO BET). Suppressed cards log ``[SUPPRESSED]`` to stdout.
-    ``total_line_at_bet`` is set on first INSERT only; later sessions do not overwrite it.
-    Also records AVOID flags for research as pick_rank=0 with signal='AVOID'.
-    AVOID rows sync into bet_ledger via signal_state + backfill (stake 0).
+    ``total_line_at_bet`` and ``model_version`` are not overwritten on conflict upserts
+    (first insert wins for bet-time total + lineage label).
+    AVOID / environment calls are **not** written here; they go to ``signal_state``
+    via ``save_signal_state`` and bet_ledger backfill.
+
+    ``avoid_entries`` is accepted for call-site compatibility and ignored.
 
     Skips insert when the game has already started (vs ``now``).
     Dedupes on (game_date, game_pk, market) conflict while preserving bet-time total.
@@ -2994,6 +3001,9 @@ def save_brief_picks(
             g = entry["game"]
             # Use highest-priority pick for this game
             p = sorted(entry["sigs"]["picks"], key=lambda x: x["priority"])[0]
+            mkt_u = str(p.get("market") or "").upper().strip()
+            if mkt_u in ("OTHER", "ENV"):
+                continue
             stake_u = _scored_pick_stake_units(entry)
             sg = entry["sigs"].get("_scored_game")
             if stake_u <= 0:
@@ -3019,15 +3029,14 @@ def save_brief_picks(
                          bet, market, odds, total_line, total_line_at_bet, late_signal, recorded_at, model_version)
                     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
                     ON CONFLICT(game_date, game_pk, market) DO UPDATE SET
-                        session       = excluded.session,
-                        pick_rank     = excluded.pick_rank,
-                        signal        = excluded.signal,
-                        bet           = excluded.bet,
-                        odds          = excluded.odds,
-                        total_line    = excluded.total_line,
-                        late_signal   = excluded.late_signal,
-                        recorded_at   = excluded.recorded_at,
-                        model_version = excluded.model_version
+                        session     = excluded.session,
+                        pick_rank   = excluded.pick_rank,
+                        signal      = excluded.signal,
+                        bet         = excluded.bet,
+                        odds        = excluded.odds,
+                        total_line  = excluded.total_line,
+                        late_signal = excluded.late_signal,
+                        recorded_at = excluded.recorded_at
                     """,
                     (
                         game_date,
@@ -3038,55 +3047,6 @@ def save_brief_picks(
                         p["bet"],
                         p["market"],
                         odds_raw,
-                        total_line_val,
-                        total_line_at_bet,
-                        late_sig,
-                        now_et,
-                        mv,
-                    ),
-                )
-                wrote_any = True
-            except Exception:
-                pass
-
-    if avoid_entries:
-        for entry in avoid_entries:
-            g = (entry.get("game") or {})
-            gpk = g.get("game_pk")
-            if gpk is None:
-                continue
-            if _game_already_started_for_brief_picks(g, now):
-                continue
-            market, bet_text, total_line_val = avoid_entry_bet_fields(entry)
-            total_line_at_bet = total_line_val
-            late_sig = _late_signal_for_game_now(g, now)
-            try:
-                conn.execute(
-                    """
-                    INSERT INTO brief_picks
-                        (game_date, session, game_pk, pick_rank, signal,
-                         bet, market, odds, total_line, total_line_at_bet, late_signal, recorded_at, model_version)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-                    ON CONFLICT(game_date, game_pk, market) DO UPDATE SET
-                        session       = excluded.session,
-                        pick_rank     = excluded.pick_rank,
-                        signal        = excluded.signal,
-                        bet           = excluded.bet,
-                        odds          = excluded.odds,
-                        total_line    = excluded.total_line,
-                        late_signal   = excluded.late_signal,
-                        recorded_at   = excluded.recorded_at,
-                        model_version = excluded.model_version
-                    """,
-                    (
-                        game_date,
-                        session,
-                        int(gpk),
-                        0,
-                        "AVOID",
-                        bet_text,
-                        market,
-                        None,
                         total_line_val,
                         total_line_at_bet,
                         late_sig,

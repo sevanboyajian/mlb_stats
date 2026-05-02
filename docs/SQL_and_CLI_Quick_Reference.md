@@ -97,16 +97,16 @@ python batch/ingestion/load_odds.py --compute-movement
 
 Row labels: **`legacy`** before **`2026-04-28`**, **`v2`** from **`2026-04-28`** onward (aligned with **`MODEL_V2_START_DATE`** in **`generate_daily_brief.py`**). Inserts choose version automatically.
 
-**Audit distribution (min/max slate + counts):**
+**Audit distribution (row counts + date span):**
 
 ```sql
 SELECT model_version,
-       MIN(game_date) AS min_date,
-       MAX(game_date) AS max_date,
-       COUNT(*) AS n
+       COUNT(*)       AS rows,
+       MIN(game_date) AS first_date,
+       MAX(game_date) AS last_date
 FROM brief_picks
 GROUP BY model_version
-ORDER BY model_version;
+ORDER BY first_date;
 ```
 
 **One-time backfill (safe to re-run idempotently; does not delete rows):**
