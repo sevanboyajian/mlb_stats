@@ -6,6 +6,8 @@ Reads from mlb_stats.db and outputs the formatted betting brief.
 
 CHANGE LOG (latest first)
 ──────────────────────────
+2026-05-04  ``brief_picks.model_version``: auto ``v2`` for slate dates >= ``2026-04-28``,
+            ``legacy`` before; constant ``MODEL_V2_START_DATE``.
 2026-05-03  brief_picks: INSERT only when ``ScoredGame.stake_multiplier > 0`` (matches brief NO BET /
             STAKE 0). Prints ``[SUPPRESSED]`` with gate context when picks render but stake is zero.
             ``total_line_at_bet`` preserved on ``ON CONFLICT`` (first-fire line for grading).
@@ -649,6 +651,14 @@ PAPER_STAKE_TOP     =  10.00   # Top pick stake ($)
 PAPER_STAKE_ADD     =   5.00   # Additional picks #2-#6 stake ($)
 PAPER_STAKE_REST    =   0.00   # 7th pick onward — not wagered
 PAPER_LATE_FACTOR   =   0.50   # Half-stake multiplier for late-season H3b (Aug/Sep)
+
+# Prior-report / brief_picks lineage: v2 model went live this slate date (inclusive).
+MODEL_V2_START_DATE = "2026-04-28"
+
+
+def model_version_for_brief_pick_date(game_date: str) -> str:
+    """Label brief_picks rows: ``v2`` from MODEL_V2_START_DATE onward, else ``legacy``."""
+    return "v2" if str(game_date) >= MODEL_V2_START_DATE else "legacy"
 
 # July OVER signal constants — data shows 52.3% OVER rate in July
 # (p=0.0006, n=875) vs 46.1% for all other months. Market consistently
@@ -2954,7 +2964,6 @@ def save_brief_picks(
     *,
     avoid_entries: list | None = None,
     now: datetime.datetime | None = None,
-    model_version: str = "legacy",
 ) -> None:
     """Record picks shown in this brief for prior-report grading.
     pick_entries: sorted list of entry dicts from the brief builder.
@@ -2973,6 +2982,7 @@ def save_brief_picks(
     now_et = now.strftime("%Y-%m-%d %H:%M ET")
 
     ensure_brief_picks(conn)
+    mv = model_version_for_brief_pick_date(game_date)
 
     wrote_any = False
 
@@ -3032,7 +3042,7 @@ def save_brief_picks(
                         total_line_at_bet,
                         late_sig,
                         now_et,
-                        model_version,
+                        mv,
                     ),
                 )
                 wrote_any = True
@@ -3081,7 +3091,7 @@ def save_brief_picks(
                         total_line_at_bet,
                         late_sig,
                         now_et,
-                        model_version,
+                        mv,
                     ),
                 )
                 wrote_any = True
