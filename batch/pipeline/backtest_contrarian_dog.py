@@ -46,6 +46,9 @@ Usage (from repo root):
   Phase 2 conditional filters (A-D) append automatically when ``--seasons`` includes
   2024 and/or 2025; omitted when only other years (e.g. 2026-only).
 
+  Phase 3 (Filter B refinement: B1–B6, verdict, pre-specified sharpest intersection)
+  appends only when ``--seasons`` includes **both** 2024 and 2025.
+
 Live operations — FILTER B AS SHADOW SIGNAL (production)
 ──────────────────────────────────────────────────────────
 Filter B from this study (proxy **NO SIGNAL** pool, midsummer calendar **July–August** only,
@@ -631,6 +634,110 @@ def _p2_table_verdict(
     return "FAIL"
 
 
+# Phase 3 — Filter B refinement (requires 2024+2025 both in --seasons)
+PHASE3_BASELINE_PP = 3.0
+PHASE3_SHARP_FLAG_N = 40
+
+
+def _p3_vs_baseline(roi: float, baseline_roi: float) -> str:
+    if roi > baseline_roi + PHASE3_BASELINE_PP:
+        return "CONCENTRATES"
+    if roi < baseline_roi - PHASE3_BASELINE_PP:
+        return "DILUTES"
+    return "NEUTRAL"
+
+
+def _p3_dim_concentrates_yes_no_mixed(va: str, vb: str) -> str:
+    """Labels from _p3_vs_baseline for the two sub-filters in a dimension."""
+    if va == "CONCENTRATES" and vb == "DILUTES":
+        return "MIXED"
+    if vb == "CONCENTRATES" and va == "DILUTES":
+        return "MIXED"
+    if va == "CONCENTRATES" or vb == "CONCENTRATES":
+        return "YES"
+    return "NO"
+
+
+def _p3_combined_line_short(m: dict[str, float | int]) -> str:
+    if m["n"] == 0:
+        return "  Combined:  0 games  --"
+    return f"  Combined: {int(m['n']):3d} games  ROI {m['roi']:+.1f}%"
+
+
+def _p3_append_subfilter(
+    lines_out: list[str],
+    heading: str,
+    pairs: list[tuple[PackedGame, DogView]],
+    baseline_roi: float,
+    *,
+    b6_warning: bool = False,
+) -> dict[str, float | int]:
+    lines_out.append("")
+    lines_out.append(heading)
+    for y in (2024, 2025):
+        sub = [(g, d) for g, d in pairs if g.season == y]
+        lines_out.append(_p2_season_line(str(y), _p2_metrics(sub)))
+    m_all = _p2_metrics(pairs)
+    lines_out.append(_p3_combined_line_short(m_all))
+    vb = _p3_vs_baseline(float(m_all["roi"]), baseline_roi)
+    lines_out.append(
+        f"  vs baseline: {vb}  (>+3% above baseline = concentrates)"
+    )
+    if b6_warning:
+        for y in (2024, 2025):
+            ny = sum(1 for g, _ in pairs if g.season == y)
+            if ny < 20:
+                lines_out.append(f"  [!] B6 small sample (N={ny} in {y}; flag if N<20)")
+    return m_all
+
+
+def _p3_intersection_pairs(
+    fb: list[tuple[PackedGame, DogView]],
+    *,
+    away_win: bool,
+    low_total_win: bool,
+    mid_odds_win: bool,
+) -> list[tuple[PackedGame, DogView]]:
+    """Intersection using winners of dim1 (away vs home), dim2 (B3 vs B4), dim3 (B5 vs B6)."""
+    out: list[tuple[PackedGame, DogView]] = []
+    for g, d in fb:
+        if away_win:
+            if d.dog_side != "away":
+                continue
+        else:
+            if d.dog_side != "home":
+                continue
+        if low_total_win:
+            if g.total_open is None or g.total_open > 8.5:
+                continue
+        else:
+            if g.total_open is None or g.total_open < 9.0:
+                continue
+        if mid_odds_win:
+            if not (150 <= d.dog_ml <= 199):
+                continue
+        else:
+            if d.dog_ml < 200:
+                continue
+        out.append((g, d))
+    return out
+
+
+def _p3_intersection_description(
+    away_win: bool,
+    low_total_win: bool,
+    mid_odds_win: bool,
+) -> str:
+    parts = [
+        "Away dog" if away_win else "Home dog",
+        "opening total <=8.5" if low_total_win else "opening total >=9.0",
+        "dog ML +150-199" if mid_odds_win else "dog ML +200+",
+        "Jul-Aug",
+        "proxy no-signal",
+    ]
+    return " + ".join(parts)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description="Contrarian dog backtest (proxy No Signal v1).")
     p.add_argument("--seasons", nargs="+", type=int, default=[2024, 2025])
@@ -1125,6 +1232,169 @@ def main() -> None:
         )
         for name, n_c, roi_c, v in p2_table:
             lines.append(f"{name:<36} {n_c:>12} {roi_c:>+13.1f}% {v:>8}")
+
+        # --- Phase 3: Filter B refinement (2024 + 2025 both required) ------------
+        if 2024 in seasons and 2025 in seasons:
+            m_fb = _p2_metrics(fb)
+            baseline_roi = float(m_fb["roi"])
+
+            lines.append("")
+            lines.append("PHASE 3 - FILTER B REFINEMENT")
+            lines.append("=" * 30)
+            lines.append("Base Filter B reminder: +150+ dog, Jul-Aug, no-signal proxy")
+            for y in (2024, 2025):
+                sub_fb = [(g, d) for g, d in fb if g.season == y]
+                mm = _p2_metrics(sub_fb)
+                if mm["n"] == 0:
+                    lines.append(f"  {y}:  0 games  --")
+                else:
+                    lines.append(
+                        f"  {y}: {int(mm['n']):3d} games  "
+                        f"{int(mm['w']):2d}W-{int(mm['l']):2d}L  "
+                        f"{mm['roi']:+.1f}% ROI"
+                    )
+            lines.append(
+                f"  Combined: {int(m_fb['n']):3d} games  "
+                f"{m_fb['roi']:+.1f}% ROI  [BASELINE]"
+            )
+
+            b1 = [(g, d) for g, d in fb if d.dog_side == "away"]
+            b2 = [(g, d) for g, d in fb if d.dog_side == "home"]
+            b3 = [
+                (g, d)
+                for g, d in fb
+                if g.total_open is not None and g.total_open <= 8.5
+            ]
+            b4 = [
+                (g, d)
+                for g, d in fb
+                if g.total_open is not None and g.total_open >= 9.0
+            ]
+            b5 = [(g, d) for g, d in fb if 150 <= d.dog_ml <= 199]
+            b6 = [(g, d) for g, d in fb if d.dog_ml >= 200]
+
+            m_b1 = _p3_append_subfilter(
+                lines,
+                "B1 - Away dog only (Jul-Aug, +150+)",
+                b1,
+                baseline_roi,
+            )
+            m_b2 = _p3_append_subfilter(
+                lines,
+                "B2 - Home dog only (Jul-Aug, +150+)",
+                b2,
+                baseline_roi,
+            )
+            m_b3 = _p3_append_subfilter(
+                lines,
+                "B3 - Total <= 8.5 (Jul-Aug, +150+)",
+                b3,
+                baseline_roi,
+            )
+            m_b4 = _p3_append_subfilter(
+                lines,
+                "B4 - Total >= 9.0 (Jul-Aug, +150+)",
+                b4,
+                baseline_roi,
+            )
+            m_b5 = _p3_append_subfilter(
+                lines,
+                "B5 - Odds +150-199 only (Jul-Aug)",
+                b5,
+                baseline_roi,
+            )
+            m_b6 = _p3_append_subfilter(
+                lines,
+                "B6 - Odds +200+ only (Jul-Aug)",
+                b6,
+                baseline_roi,
+                b6_warning=True,
+            )
+
+            v_b1 = _p3_vs_baseline(float(m_b1["roi"]), baseline_roi)
+            v_b2 = _p3_vs_baseline(float(m_b2["roi"]), baseline_roi)
+            v_b3 = _p3_vs_baseline(float(m_b3["roi"]), baseline_roi)
+            v_b4 = _p3_vs_baseline(float(m_b4["roi"]), baseline_roi)
+            v_b5 = _p3_vs_baseline(float(m_b5["roi"]), baseline_roi)
+            v_b6 = _p3_vs_baseline(float(m_b6["roi"]), baseline_roi)
+
+            best_d1 = "B1" if m_b1["roi"] >= m_b2["roi"] else "B2"
+            best_d2 = "B3" if m_b3["roi"] >= m_b4["roi"] else "B4"
+            best_d3 = "B5" if m_b5["roi"] >= m_b6["roi"] else "B6"
+
+            lines.append("")
+            lines.append("PHASE 3 VERDICT")
+            lines.append("-" * 15)
+            lines.append(
+                f"{'Dimension':<16} {'Concentrates edge?':<20} "
+                f"{'Best sub-filter':<18} {'Combined ROI':>12}"
+            )
+            d1_roi = float(m_b1["roi"]) if best_d1 == "B1" else float(m_b2["roi"])
+            d2_roi = float(m_b3["roi"]) if best_d2 == "B3" else float(m_b4["roi"])
+            d3_roi = float(m_b5["roi"]) if best_d3 == "B5" else float(m_b6["roi"])
+            lines.append(
+                f"{'Away vs Home':<16} {_p3_dim_concentrates_yes_no_mixed(v_b1, v_b2):<20} "
+                f"{best_d1:<18} {d1_roi:>+11.1f}%"
+            )
+            lines.append(
+                f"{'Total cap':<16} {_p3_dim_concentrates_yes_no_mixed(v_b3, v_b4):<20} "
+                f"{best_d2:<18} {d2_roi:>+11.1f}%"
+            )
+            lines.append(
+                f"{'Odds band':<16} {_p3_dim_concentrates_yes_no_mixed(v_b5, v_b6):<20} "
+                f"{best_d3:<18} {d3_roi:>+11.1f}%"
+            )
+
+            away_win = m_b1["roi"] >= m_b2["roi"]
+            low_total_win = m_b3["roi"] >= m_b4["roi"]
+            mid_odds_win = m_b5["roi"] >= m_b6["roi"]
+
+            inter = _p3_intersection_pairs(
+                fb,
+                away_win=away_win,
+                low_total_win=low_total_win,
+                mid_odds_win=mid_odds_win,
+            )
+            n24 = sum(1 for g, _ in inter if g.season == 2024)
+            n25 = sum(1 for g, _ in inter if g.season == 2025)
+            m_inter = _p2_metrics(inter)
+            inter_roi = float(m_inter["roi"])
+
+            lines.append("")
+            lines.append("SHARPEST COMBINATION")
+            lines.append("-" * 28)
+            desc = _p3_intersection_description(away_win, low_total_win, mid_odds_win)
+            if n24 < 20 or n25 < 20:
+                lines.append(
+                    "SHARPEST COMBINATION: insufficient sample - "
+                    "no intersection passes N>=20 both seasons"
+                )
+                lines.append(f"  Pre-specified intersection: {desc}")
+                lines.append(
+                    f"  Intersection counts: 2024 N={n24}, 2025 N={n25} "
+                    "(need >=20 each)"
+                )
+            else:
+                lines.append(f"  {desc}")
+                for y in (2024, 2025):
+                    sub_i = [(g, d) for g, d in inter if g.season == y]
+                    mi = _p2_metrics(sub_i)
+                    lines.append(
+                        f"  {y}: {int(mi['n']):3d} games  ROI {mi['roi']:+.1f}%"
+                    )
+                lines.append(_p3_combined_line_short(m_inter))
+                if int(m_inter["n"]) < PHASE3_SHARP_FLAG_N:
+                    lines.append(
+                        f"  [!] If combined N < 40: SMALL SAMPLE - directional only "
+                        f"(N={int(m_inter['n'])})"
+                    )
+                if inter_roi > baseline_roi + PHASE3_BASELINE_PP:
+                    sharp_read = "SHARPENED"
+                elif inter_roi < baseline_roi - PHASE3_BASELINE_PP:
+                    sharp_read = "COLLAPSED"
+                else:
+                    sharp_read = "UNCHANGED"
+                lines.append(f"  Reading: {sharp_read}")
 
     run_validation_2026_sample(con, lines)
 
