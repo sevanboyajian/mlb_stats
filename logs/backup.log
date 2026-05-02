@@ -22,3 +22,5 @@
 2026-04-30T01:48:30Z retention deleted=mlb_backup_20260427.db
 2026-04-30T23:48:06Z OK backup=mlb_backup_20260430.db size_bytes=1450688512
 2026-04-30T23:48:06Z retention deleted=mlb_backup_20260428.db
+2026-05-02T01:46:23Z OK backup=mlb_backup_20260501.db size_bytes=1451786240
+2026-05-02T01:46:23Z retention deleted=mlb_backup_20260429.db

@@ -1,0 +1,52 @@
+[run_pipeline] force-unlock: runner_lock not present (nothing to clear)
+[run_pipeline] db=C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\data\mlb_stats.db
+[run_pipeline] mode=loop poll_seconds=60 ghost=False stale_minutes=30 timeout_minutes=30 sleep_until_due=True scope_job_date_et='2026-05-02' exit_when_no_pending=True
+
+[job] id=1267 type=stats_pull job_date_et=2026-05-02 game_group_id=0 scheduled_time=2026-05-02 06:00 ET
+[job] command='python batch/ingestion/load_mlb_stats.py'
+[job] start_et=2026-05-02 06:57:43 ET (claimed)
+[job] end_et=2026-05-02 06:58:00 ET status=complete rc=0
+
+[job] id=1268 type=load_today job_date_et=2026-05-02 game_group_id=0 scheduled_time=2026-05-02 06:05 ET
+[job] command='python batch/ingestion/load_today.py --date 2026-05-02'
+[job] start_et=2026-05-02 06:58:00 ET (claimed)
+[job] end_et=2026-05-02 06:58:03 ET status=complete rc=0
+
+[job] id=1269 type=load_weather job_date_et=2026-05-02 game_group_id=0 scheduled_time=2026-05-02 06:07 ET
+[job] command='python batch/ingestion/load_weather.py --date 2026-05-02'
+[job] start_et=2026-05-02 06:58:03 ET (claimed)
+[job] end_et=2026-05-02 06:58:27 ET status=complete rc=0
+
+[job] id=1270 type=odds_pull job_date_et=2026-05-02 game_group_id=0 scheduled_time=2026-05-02 06:08 ET
+[job] command='python batch/ingestion/load_odds.py --pregame --markets game --date 2026-05-02'
+[job] start_et=2026-05-02 06:58:27 ET (claimed)
+[job] end_et=2026-05-02 06:58:28 ET status=complete rc=0
+
+[job] id=1271 type=build_team_wma job_date_et=2026-05-02 game_group_id=0 scheduled_time=2026-05-02 06:09 ET
+[job] command='python -m batch.pipeline.build_team_wma --seasons 2025 2026'
+[job] start_et=2026-05-02 06:58:28 ET (claimed)
+[job] end_et=2026-05-02 06:58:29 ET status=complete rc=0
+
+[job] id=1273 type=day_setup job_date_et=2026-05-02 game_group_id=0 scheduled_time=2026-05-02 06:10 ET
+[job] command='python batch/jobs/schedule_pipeline_day.py --groups-only --date-et 2026-05-02'
+[job] start_et=2026-05-02 06:58:29 ET (claimed)
+[job] end_et=2026-05-02 06:58:29 ET status=complete rc=0
+
+[job] id=1272 type=build_pitcher_wma job_date_et=2026-05-02 game_group_id=0 scheduled_time=2026-05-02 06:11 ET
+[job] command='python -m batch.pipeline.build_pitcher_wma --seasons 2025 2026'
+[job] start_et=2026-05-02 06:58:29 ET (claimed)
+[job] end_et=2026-05-02 06:58:30 ET status=complete rc=0
+
+[job] id=1274 type=prior_report job_date_et=2026-05-02 game_group_id=0 scheduled_time=2026-05-02 06:15 ET
+[job] command='python batch/pipeline/generate_daily_brief.py --session prior --date 2026-05-02 --as-of "2026-05-02 06:58"'
+[job] start_et=2026-05-02 06:58:30 ET (claimed)
+[job] end_et=2026-05-02 06:58:32 ET status=complete rc=0
+
+[job] id=1275 type=early_peek job_date_et=2026-05-02 game_group_id=0 scheduled_time=2026-05-02 06:20 ET
+[job] command='python batch/pipeline/generate_daily_brief.py --session morning --date 2026-05-02 --as-of "2026-05-02 06:58"'
+[job] start_et=2026-05-02 06:58:32 ET (claimed)
+[job] end_et=2026-05-02 06:58:38 ET status=complete rc=0
+
+[job] id=1276 type=email_runlog_morning job_date_et=2026-05-02 game_group_id=0 scheduled_time=2026-05-02 06:22 ET
+[job] command='python batch/jobs/email_run_log.py --date 2026-05-02 --kind morning'
+[job] start_et=2026-05-02 06:58:38 ET (claimed)
