@@ -4,6 +4,10 @@ daily_results_report.py
 ═══════════════════════
 Full-slate results report for any completed game date.
 
+**Deprecated (2026-04-28):** This script grades legacy ``model_predictions`` rows
+(S1, S1+H2, etc.) and uses **$100 flat** display — not the v2 unit-stake pipeline.
+For current P&L use **brief_picks** + **bet_ledger** (see prior / ledger grading).
+
 Shows every regular-season game played on the target date with:
   · Final score and winner
   · Closing moneyline, run line, and total (all bookmakers collapsed to one)
@@ -27,6 +31,7 @@ REQUIREMENTS
 
 # CHANGE LOG (latest first)
 # -------------------------
+# 2026-05-02  Emit DeprecationWarning: legacy model_predictions only; v2 uses brief_picks + bet_ledger.
 # 2026-04-13 22:15 ET  Default DB from get_db_path(); repo root on sys.path for core.* imports.
 # 2026-04-13 16:24 ET  Refactor: route sqlite3.connect() calls through core.db.connection.connect().
 
@@ -35,6 +40,7 @@ import csv
 import os
 import sqlite3
 import sys
+import warnings
 from datetime import date, timedelta
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -43,6 +49,14 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from core.db.connection import connect as db_connect, get_db_path
+
+warnings.warn(
+    "daily_results_report.py reads from model_predictions (legacy system). "
+    "v2 grading uses brief_picks and bet_ledger. "
+    "This script is deprecated as of 2026-04-28.",
+    DeprecationWarning,
+    stacklevel=1,
+)
 
 # ── DB location ──────────────────────────────────────────────────────────────
 DEFAULT_DB = get_db_path()
