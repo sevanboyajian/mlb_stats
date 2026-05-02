@@ -1,0 +1,179 @@
+
+══════════════════════════════════════════════════════════════════
+  MLB SCOUT — DAILY RESULTS REPORT
+  2026-04-06  (13 games)
+══════════════════════════════════════════════════════════════════
+
+  ────────────────────────────────────────────────────────────────
+  CHC  @  TB  │  Final: CHC 4  –  TB 6  (TB wins)
+  Tropicana Field  72°F  │  Wind 0 mph 0 mph, None
+
+  ▶ MODEL SIGNALS:
+    [S1   ]  CHC ML                      N/A  ✗ LOSS      PUSH
+
+  ────────────────────────────────────────────────────────────────
+  KC  @  CLE  │  Final: KC 4  –  CLE 2  (KC wins)
+  Progressive Field  47°F  │  Wind 5 mph 5 mph, L To R
+  ML: CLE -115 / KC -105  │  RL -1 / +1  │  O/U 7.5
+
+  BET                                ODDS  RESULT         P&L
+  ────────────────────────────────  ──────  ────────  ────────
+  CLE ML (home)                      -115  ✗ LOSS  -$100.00
+  KC ML (away)                       -105  ✓ WIN    +$95.24
+  CLE RL -1 (home)                   +157  ✗ LOSS  -$100.00
+  KC RL +1 (away)                    -192  ✓ WIN    +$52.08
+  OVER 7.5  (6 runs)                 +100  ✗ LOSS  -$100.00
+  UNDER 7.5  (6 runs)                -120  ✓ WIN    +$83.33
+
+  ▶ MODEL SIGNALS:
+    [S1   ]  KC ML                      -105  ✓ WIN    +$95.24
+
+  ────────────────────────────────────────────────────────────────
+  SD  @  PIT  │  Final: SD 5  –  PIT 0  (SD wins)
+  PNC Park  52°F  │  Wind 12 mph 12 mph, Out To CF
+  ML: PIT -126 / SD +104  │  RL -1 / +1  │  O/U 8.5
+
+  BET                                ODDS  RESULT         P&L
+  ────────────────────────────────  ──────  ────────  ────────
+  PIT ML (home)                      -126  ✗ LOSS  -$100.00
+  SD ML (away)                       +104  ✓ WIN   +$104.00
+  PIT RL -1 (home)                   +159  ✗ LOSS  -$100.00
+  SD RL +1 (away)                    -194  ✓ WIN    +$51.55
+  OVER 8.5  (5 runs)                 -102  ✗ LOSS  -$100.00
+  UNDER 8.5  (5 runs)                -119  ✓ WIN    +$84.03
+
+  ────────────────────────────────────────────────────────────────
+  CIN  @  MIA  │  Final: CIN 2  –  MIA 0  (CIN wins)
+  loanDepot park  72°F  │  Wind 0 mph 0 mph, None
+  ML: MIA +104 / CIN -126  │  RL -1 / +1  │  O/U 8.0
+
+  BET                                ODDS  RESULT         P&L
+  ────────────────────────────────  ──────  ────────  ────────
+  MIA ML (home)                      +104  ✗ LOSS  -$100.00
+  CIN ML (away)                      -126  ✓ WIN    +$79.37
+  MIA RL -1 (home)                   +163  ✗ LOSS  -$100.00
+  CIN RL +1 (away)                   -199  ✓ WIN    +$50.25
+  OVER 8.0  (2 runs)                 -115  ✗ LOSS  -$100.00
+  UNDER 8.0  (2 runs)                -105  ✓ WIN    +$95.24
+
+  ────────────────────────────────────────────────────────────────
+  STL  @  WSH  │  Final: STL 6  –  WSH 9  (WSH wins)
+  Nationals Park  61°F  │  Wind 7 mph 7 mph, In From CF
+  ML: WSH -108 / STL -112  │  RL -1 / +1  │  O/U 8.0
+
+  BET                                ODDS  RESULT         P&L
+  ────────────────────────────────  ──────  ────────  ────────
+  WSH ML (home)                      -108  ✓ WIN    +$92.59
+  STL ML (away)                      -112  ✗ LOSS  -$100.00
+  WSH RL -1 (home)                   +149  ✓ WIN   +$149.00
+  STL RL +1 (away)                   -181  ✗ LOSS  -$100.00
+  OVER 8.0  (15 runs)                -118  ✓ WIN    +$84.75
+  UNDER 8.0  (15 runs)               -102  ✗ LOSS  -$100.00
+
+  ────────────────────────────────────────────────────────────────
+  MIL  @  BOS  │  Final: MIL 8  –  BOS 6  (MIL wins)
+  Fenway Park  46°F  │  Wind 9 mph 9 mph, Out To RF
+  ML: BOS -105 / MIL -115  │  RL -1 / +1  │  O/U 8.0
+
+  BET                                ODDS  RESULT         P&L
+  ────────────────────────────────  ──────  ────────  ────────
+  BOS ML (home)                      -105  ✗ LOSS  -$100.00
+  MIL ML (away)                      -115  ✓ WIN    +$86.96
+  BOS RL -1 (home)                   +141  ✗ LOSS  -$100.00
+  MIL RL +1 (away)                   -171  ✓ WIN    +$58.48
+  OVER 8.0  (14 runs)                -110  ✓ WIN    +$90.91
+  UNDER 8.0  (14 runs)               -110  ✗ LOSS  -$100.00
+
+  ▶ MODEL SIGNALS:
+    [S1   ]  MIL ML                     -115  ✓ WIN    +$86.96
+
+  ────────────────────────────────────────────────────────────────
+  LAD  @  TOR  │  Final: LAD 14  –  TOR 2  (LAD wins)
+  Rogers Centre  68°F  │  Wind 0 mph 0 mph, None
+  ML: TOR -136 / LAD +113  │  RL -1 / +1  │  O/U 8.5
+
+  BET                                ODDS  RESULT         P&L
+  ────────────────────────────────  ──────  ────────  ────────
+  TOR ML (home)                      -136  ✗ LOSS  -$100.00
+  LAD ML (away)                      +113  ✓ WIN   +$113.00
+  TOR RL -1 (home)                   +123  ✗ LOSS  -$100.00
+  LAD RL +1 (away)                   -149  ✓ WIN    +$67.11
+  OVER 8.5  (16 runs)                -120  ✓ WIN    +$83.33
+  UNDER 8.5  (16 runs)               +100  ✗ LOSS  -$100.00
+
+  ▶ MODEL SIGNALS:
+    [S1+H2]  LAD ML                     +113  ✓ WIN   +$113.00
+
+  ────────────────────────────────────────────────────────────────
+  DET  @  MIN  │  Final: DET 3  –  MIN 7  (MIN wins)
+  Target Field  37°F  │  Wind 6 mph 6 mph, R To L
+  ML: MIN +100 / DET -120  │  RL -1 / +1  │  O/U 7.5
+
+  BET                                ODDS  RESULT         P&L
+  ────────────────────────────────  ──────  ────────  ────────
+  MIN ML (home)                      +100  ✓ WIN   +$100.00
+  DET ML (away)                      -120  ✗ LOSS  -$100.00
+  MIN RL -1 (home)                   +164  ✓ WIN   +$164.00
+  DET RL +1 (away)                   -200  ✗ LOSS  -$100.00
+  OVER 7.5  (10 runs)                +100  ✓ WIN   +$100.00
+  UNDER 7.5  (10 runs)               -120  ✗ LOSS  -$100.00
+
+  ▶ MODEL SIGNALS:
+    [S1   ]  DET ML                     -120  ✗ LOSS  -$100.00
+
+  ────────────────────────────────────────────────────────────────
+  BAL  @  CWS  │  Final: BAL 2  –  CWS 1  (BAL wins)
+  Rate Field  48°F  │  Wind 3 mph 3 mph, Out To CF
+  ML: CWS +120 / BAL -142  │  RL -1 / +1  │  O/U 8.5
+
+  BET                                ODDS  RESULT         P&L
+  ────────────────────────────────  ──────  ────────  ────────
+  CWS ML (home)                      +120  ✗ LOSS  -$100.00
+  BAL ML (away)                      -142  ✓ WIN    +$70.42
+  CWS RL -1 (home)                   +108  — PUSH      PUSH
+  BAL RL +1 (away)                   -130  — PUSH      PUSH
+  OVER 8.5  (3 runs)                 -122  ✗ LOSS  -$100.00
+  UNDER 8.5  (3 runs)                +100  ✓ WIN   +$100.00
+
+  ────────────────────────────────────────────────────────────────
+  SEA  @  TEX  │  Final: SEA 1  –  TEX 2  (TEX wins)
+  Globe Life Field  70°F  │  Wind 6 mph 6 mph, Varies
+
+  ▶ MODEL SIGNALS:
+    [S1   ]  SEA ML                      N/A  ✗ LOSS      PUSH
+
+  ────────────────────────────────────────────────────────────────
+  HOU  @  COL  │  Final: HOU 7  –  COL 9  (COL wins)
+  Coors Field  65°F  │  Wind 12 mph 12 mph, In From LF
+
+  ────────────────────────────────────────────────────────────────
+  ATL  @  LAA  │  Final: ATL 2  –  LAA 6  (LAA wins)
+  Angel Stadium  72°F  │  Wind 8 mph 8 mph, Out To CF
+
+  ────────────────────────────────────────────────────────────────
+  PHI  @  SF  │  Final: PHI 6  –  SF 4  (PHI wins)
+  Oracle Park  55°F  │  Wind 14 mph 14 mph, Out To CF
+
+  ▶ MODEL SIGNALS:
+    [S1   ]  PHI ML                      N/A  ✓ WIN       PUSH
+
+
+══════════════════════════════════════════════════════════════════
+  DAY SUMMARY  —  2026-04-06
+══════════════════════════════════════════════════════════════════
+
+  O/U:  4 Over / 4 Under  (50% over rate on 8 games)
+  Best bet:   MIN RL -1 (home)                   +$164.00
+  Worst bet:  CLE ML (home)                      -$100.00
+
+  SIGNAL P&L  (flat $100 per pick):
+  ──────────────────────────────────────────────────
+  S1        3W 3L 0P  P&L: +$82.20
+  S1+H2     1W 0L 0P  P&L: +$113.00
+  ──────────────────────────────────────────────────
+  ALL       4W 3L   P&L: +$195.20
+
+  Home teams:  2/8 wins (25% win rate)
+  Away teams:  6/8 wins (75% win rate)
+
+══════════════════════════════════════════════════════════════════
