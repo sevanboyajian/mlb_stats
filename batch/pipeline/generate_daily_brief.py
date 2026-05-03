@@ -6,8 +6,10 @@ Reads from mlb_stats.db and outputs the formatted betting brief.
 
 CHANGE LOG (latest first)
 ──────────────────────────
-2026-05-02  Primary briefing schedule grid (morning / early / afternoon / primary / late / closing):
-            72-char monospace table (equal Group/Brief columns, wider Game); omit started games (10 min grace).
+2026-05-02  Word (``build_docx_from_text``): PRIMARY BRIEF ALERT SCHEDULE parses into a 3-column
+            table (15/25/40 width ratio) instead of proportional plain text; second banner line centred.
+2026-05-02  Forward brief banner: title line sans date + second line ``slate-date · hh:mm AM/PM ET``;
+            ribbon width 88. Alert-schedule columns fixed 15 / 25 / 40 chars.
 2026-05-02  ``save_signal_state`` TOP/NEXT rows only when ``ScoredGame.stake_multiplier > 0``
             (same gate as ``brief_picks`` / NO BET cards). Primary and closing briefs pass
             staked slices so rank-1 lean slots do not produce phantom TOP/NEXT → ``bet_ledger``
@@ -240,6 +242,7 @@ import os
 import sqlite3
 import sys
 import textwrap
+from collections.abc import Sequence
 from pathlib import Path
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -453,12 +456,12 @@ def build_docx_from_text(session: str, game_date: str, brief_text: str) -> "Docu
     This keeps brief logic single-sourced in the text builders, while restoring
     the high-level Word formatting (title + section headers + matchup emphasis).
     """
+    import re
+
     doc = Document()
     text = brief_text or ""
     # Strip ANSI escape codes (terminal-only) from Word output.
     try:
-        import re
-
         text = re.sub(r"\x1b\[[0-9;]*m", "", text)
     except Exception:
         pass
@@ -469,6 +472,53 @@ def build_docx_from_text(session: str, game_date: str, brief_text: str) -> "Docu
         style.font.size = Pt(9)
     except Exception:
         pass
+
+    def _flush_primary_alert_schedule_table(rows_a: list[list[str]]) -> None:
+        """Emits a Word table mirroring SCHED_ALERT_* column width ratio (15 / 25 / 40)."""
+        if not rows_a:
+            return
+        nt = float(SCHED_ALERT_COL_GROUP + SCHED_ALERT_COL_BRIEF_ET + SCHED_ALERT_COL_GAME)
+        full_in = 6.34
+        w_g = full_in * SCHED_ALERT_COL_GROUP / nt
+        w_b = full_in * SCHED_ALERT_COL_BRIEF_ET / nt
+        w_m = full_in * SCHED_ALERT_COL_GAME / nt
+        tbl = doc.add_table(rows=len(rows_a), cols=3)
+        try:
+            tbl.style = "Table Grid"
+        except Exception:
+            pass
+        for ri, vals in enumerate(rows_a):
+            for ci, raw_cell in enumerate(vals):
+                cell = tbl.rows[ri].cells[ci]
+                p = cell.paragraphs[0]
+                p.text = raw_cell.strip()
+                try:
+                    p.paragraph_format.space_before = Pt(0)
+                    p.paragraph_format.space_after = Pt(0)
+                except Exception:
+                    pass
+                if ci in (0, 1):
+                    try:
+                        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    except Exception:
+                        pass
+                if p.runs:
+                    try:
+                        p.runs[0].font.size = Pt(9)
+                    except Exception:
+                        pass
+                    if ri == 0:
+                        try:
+                            p.runs[0].bold = True
+                        except Exception:
+                            pass
+        try:
+            tbl.columns[0].width = Inches(w_g)
+            tbl.columns[1].width = Inches(w_b)
+            tbl.columns[2].width = Inches(w_m)
+        except Exception:
+            pass
+        doc.add_paragraph("")
 
     def _add_line(line: str, *, size_pt: float = 9, bold: bool | None = None, align=None, color_hex: str | None = None) -> None:
         p = doc.add_paragraph()
@@ -500,14 +550,43 @@ def build_docx_from_text(session: str, game_date: str, brief_text: str) -> "Docu
 
     # Heuristic formatting based on the existing text layout.
     title_written = False
+    alert_collect = False
+    alert_rows: list[list[str]] = []
     for raw in text.splitlines():
         line = raw.rstrip("\n")
         s = line.strip()
 
         # Keep blank lines as blank paragraphs (for spacing consistency).
         if not s:
+            if alert_collect and alert_rows:
+                _flush_primary_alert_schedule_table(alert_rows)
+                alert_rows = []
+            alert_collect = False
             doc.add_paragraph("")
             continue
+
+        # PRIMARY BRIEF ALERT SCHEDULE → Word table (15 / 25 / 40 — same as .txt column budget).
+        if not alert_collect and "PRIMARY BRIEF ALERT SCHEDULE" in s.upper():
+            alert_collect = True
+            alert_rows = []
+            _add_line(s, size_pt=12, bold=True)
+            continue
+
+        if alert_collect:
+            sep = ALERT_SCHEDULE_COL_SEP_TXT
+            if sep in line:
+                cols = [c.strip() for c in line.strip().split(sep)]
+                if len(cols) == 3:
+                    alert_rows.append(cols)
+                continue
+            if "┼" in s:
+                continue
+            if len(s) > 8 and all(ch in ("─", " ") for ch in s):
+                continue
+            if alert_rows:
+                _flush_primary_alert_schedule_table(alert_rows)
+                alert_rows = []
+            alert_collect = False
 
         # Banner / separators: keep but de-emphasize.
         if set(s) <= {"═"} or set(s) <= {"─"}:
@@ -518,6 +597,14 @@ def build_docx_from_text(session: str, game_date: str, brief_text: str) -> "Docu
         if not title_written and ("MLB" in s and ("BRIEF" in s or "REPORT" in s)):
             title_written = True
             _add_line(s, size_pt=16, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER)
+            continue
+
+        # Second banner line: slate date · clock ET (multi-line banner from build_*_brief).
+        if title_written and re.match(
+            r"^\d{4}-\d{2}-\d{2}\s+·\s+\d{1,2}:\d{2}\s+[AP]M\s+ET$",
+            s,
+        ):
+            _add_line(s, size_pt=12, bold=False, align=WD_ALIGN_PARAGRAPH.CENTER)
             continue
 
         # Section headings (Top Pick / No Signal / Ledger Summary etc.)
@@ -560,6 +647,9 @@ def build_docx_from_text(session: str, game_date: str, brief_text: str) -> "Docu
 
         # Default line.
         _add_line(s, size_pt=9)
+
+    if alert_collect and alert_rows:
+        _flush_primary_alert_schedule_table(alert_rows)
 
     return doc
 
@@ -787,8 +877,23 @@ PRIMARY_GROUP_BRIEF_OFFSET_MINUTES = 30
 # Omit schedule-grid rows at/after first pitch (parity with ``main()`` action-slate filtering).
 PRIMARY_SCHEDULE_STARTED_GRACE_MINUTES = 10
 
-# Briefing-schedule ASCII table — line length matches ``section()`` / banner (72-char bar).
-PRIMARY_SCHED_GRID_WIDTH = 72
+# Primary alert grid — fixed columns; `` │ `` gaps are 3 chars; ribbon = forward banner/section width.
+SCHED_ALERT_COL_GROUP = 15
+SCHED_ALERT_COL_BRIEF_ET = 25
+SCHED_ALERT_COL_GAME = 40
+_ALERT_COL_GAP_CHARS = 3  # `` │ `` between Group / Brief / Game columns
+FORWARD_BRIEF_BAR_WIDTH = (
+    2
+    + SCHED_ALERT_COL_GROUP
+    + _ALERT_COL_GAP_CHARS
+    + SCHED_ALERT_COL_BRIEF_ET
+    + _ALERT_COL_GAP_CHARS
+    + SCHED_ALERT_COL_GAME
+)
+PRIMARY_SCHED_GRID_WIDTH = FORWARD_BRIEF_BAR_WIDTH
+
+# Text grid separator (DOCX parses the same triple for a Word table).
+ALERT_SCHEDULE_COL_SEP_TXT = " │ "
 
 # ET wall-clock → session for hybrid mode (--as-of-time / full --as-of).
 # Half-open minute ranges [start, end) on a 0–1440 minute-of-day axis. Does not alter
@@ -934,9 +1039,26 @@ def print_wind_debug_for_game(game: dict, fdg) -> None:
     print("  [debug-wind] ───────────────────────────────────────────────────────────\n")
 
 
-def banner(text: str, width: int = 72) -> str:
+def banner(text: str | Sequence[str], width: int = 72) -> str:
+    if isinstance(text, str):
+        body_lines = [text]
+    else:
+        body_lines = list(text)
     bar = "═" * width
-    return f"\n{bar}\n  {text}\n{bar}"
+    inner = "\n".join(f"  {ln}" for ln in body_lines)
+    return f"\n{bar}\n{inner}\n{bar}"
+
+
+def _banner_slate_datetime_line_et(game_date: str, now: datetime.datetime) -> str:
+    """Banner line two: slate ``YYYY-MM-DD`` and Eastern generation time with `` ET`` suffix."""
+    nw = now if getattr(now, "tzinfo", None) is not None else now.replace(tzinfo=_ET)
+    nw = nw.astimezone(_ET)
+    h12 = nw.hour % 12
+    if h12 == 0:
+        h12 = 12
+    ap = "AM" if nw.hour < 12 else "PM"
+    clock_et = f"{h12}:{nw.minute:02d} {ap} ET"
+    return f"{game_date}  ·  {clock_et}"
 
 
 def section(text: str, width: int = 72) -> str:
@@ -5480,11 +5602,18 @@ def build_morning_brief(games, streaks, starters, game_date,
     """
     _ = (streaks, session, verbose, debug_wind)  # API compatibility; unused (slate-only).
     lines = []
+    BW = FORWARD_BRIEF_BAR_WIDTH
     if now is None:
         now = _now_et()
-    generated_ts = now.strftime("%Y-%m-%d %I:%M %p ET").lstrip("0")
-    lines.append(banner(f"MLB BETTING BRIEF  ·  MORNING SNEAK PEEK  ·  {game_date}"))
-    lines.append(f"  Generated: {generated_ts}\n")
+    lines.append(
+        banner(
+            (
+                "MLB BETTING BRIEF  ·  MORNING SNEAK PEEK",
+                _banner_slate_datetime_line_et(game_date, now),
+            ),
+            width=BW,
+        )
+    )
     lines.append(
         "\n  Today's schedule and lines only — no model signals at this run time.\n"
         "  Weather and odds reflect the latest load; re-check before you bet.\n"
@@ -5503,7 +5632,7 @@ def build_morning_brief(games, streaks, starters, game_date,
             "exclusive of the current game. 'N/A' means missing/insufficient history.\n"
         )
 
-    lines.append(section(f"📋  TODAY'S SLATE  ({len(games)} games)"))
+    lines.append(section(f"📋  TODAY'S SLATE  ({len(games)} games)", width=BW))
     if not games:
         lines.append("\n  No games on the slate for this date.\n")
     for game in games:
@@ -5670,28 +5799,24 @@ def _fallback_group_brief_et_from_anchor_iso(start_time_z: str) -> datetime.date
 def _game_matchup_short_primary_schedule_label(g: dict) -> str:
     away = str(g.get("away_abbr") or "?").strip()
     home = str(g.get("home_abbr") or "?").strip()
-    return f"{away} vs {home} (h)"
+    return f"{away} @ {home} (h)"
 
 
-def _schedule_grid_three_column_widths() -> tuple[int, int, int, str, str]:
+def _schedule_grid_layout() -> tuple[int, int, int, str, str, str]:
     """
-    Equal-ish fixed columns so each table line spans ``PRIMARY_SCHED_GRID_WIDTH`` monospace chars.
-
-    Returns (w_group, w_brief, w_game, divider_line, indent).
+    Fixed Schedule columns (``SCHED_ALERT_COL_*``) + 3-char `` │ `` gaps — line length
+    ``PRIMARY_SCHED_GRID_WIDTH``. Divider uses `` ┼ `` (same width as gap) under each ``│``.
     """
     indent = "  "
-    sep = " │ "
-    inner = PRIMARY_SCHED_GRID_WIDTH - len(indent) - 2 * len(sep)
-    if inner < 18:
-        inner = 18
-    base = inner // 3
-    rem = inner - 3 * base
-    # Give remainder to Game (longest text); keep Group/Brief equal.
-    w_group = base
-    w_brief = base
-    w_game = base + rem
-    div_line = f"{indent}{'─' * w_group}─┼─{'─' * w_brief}─┼─{'─' * w_game}"
-    return w_group, w_brief, w_game, div_line, indent
+    col_sep = ALERT_SCHEDULE_COL_SEP_TXT
+    div_sep = " ┼ "
+    if len(col_sep) != len(div_sep):
+        div_sep = col_sep
+    w_group = SCHED_ALERT_COL_GROUP
+    w_brief = SCHED_ALERT_COL_BRIEF_ET
+    w_game = SCHED_ALERT_COL_GAME
+    div_line = f"{indent}{'─' * w_group}{div_sep}{'─' * w_brief}{div_sep}{'─' * w_game}"
+    return w_group, w_brief, w_game, div_line, indent, col_sep
 
 
 def _schedule_grid_cell(text: str, width: int, *, align: str) -> str:
@@ -5783,20 +5908,21 @@ def build_primary_brief_schedule_grid_lines(
     if not merged_rows:
         return []
 
-    wg, wb, wgm, div_line, ind = _schedule_grid_three_column_widths()
-    sep = " │ "
+    wg, wb, wgm, div_line, ind, sep = _schedule_grid_layout()
 
     outline: list[str] = []
-    outline.append(section("📋  PRIMARY BRIEF ALERT SCHEDULE (ET)"))
+    outline.append(section("📋  PRIMARY BRIEF ALERT SCHEDULE (ET)", width=PRIMARY_SCHED_GRID_WIDTH))
     outline.append("")
-    outline.append(
+
+    hdr = (
         ind
         + _schedule_grid_cell("Group", wg, align="center")
         + sep
-        + _schedule_grid_cell("Brief (ET)", wb, align="center")
+        + _schedule_grid_cell("Brief ET", wb, align="center")
         + sep
-        + _schedule_grid_cell("Game", wgm, align="center")
+        + _schedule_grid_cell("Games", wgm, align="center")
     )
+    outline.append(hdr)
     outline.append(div_line)
     for gid, bc, gsm in merged_rows:
         outline.append(
@@ -5810,10 +5936,10 @@ def build_primary_brief_schedule_grid_lines(
     outline.append("")
     if pip_schedule:
         outline.append(color_text(
-            "  Brief (ET): earliest scheduled group_brief in pipeline_jobs for that group.", "dim"))
+            "  Brief ET: earliest scheduled group_brief in pipeline_jobs for that group.", "dim"))
     else:
         outline.append(color_text(
-            "  Brief (ET): no group_brief rows for this slate date — estimates use first pitch − "
+            "  Brief ET: no group_brief rows for this slate date — estimates use first pitch − "
             f"{PRIMARY_GROUP_BRIEF_OFFSET_MINUTES} min (pipeline schedule_day / day_setup to populate DB).",
             "dim"))
     outline.append(color_text(
@@ -5834,6 +5960,7 @@ def build_primary_brief(games, streaks, starters, game_date,
                         game_group_id: int | None = None) -> tuple[str, list]:
     if s6_fires is None:
         s6_fires = {}
+    BW = FORWARD_BRIEF_BAR_WIDTH
     _action = {
         "EARLY GAMES": "✅  EARLY GAMES ACTION WINDOW — All unplayed games. Decide before first pitch.",
         "AFTERNOON":   "✅  AFTERNOON ACTION WINDOW — All unplayed games. Decide before first pitch.",
@@ -5843,9 +5970,15 @@ def build_primary_brief(games, streaks, starters, game_date,
     lines = []
     if now is None:
         now = _now_et()
-    generated_ts = now.strftime("%Y-%m-%d %I:%M %p ET").lstrip("0")
-    lines.append(banner(f"MLB BETTING BRIEF  ·  {session_label} SESSION  ·  {game_date}"))
-    lines.append(f"  Generated: {generated_ts}\n")
+    lines.append(
+        banner(
+            (
+                f"MLB BETTING BRIEF  ·  {session_label} SESSION",
+                _banner_slate_datetime_line_et(game_date, now),
+            ),
+            width=BW,
+        )
+    )
     lines.append(
         f"\n  {_action}\n"
         "  Injury news absorbed. Lineups posting. Lines near closing.\n"
@@ -5951,7 +6084,7 @@ def build_primary_brief(games, streaks, starters, game_date,
             bet_lbl = bet_side.upper() if bet_side else "BET"
         bets_list.append(f"- {bet_lbl} ({st:.2f}u)")
 
-    lines.append(section("🔥  ACTION SUMMARY"))
+    lines.append(section("🔥  ACTION SUMMARY", width=BW))
     lines.append(f"\n  Bets Today: {len(bets_list)}")
     lines.append(f"  Games Evaluated: {len(games)}\n")
     if bets_list:
@@ -6023,7 +6156,7 @@ def build_primary_brief(games, streaks, starters, game_date,
             pass
 
     # ── Top Pick ─────────────────────────────────────────────────────────
-    lines.append(section("🔺  TOP PICK  —  Highest Probability Signal"))
+    lines.append(section("🔺  TOP PICK  —  Highest Probability Signal", width=BW))
     if not all_picks:
         lines.append("\n  No confirmed signals fire on today's slate.\n")
         lines.append("  Wait for tomorrow. Discipline > action.\n")
@@ -6095,7 +6228,7 @@ def build_primary_brief(games, streaks, starters, game_date,
 
     # ── Additional Picks ─────────────────────────────────────────────────
     rest = all_picks[1:]
-    lines.append(section(f"📋  ADDITIONAL MODEL SELECTIONS  ({len(rest)})"))
+    lines.append(section(f"📋  ADDITIONAL MODEL SELECTIONS  ({len(rest)})", width=BW))
     if not rest:
         lines.append("\n  No additional confirmed signals today.\n")
     for i, entry in enumerate(rest, start=1):
@@ -6164,7 +6297,7 @@ def build_primary_brief(games, streaks, starters, game_date,
 
     # ── Hot pitcher streak (separate monitor; half-stake until N≥50) ──────
     # Double-confirmation when the home team is also on a long win streak.
-    lines.append(section(f"🔬  HOT PITCHER STREAK MONITOR  ({len(s6_fires)} fire(s))"))
+    lines.append(section(f"🔬  HOT PITCHER STREAK MONITOR  ({len(s6_fires)} fire(s))", width=BW))
     if not s6_fires:
         lines.append(
             "\n  No long starter win streaks (7+ starts) flagged today.\n"
@@ -6196,7 +6329,12 @@ def build_primary_brief(games, streaks, starters, game_date,
 
     # ── No-signal slate ──────────────────────────────────────────────────
     if no_signal:
-        lines.append(section(f"—  NO SIGNAL  ({len(no_signal)} games — market efficient or insufficient data)"))
+        lines.append(
+            section(
+                f"—  NO SIGNAL  ({len(no_signal)} games — market efficient or insufficient data)",
+                width=BW,
+            )
+        )
         sb_count = sum(
             1
             for e in no_signal
@@ -6234,12 +6372,14 @@ def build_primary_brief(games, streaks, starters, game_date,
                         lines.append(f"    ⚠ {f}")
         lines.append("")
 
+    _pfx = max(20, BW - 2)
+    _pfx_bar = "─" * _pfx
     lines.append(
-        "\n  ─────────────────────────────────────────────────────────────────\n"
+        f"\n  {_pfx_bar}\n"
         "  All bets assume flat-unit sizing. No bet above 2% of bankroll.\n"
         "  Confirm wind direction and speed at game time via Weather.com\n"
         "  or Windy.com. Lines shown are from last odds pull.\n"
-        "  ─────────────────────────────────────────────────────────────────\n"
+        f"  {_pfx_bar}\n"
     )
     lines.append(QUICK_REFERENCE_SIGNAL_TIMING)
     lines.append(CAVEAT)
@@ -6253,11 +6393,18 @@ def build_closing_brief(games, streaks, starters, movement, game_date,
                         debug_wind: bool = False,
                         game_group_id: int | None = None) -> tuple[str, int]:
     lines = []
+    BW = FORWARD_BRIEF_BAR_WIDTH
     if now is None:
         now = _now_et()
-    generated_ts = now.strftime("%Y-%m-%d %I:%M %p ET").lstrip("0")
-    lines.append(banner(f"MLB BETTING BRIEF  ·  CLOSING SESSION  ·  {game_date}"))
-    lines.append(f"  Generated: {generated_ts}\n")
+    lines.append(
+        banner(
+            (
+                "MLB BETTING BRIEF  ·  CLOSING SESSION",
+                _banner_slate_datetime_line_et(game_date, now),
+            ),
+            width=BW,
+        )
+    )
     lines.append(
         "\n  CLOSING CONFIRMATION — Compare against Primary Brief picks.\n"
         "  No new bets unless closing price is BETTER than Primary Brief price.\n"
@@ -6362,12 +6509,14 @@ def build_closing_brief(games, streaks, starters, movement, game_date,
         next_entries = staked_closing[1:6]
         save_signal_state(conn, game_date, session, top_entry, next_entries, [], now=now)
 
+    _clvw = max(20, BW - 2)
+    _clv_bar = "─" * _clvw
     lines.append(
-        "  ─────────────────────────────────────────────────────────────────\n"
+        f"  {_clv_bar}\n"
         "  CLV Note: Your edge is measured against these closing prices.\n"
         "  If you bet at Primary Brief prices, compare to these lines now.\n"
         "  Run --compute-movement at 11:30 PM for full movement analysis.\n"
-        "  ─────────────────────────────────────────────────────────────────\n"
+        f"  {_clv_bar}\n"
     )
     lines.append(CAVEAT)
     return "\n".join(lines), closing_picks_logged
@@ -7444,9 +7593,10 @@ def main():
     # Live "no as-of" runs use as_of_dt=None in load_games so already-Final games stay out in SQL.
     as_of_for_slate = args.as_of_dt if args.as_of_dt is not None else (now if explicit_as_of else None)
 
-    print(f"\n{'═'*72}")
+    _dash_bar_w = FORWARD_BRIEF_BAR_WIDTH if session != "prior" else 72
+    print(f"\n{'═' * _dash_bar_w}")
     print(f"  MLB Betting Model · Daily Brief · {session.upper()} · {today}")
-    print(f"{'═'*72}")
+    print(f"{'═' * _dash_bar_w}")
     if args.debug_wind:
         print(
             "\n  [debug-wind] ENABLED — printing DB vs dressed wind fields for each game "
