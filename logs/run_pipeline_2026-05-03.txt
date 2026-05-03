@@ -94,3 +94,10 @@
 [job] start_et=2026-05-03 12:15:21 ET (claimed)
 [job] end_et=2026-05-03 12:15:26 ET status=complete rc=0
 [run_pipeline] sleep-until-due: next pending at 2026-05-03 12:17 ET (~120s)
+
+[job] id=1352 type=ledger_snapshot job_date_et=2026-05-03 game_group_id=1 scheduled_time=2026-05-03 12:17 ET
+[job] command='python batch/pipeline/daily_results_report.py --date 2026-05-03'
+[job] context: group_id=1 window=[2026-05-03 12:15 ET -> 2026-05-03 12:45 ET]
+[job] start_et=2026-05-03 12:17:26 ET (claimed)
+[job] end_et=2026-05-03 12:17:26 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-03 12:45 ET (~1680s)
