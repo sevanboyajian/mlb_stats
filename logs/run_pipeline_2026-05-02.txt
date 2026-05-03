@@ -279,3 +279,10 @@ sqlite3.OperationalError: database is locked
 [job] start_et=2026-05-02 19:42:37 ET (claimed)
 [job] end_et=2026-05-02 19:42:37 ET status=complete rc=0
 [run_pipeline] sleep-until-due: next pending at 2026-05-02 20:08 ET (~1560s)
+
+[job] id=1284 type=odds_pull job_date_et=2026-05-02 game_group_id=7 scheduled_time=2026-05-02 20:08 ET
+[job] command='python batch/ingestion/load_odds.py --pregame --markets game --date 2026-05-02'
+[job] context: group_id=7 window=[2026-05-02 20:03 ET -> 2026-05-02 20:13 ET]
+[job] start_et=2026-05-02 20:08:37 ET (claimed)
+[job] end_et=2026-05-02 20:08:38 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-02 20:13 ET (~300s)
