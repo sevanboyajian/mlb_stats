@@ -6,6 +6,9 @@ Reads from mlb_stats.db and outputs the formatted betting brief.
 
 CHANGE LOG (latest first)
 ──────────────────────────
+2026-05-02  Primary briefing schedule grid on every forward brief session (morning / early /
+            afternoon / primary / late / closing): omit games whose first pitch is past generation
+            time with the same 10 min ET grace as action briefs.
 2026-05-02  ``save_signal_state`` TOP/NEXT rows only when ``ScoredGame.stake_multiplier > 0``
             (same gate as ``brief_picks`` / NO BET cards). Primary and closing briefs pass
             staked slices so rank-1 lean slots do not produce phantom TOP/NEXT → ``bet_ledger``
@@ -777,6 +780,13 @@ SESSION_PULL_WINDOW = {
     "closing": ("17:30", "23:59"),   # after 6:30 PM odds pull
     "late":    ("20:00", "23:59"),   # after ~8 PM late-games pull
 }
+
+# Must match ``schedule_pipeline_day``: 30 m start clusters, group_brief at T₀−30 min.
+PRIMARY_SCHEDULE_GROUP_WINDOW_MINUTES = 30
+PRIMARY_GROUP_BRIEF_OFFSET_MINUTES = 30
+
+# Omit schedule-grid rows at/after first pitch (parity with ``main()`` action-slate filtering).
+PRIMARY_SCHEDULE_STARTED_GRACE_MINUTES = 10
 
 # ET wall-clock → session for hybrid mode (--as-of-time / full --as-of).
 # Half-open minute ranges [start, end) on a 0–1440 minute-of-day axis. Does not alter
@@ -5457,7 +5467,8 @@ def build_morning_brief(games, streaks, starters, game_date,
                         conn=None, session=None,
                         now: datetime.datetime | None = None,
                         verbose: bool = False,
-                        debug_wind: bool = False):
+                        debug_wind: bool = False,
+                        game_group_id: int | None = None):
     """
     Morning session = pipeline ``early_peek`` sneak peek: slate only.
 
@@ -5476,6 +5487,12 @@ def build_morning_brief(games, streaks, starters, game_date,
         "\n  Today's schedule and lines only — no model signals at this run time.\n"
         "  Weather and odds reflect the latest load; re-check before you bet.\n"
     )
+    if conn is not None:
+        m_sched = build_primary_brief_schedule_grid_lines(
+            conn, game_date, current_group_id=game_group_id, now=now,
+        )
+        if m_sched:
+            lines.extend(m_sched)
 
     # Optional enrichment: show team offense WMA + starter WMA (ERA/K9/WHIP) when available.
     if conn is not None:
@@ -5558,11 +5575,215 @@ def build_morning_brief(games, streaks, starters, game_date,
     return "\n".join(lines)
 
 
+def _fmt_clock_12h_et_wall(dt_et: datetime.datetime | None) -> str:
+    """Format aware (or naive) instant as ET 12-hour clock — e.g. ``7:05 PM``."""
+    if dt_et is None:
+        return "?"
+    try:
+        d = dt_et.replace(tzinfo=_ET) if dt_et.tzinfo is None else dt_et.astimezone(_ET)
+        ap = "AM" if d.hour < 12 else "PM"
+        h12 = d.hour % 12 or 12
+        return f"{h12}:{d.minute:02d} {ap}"
+    except Exception:
+        return "?"
+
+
+def _parse_pipeline_scheduled_et_to_aware_et(s: str | None) -> datetime.datetime | None:
+    """``YYYY-MM-DD HH:MM ET`` → timezone-aware Eastern."""
+    raw = (s or "").strip()
+    if not raw.endswith("ET"):
+        return None
+    base = raw[:-2].strip()
+    try:
+        naive_local = datetime.datetime.strptime(base, "%Y-%m-%d %H:%M")
+        return naive_local.replace(tzinfo=_ET)
+    except ValueError:
+        return None
+
+
+def _pipeline_group_brief_earliest_et_by_group(
+    conn: sqlite3.Connection, game_date: str
+) -> dict[int, datetime.datetime]:
+    buckets: dict[int, list[datetime.datetime]] = {}
+    try:
+        cur = conn.execute(
+            """
+            SELECT game_group_id, scheduled_time_et
+              FROM pipeline_jobs
+             WHERE job_date_et = ?
+               AND trim(lower(job_type)) = 'group_brief'
+               AND game_group_id IS NOT NULL
+               AND game_group_id != 0
+            """,
+            (game_date,),
+        )
+        for r in cur.fetchall():
+            try:
+                gid = int(r[0])
+            except Exception:
+                continue
+            parsed = _parse_pipeline_scheduled_et_to_aware_et(str(r[1] or "") if len(r) > 1 else None)
+            if parsed is None:
+                continue
+            buckets.setdefault(gid, []).append(parsed)
+    except Exception:
+        return {}
+    return {g: min(ts) for g, ts in buckets.items()}
+
+
+def _load_regular_slate_games_for_schedule(conn: sqlite3.Connection, game_date: str) -> list[dict]:
+    """Regular-season slate for clustering (same projection as scheduler)."""
+    try:
+        cur = conn.execute(
+            """
+            SELECT g.game_pk, g.game_start_utc,
+                   ta.abbreviation AS away_abbr, th.abbreviation AS home_abbr
+              FROM games g
+              LEFT JOIN teams ta ON ta.team_id = g.away_team_id
+              LEFT JOIN teams th ON th.team_id = g.home_team_id
+             WHERE g.game_date_et = ?
+               AND g.game_type = 'R'
+             ORDER BY g.game_start_utc, g.game_pk
+            """,
+            (game_date,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+    except Exception:
+        return []
+
+
+def _fallback_group_brief_et_from_anchor_iso(start_time_z: str) -> datetime.datetime | None:
+    """Anchored UTC first pitch (``…Z``) minus PRIMARY_GROUP_BRIEF_OFFSET_MINUTES → aware ET."""
+    raw = (start_time_z or "").strip()
+    if "T" not in raw:
+        return None
+    try:
+        t0_naive_utc = datetime.datetime.fromisoformat(raw.rstrip("Z"))
+        sched_naive = t0_naive_utc - datetime.timedelta(minutes=PRIMARY_GROUP_BRIEF_OFFSET_MINUTES)
+        return sched_naive.replace(tzinfo=datetime.timezone.utc).astimezone(_ET)
+    except Exception:
+        return None
+
+
+def _game_matchup_short_primary_schedule_label(g: dict) -> str:
+    away = str(g.get("away_abbr") or "?").strip()
+    home = str(g.get("home_abbr") or "?").strip()
+    return f"{away} vs {home} (h)"
+
+
+def build_primary_brief_schedule_grid_lines(
+    conn: sqlite3.Connection | None,
+    game_date: str,
+    *,
+    current_group_id: int | None = None,
+    now: datetime.datetime | None = None,
+) -> list[str]:
+    """
+    One row per upcoming slate game: briefing group, expected ``group_brief`` send time ET, matchup.
+
+    ``pipeline_jobs.scheduled_time_et`` when populated; otherwise anchor first pitch minus
+    ``PRIMARY_GROUP_BRIEF_OFFSET_MINUTES`` (“T−30 m”).
+    Games at or past first pitch vs ``now`` (with grace) are excluded.
+    """
+    if conn is None:
+        return []
+    try:
+        from core.utils.game_start_grouping import group_games_by_start_time
+    except Exception:
+        return []
+
+    if now is None:
+        now = _now_et()
+    now_utc = now.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+    grace_td = datetime.timedelta(minutes=PRIMARY_SCHEDULE_STARTED_GRACE_MINUTES)
+
+    slate = _load_regular_slate_games_for_schedule(conn, game_date)
+    slate = [
+        g
+        for g in slate
+        if (_gst := _game_start_utc_dt(g)) is not None and _gst > (now_utc - grace_td)
+    ]
+    if not slate:
+        return []
+
+    try:
+        groups = group_games_by_start_time(slate, window_minutes=PRIMARY_SCHEDULE_GROUP_WINDOW_MINUTES)
+    except Exception:
+        return []
+    if not groups:
+        return []
+
+    pk_map: dict[int, dict] = {}
+    for g in slate:
+        try:
+            pk_map[int(g["game_pk"])] = g
+        except Exception:
+            continue
+
+    pip_schedule = _pipeline_group_brief_earliest_et_by_group(conn, game_date)
+    merged_rows: list[tuple[int, str, str]] = []
+
+    for grp in sorted(groups, key=lambda x: int(x.get("group_id") or 0)):
+        gid = int(grp.get("group_id") or 0)
+        brief_et = pip_schedule.get(gid) or _fallback_group_brief_et_from_anchor_iso(
+            str(grp.get("start_time") or "")
+        )
+        bt = _fmt_clock_12h_et_wall(brief_et)
+        pks = list(grp.get("game_pks") or [])
+        for j, pk in enumerate(pks):
+            try:
+                ipk = int(pk)
+            except Exception:
+                continue
+            gm = pk_map.get(ipk)
+            if gm is None:
+                continue
+            brief_cell = bt if j == 0 else "\u2033"
+            label = _game_matchup_short_primary_schedule_label(gm)
+            if current_group_id is not None and int(current_group_id) == gid:
+                label = f"{label}  ← this brief"
+            merged_rows.append((gid, brief_cell, label))
+
+    if not merged_rows:
+        return []
+
+    wg, wb = 5, 12
+    maxlen = max(len(t[2]) for t in merged_rows)
+    col_game = min(72, max(28, maxlen))
+
+    outline: list[str] = []
+    outline.append(section("📋  PRIMARY BRIEF ALERT SCHEDULE (ET)"))
+    outline.append("")
+    outline.append(f"  {'Group':>{wg}} │ {'Brief (ET)':^{wb}} │ {'Game':<{col_game}}")
+    outline.append(f"  {'─' * wg}─┼─{'─' * wb}─┼─{'─' * col_game}")
+    for gid, bc, gsm in merged_rows:
+        gsm_cell = gsm if len(gsm) <= col_game else gsm[: max(12, col_game - 5)] + " …"
+        outline.append(f"  {str(gid):>{wg}} │ {bc:^{wb}} │ {gsm_cell}")
+    outline.append("")
+    if pip_schedule:
+        outline.append(color_text(
+            "  Brief (ET): earliest scheduled group_brief in pipeline_jobs for that group.", "dim"))
+    else:
+        outline.append(color_text(
+            "  Brief (ET): no group_brief rows for this slate date — estimates use first pitch − "
+            f"{PRIMARY_GROUP_BRIEF_OFFSET_MINUTES} min (pipeline schedule_day / day_setup to populate DB).",
+            "dim"))
+    outline.append(color_text(
+        "  Earlier sessions may still evaluate unstarted games — this grid is scheduled checkpoints only.",
+        "dim"))
+    outline.append(color_text(
+        f"  Games past first pitch (vs generation time − {PRIMARY_SCHEDULE_STARTED_GRACE_MINUTES} min ET grace) omitted.",
+        "dim"))
+    outline.append("")
+    return outline
+
+
 def build_primary_brief(games, streaks, starters, game_date,
                         session_label="PRIMARY", s6_fires=None,
                         conn=None, session=None, now: datetime.datetime | None = None,
                         verbose: bool = False,
-                        debug_wind: bool = False) -> tuple[str, list]:
+                        debug_wind: bool = False,
+                        game_group_id: int | None = None) -> tuple[str, list]:
     if s6_fires is None:
         s6_fires = {}
     _action = {
@@ -5582,6 +5803,11 @@ def build_primary_brief(games, streaks, starters, game_date,
         "  Injury news absorbed. Lineups posting. Lines near closing.\n"
         "  Confirm each line before placing. No bet above 2% of bankroll.\n"
     )
+    sched_block = build_primary_brief_schedule_grid_lines(
+        conn, game_date, current_group_id=game_group_id, now=now,
+    )
+    if sched_block:
+        lines.extend(sched_block)
     from batch.pipeline.score_game import format_aggregate_for_brief
 
     evaluated_entries: list[dict] = []
@@ -5976,7 +6202,8 @@ def build_closing_brief(games, streaks, starters, movement, game_date,
                         conn=None, session=None,
                         now: datetime.datetime | None = None,
                         verbose: bool = False,
-                        debug_wind: bool = False) -> tuple[str, int]:
+                        debug_wind: bool = False,
+                        game_group_id: int | None = None) -> tuple[str, int]:
     lines = []
     if now is None:
         now = _now_et()
@@ -5990,6 +6217,12 @@ def build_closing_brief(games, streaks, starters, movement, game_date,
         "  Per game, “no pick” means the model has no published bet at this price snapshot —\n"
         "  not that some unstated earlier signal expired (check Primary for that matchup).\n"
     )
+    if conn is not None:
+        c_sched = build_primary_brief_schedule_grid_lines(
+            conn, game_date, current_group_id=game_group_id, now=now,
+        )
+        if c_sched:
+            lines.extend(c_sched)
 
     # For persistence (does not affect output)
     all_picks_entries = []
@@ -7382,6 +7615,7 @@ def main():
             games, streaks, starters, today,
             conn=conn, session=session, now=now,
             verbose=args.verbose, debug_wind=args.debug_wind,
+            game_group_id=_ggid,
         )
     elif session in ("early", "afternoon", "primary", "late"):
         label = {"early": "EARLY GAMES", "afternoon": "AFTERNOON",
@@ -7391,12 +7625,14 @@ def main():
             session_label=label, s6_fires=s6_fires,
             conn=conn, session=session, now=now,
             verbose=args.verbose, debug_wind=args.debug_wind,
+            game_group_id=_ggid,
         )
     else:
         brief_text, closing_pick_row_count = build_closing_brief(
             games, streaks, starters, movement, today,
             conn=conn, session=session, now=now,
             verbose=args.verbose, debug_wind=args.debug_wind,
+            game_group_id=_ggid,
         )
 
     # ── Output ───────────────────────────────────────────────────────────
