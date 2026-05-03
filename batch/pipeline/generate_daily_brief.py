@@ -6,6 +6,10 @@ Reads from mlb_stats.db and outputs the formatted betting brief.
 
 CHANGE LOG (latest first)
 ──────────────────────────
+2026-05-02  ``save_signal_state`` TOP/NEXT rows only when ``ScoredGame.stake_multiplier > 0``
+            (same gate as ``brief_picks`` / NO BET cards). Primary and closing briefs pass
+            staked slices so rank-1 lean slots do not produce phantom TOP/NEXT → ``bet_ledger``
+            backfill at ``stake_units = 1``.
 2026-05-02  ``bet_ledger.model_version``: new column (`legacy` vs `v2` by ``MODEL_V2_START_DATE``);
             ``ensure_bet_ledger`` migrates existing DBs and applies idempotent backfill UPDATEs.
             Prior report season-to-date block shows overall + v2 + legacy subsets (graded staked bets
@@ -1904,7 +1908,12 @@ def backfill_missing_bet_snapshots_from_ledger(conn: sqlite3.Connection, game_da
 def save_signal_state(conn: sqlite3.Connection, game_date: str, session: str,
                       top_entry: dict | None, next_entries: list,
                       avoid_entries: list, now: datetime.datetime | None = None) -> None:
-    """Persist TOP / NEXT (up to 5) / AVOID signals into signal_state (append-only)."""
+    """Persist TOP / NEXT (up to 5) / AVOID signals into signal_state (append-only).
+
+    TOP/NEXT rows are written only when the pick entry has ``ScoredGame.stake_multiplier > 0``
+    (parity with brief STAKE / NO BET and ``save_brief_picks``). Callers should pass the first
+    staked ranks as ``top_entry`` / ``next_entries`` when the slate is sorted by stake first.
+    """
     if not PERSIST_WRITES:
         return
     if conn is None or not session:
@@ -1997,13 +2006,15 @@ def save_signal_state(conn: sqlite3.Connection, game_date: str, session: str,
         return market_type, bet_text
 
     rows = []
-    if top_entry is not None:
+    if top_entry is not None and _scored_pick_stake_units(top_entry) > 0:
         g = (top_entry.get("game") or {})
         market_type, bet, odds = _best_pick_fields(top_entry)
         if market_type is not None:
             rows.append((game_date, g.get("game_pk"), market_type, "top", bet, odds, session, recorded_at))
 
     for ne in (next_entries or []):
+        if _scored_pick_stake_units(ne) <= 0:
+            continue
         g = (ne.get("game") or {})
         market_type, bet, odds = _best_pick_fields(ne)
         if market_type is not None:
@@ -5712,9 +5723,11 @@ def build_primary_brief(games, streaks, starters, game_date,
 
     # ── Persist signal state (TOP / NEXT only for customer briefs) ───────
     # Do not affect computation or report output; best-effort insert only.
+    # Staked rows only — same gate as brief_picks (avoid phantom TOP when rank 1 is lean).
     if conn is not None and session is not None:
-        top_entry = all_picks[0] if len(all_picks) >= 1 else None
-        next_entries = all_picks[1:6] if len(all_picks) >= 2 else []
+        staked_signal_entries = [e for e in all_picks if _scored_pick_stake_units(e) > 0]
+        top_entry = staked_signal_entries[0] if staked_signal_entries else None
+        next_entries = staked_signal_entries[1:6]
         save_signal_state(conn, game_date, session, top_entry, next_entries, [], now=now)
 
     # ── Signal Tracker — intra-day pick status vs earlier sessions ────────
@@ -6063,8 +6076,9 @@ def build_closing_brief(games, streaks, starters, movement, game_date,
             all_picks_entries.sort(key=lambda e: min(p["priority"] for p in e["sigs"]["picks"]))
         except Exception:
             pass
-        top_entry    = all_picks_entries[0] if len(all_picks_entries) >= 1 else None
-        next_entries = all_picks_entries[1:6] if len(all_picks_entries) >= 2 else []
+        staked_closing = [e for e in all_picks_entries if _scored_pick_stake_units(e) > 0]
+        top_entry = staked_closing[0] if staked_closing else None
+        next_entries = staked_closing[1:6]
         save_signal_state(conn, game_date, session, top_entry, next_entries, [], now=now)
 
     lines.append(
