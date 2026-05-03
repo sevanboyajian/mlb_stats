@@ -1318,12 +1318,47 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
     edge_pct = f"{float(edge) * 100:+.1f}%" if edge is not None else "N/A"
     score_label = f"score={best_score_i}" if best_score_i else "score=0"
     odds_str = _fmt_odds(odds) if odds is not None else "N/A"
-    model_debug_line = (
-        f"MODEL: {signal_label} {score_label}"
-        f" | {market_label} {odds_str}"
-        f" | implied {implied_pct} → model {model_pct}"
-        f" | edge {edge_pct}"
-    )
+
+    home_abbr = (g.identifiers.home_team_abbr or "").strip()
+    away_abbr = (g.identifiers.away_team_abbr or "").strip()
+    tot_cur = g.market.total_current
+    tot_display = f"{float(tot_cur):g}" if tot_cur is not None else "?"
+    side_labels_map: dict[str, str] = {
+        "home_ml": f"{home_abbr} ML",
+        "away_ml": f"{away_abbr} ML",
+        "home_ml_default": f"{home_abbr} ML",
+        "away_ml_default": f"{away_abbr} ML",
+        "over_total": f"OVER {tot_display}",
+        "under_total": f"UNDER {tot_display}",
+    }
+    _os_key = odds_side or ""
+    checked_side_label = side_labels_map.get(_os_key)
+    if checked_side_label is None:
+        checked_side_label = _os_key.replace("_", " ").upper() if _os_key else str(_os_key)
+
+    if best_score_i == 0:
+        try:
+            odds_am = int(odds) if odds is not None else None
+        except (TypeError, ValueError):
+            odds_am = None
+        odds_seg = f"{odds_am:+d}" if odds_am is not None else "N/A"
+        conv_suffix = ""
+        if model_p is not None and abs(float(model_p) - 0.5) < 1e-9:
+            conv_suffix = " (no conviction)"
+        model_debug_line = (
+            f"\u26a0 MODEL: No signal score=0"
+            f" | checked: {checked_side_label} {odds_seg}"
+            f" | market implied {implied_pct}"
+            f" | model {model_pct}{conv_suffix}"
+            f" | edge {edge_pct} (not actionable)"
+        )
+    else:
+        model_debug_line = (
+            f"MODEL: {signal_label} {score_label}"
+            f" | {market_label} {odds_str}"
+            f" | implied {implied_pct} \u2192 model {model_pct}"
+            f" | edge {edge_pct}"
+        )
     data_flags = list(g.completeness.gaps) + extra_flags + [model_debug_line]
 
     stake_basis = "aggregated_scoring"

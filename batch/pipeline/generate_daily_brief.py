@@ -567,6 +567,15 @@ def strip_ansi(text: str) -> str:
     except Exception:
         return text or ""
 
+
+def _is_model_confirmation_flag(text: str) -> bool:
+    """True for legacy ``MODEL:`` lines and no-signal warning-prefixed MODEL lines."""
+    s = str(text).lstrip()
+    if s.startswith("\u26a0"):
+        s = s[1:].lstrip()
+    return s.startswith("MODEL:")
+
+
 # ── DB location (env / config/.env / cwd fallback via get_db_path) ───────
 DB_PATH = Path(get_db_path())
 
@@ -5790,7 +5799,7 @@ def build_primary_brief(games, streaks, starters, game_date,
         lines.append(f"\n  REASON: {textwrap.fill(p['reason'], width=66, subsequent_indent='          ')}")
         if top["sigs"]["data_flags"]:
             for f in top["sigs"]["data_flags"]:
-                if str(f).lstrip().startswith("MODEL:"):
+                if _is_model_confirmation_flag(f):
                     # On pick cards, this is a confirmation line (not a warning).
                     lines.append(f"  {f}")
                 else:
@@ -5860,7 +5869,7 @@ def build_primary_brief(games, streaks, starters, game_date,
         lines.append(f"       {textwrap.fill(best['reason'], width=66, subsequent_indent='       ')}")
         if sigs["data_flags"]:
             for f in sigs["data_flags"]:
-                if str(f).lstrip().startswith("MODEL:"):
+                if _is_model_confirmation_flag(f):
                     lines.append(f"       {f}")
                 else:
                     lines.append(f"       DATA: {f}")
@@ -5931,7 +5940,11 @@ def build_primary_brief(games, streaks, starters, game_date,
                 lines.append(wma_line)
             if entry["sigs"]["data_flags"]:
                 for f in entry["sigs"]["data_flags"]:
-                    lines.append(f"    ⚠ {f}")
+                    tf = str(f).lstrip()
+                    if tf.startswith("\u26a0"):
+                        lines.append(f"    {f}")
+                    else:
+                        lines.append(f"    ⚠ {f}")
         lines.append("")
 
     lines.append(
@@ -6037,7 +6050,7 @@ def build_closing_brief(games, streaks, starters, movement, game_date,
 
         if sigs["data_flags"]:
             for f in sigs["data_flags"]:
-                if str(f).lstrip().startswith("MODEL:"):
+                if _is_model_confirmation_flag(f):
                     lines.append(f"  {f}")
                 else:
                     lines.append(f"  DATA: {f}")
