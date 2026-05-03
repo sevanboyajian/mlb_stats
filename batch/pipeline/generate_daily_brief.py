@@ -6,9 +6,8 @@ Reads from mlb_stats.db and outputs the formatted betting brief.
 
 CHANGE LOG (latest first)
 ──────────────────────────
-2026-05-02  Primary briefing schedule grid on every forward brief session (morning / early /
-            afternoon / primary / late / closing): omit games whose first pitch is past generation
-            time with the same 10 min ET grace as action briefs.
+2026-05-02  Primary briefing schedule grid (morning / early / afternoon / primary / late / closing):
+            72-char monospace table (equal Group/Brief columns, wider Game); omit started games (10 min grace).
 2026-05-02  ``save_signal_state`` TOP/NEXT rows only when ``ScoredGame.stake_multiplier > 0``
             (same gate as ``brief_picks`` / NO BET cards). Primary and closing briefs pass
             staked slices so rank-1 lean slots do not produce phantom TOP/NEXT → ``bet_ledger``
@@ -787,6 +786,9 @@ PRIMARY_GROUP_BRIEF_OFFSET_MINUTES = 30
 
 # Omit schedule-grid rows at/after first pitch (parity with ``main()`` action-slate filtering).
 PRIMARY_SCHEDULE_STARTED_GRACE_MINUTES = 10
+
+# Briefing-schedule ASCII table — line length matches ``section()`` / banner (72-char bar).
+PRIMARY_SCHED_GRID_WIDTH = 72
 
 # ET wall-clock → session for hybrid mode (--as-of-time / full --as-of).
 # Half-open minute ranges [start, end) on a 0–1440 minute-of-day axis. Does not alter
@@ -5671,6 +5673,40 @@ def _game_matchup_short_primary_schedule_label(g: dict) -> str:
     return f"{away} vs {home} (h)"
 
 
+def _schedule_grid_three_column_widths() -> tuple[int, int, int, str, str]:
+    """
+    Equal-ish fixed columns so each table line spans ``PRIMARY_SCHED_GRID_WIDTH`` monospace chars.
+
+    Returns (w_group, w_brief, w_game, divider_line, indent).
+    """
+    indent = "  "
+    sep = " │ "
+    inner = PRIMARY_SCHED_GRID_WIDTH - len(indent) - 2 * len(sep)
+    if inner < 18:
+        inner = 18
+    base = inner // 3
+    rem = inner - 3 * base
+    # Give remainder to Game (longest text); keep Group/Brief equal.
+    w_group = base
+    w_brief = base
+    w_game = base + rem
+    div_line = f"{indent}{'─' * w_group}─┼─{'─' * w_brief}─┼─{'─' * w_game}"
+    return w_group, w_brief, w_game, div_line, indent
+
+
+def _schedule_grid_cell(text: str, width: int, *, align: str) -> str:
+    s = (text or "").replace("\n", " ").strip()
+    if len(s) <= width:
+        if align == "center":
+            return s.center(width)
+        if align == "right":
+            return s.rjust(width)
+        return s.ljust(width)
+    if width <= 1:
+        return "…"[:width]
+    return s[: width - 1] + "…"
+
+
 def build_primary_brief_schedule_grid_lines(
     conn: sqlite3.Connection | None,
     game_date: str,
@@ -5747,18 +5783,30 @@ def build_primary_brief_schedule_grid_lines(
     if not merged_rows:
         return []
 
-    wg, wb = 5, 12
-    maxlen = max(len(t[2]) for t in merged_rows)
-    col_game = min(72, max(28, maxlen))
+    wg, wb, wgm, div_line, ind = _schedule_grid_three_column_widths()
+    sep = " │ "
 
     outline: list[str] = []
     outline.append(section("📋  PRIMARY BRIEF ALERT SCHEDULE (ET)"))
     outline.append("")
-    outline.append(f"  {'Group':>{wg}} │ {'Brief (ET)':^{wb}} │ {'Game':<{col_game}}")
-    outline.append(f"  {'─' * wg}─┼─{'─' * wb}─┼─{'─' * col_game}")
+    outline.append(
+        ind
+        + _schedule_grid_cell("Group", wg, align="center")
+        + sep
+        + _schedule_grid_cell("Brief (ET)", wb, align="center")
+        + sep
+        + _schedule_grid_cell("Game", wgm, align="center")
+    )
+    outline.append(div_line)
     for gid, bc, gsm in merged_rows:
-        gsm_cell = gsm if len(gsm) <= col_game else gsm[: max(12, col_game - 5)] + " …"
-        outline.append(f"  {str(gid):>{wg}} │ {bc:^{wb}} │ {gsm_cell}")
+        outline.append(
+            ind
+            + _schedule_grid_cell(str(gid), wg, align="center")
+            + sep
+            + _schedule_grid_cell(bc, wb, align="center")
+            + sep
+            + _schedule_grid_cell(gsm, wgm, align="left")
+        )
     outline.append("")
     if pip_schedule:
         outline.append(color_text(
