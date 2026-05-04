@@ -1795,6 +1795,34 @@ def ensure_bet_snapshots(conn: sqlite3.Connection) -> None:
         pass
 
 
+def _snapshot_eval_status_for_prior(scored: object | None, market_key: str, mm: dict) -> str:
+    """
+    Align ``bet_snapshots.eval_status`` with the BET card / ``pick_is_actionable``.
+
+    Per-market ``market_evals`` can still show ``eval_status=BET`` while aggregate gates
+    (LHP heavy band, diversity, CLV, etc.) zero stake — PRIOR must not treat those as actionable.
+    """
+    raw = str((mm or {}).get("eval_status") or "").strip() or "NO_EDGE"
+    if scored is None:
+        return raw
+    if not bool(getattr(scored, "pick_is_actionable", False)):
+        return "NO_BET"
+    bs = getattr(scored, "best_side", None)
+    m_map = {
+        "away_ml": "ML",
+        "home_ml": "ML",
+        "over_total": "TOTAL",
+        "under_total": "TOTAL",
+        "away_rl": "RL",
+        "home_rl": "RL",
+    }
+    primary = m_map.get(str(bs or "").strip())
+    mk = str(market_key or "").strip().upper()
+    if primary and mk != primary and raw == "BET":
+        return "NO_BET"
+    return raw
+
+
 def save_bet_snapshot(
     conn: sqlite3.Connection,
     game_date: str,
@@ -1806,10 +1834,12 @@ def save_bet_snapshot(
     signals: list,
     *,
     placed_at: str | None = None,
+    eval_status_override: str | None = None,
 ) -> None:
     """
-    Persist a snapshot of the bet decision at placement time.
-    Called ONLY when stake > 0.
+    Persist a snapshot of model/market eval at brief time (audit + PRIOR).
+
+    ``eval_status_override`` when set wins over ``scored_game`` dict (parity with NO BET card).
     """
     import json
 
@@ -1855,12 +1885,15 @@ def save_bet_snapshot(
 
     try:
         eval_status = None
-        try:
-            if isinstance(scored_game, dict):
-                ev = scored_game.get("eval_status")
-                eval_status = (str(ev).strip() if ev is not None else None) or None
-        except Exception:
-            eval_status = None
+        if eval_status_override is not None:
+            eval_status = str(eval_status_override).strip() or None
+        else:
+            try:
+                if isinstance(scored_game, dict):
+                    ev = scored_game.get("eval_status")
+                    eval_status = (str(ev).strip() if ev is not None else None) or None
+            except Exception:
+                eval_status = None
 
         conn.execute(
             """
@@ -1990,53 +2023,6 @@ def backfill_missing_bet_snapshots_from_ledger(conn: sqlite3.Connection, game_da
         created += 1
 
     return created
-
-    now_et_string = _now_et().strftime("%Y-%m-%d %H:%M ET")
-    placed_at_txt = str(placed_at or "").strip() or now_et_string
-
-    # Pull the required fields off the market-eval dict we store on ScoredGame
-    try:
-        score = int(scored_game.get("score") or 0)
-    except Exception:
-        score = 0
-    try:
-        model_p = scored_game.get("model_p")
-        implied_p = scored_game.get("implied_p")
-        edge = scored_game.get("edge")
-        bet_side = str(scored_game.get("best_side") or "")
-    except Exception:
-        model_p = None
-        implied_p = None
-        edge = None
-        bet_side = ""
-
-    try:
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO bet_snapshots
-                (game_date, game_pk, market_type, bet_side, bet,
-                 odds_taken, score, model_p, implied_p, edge,
-                 signals_used, placed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                game_date,
-                int(game_pk),
-                str(market_type or "").strip().upper(),
-                bet_side,
-                str(bet or ""),
-                int(odds) if odds is not None else None,
-                int(score),
-                float(model_p) if model_p is not None else None,
-                float(implied_p) if implied_p is not None else None,
-                float(edge) if edge is not None else None,
-                json.dumps(list(signals or [])),
-                placed_at_txt,
-            ),
-        )
-        conn.commit()
-    except Exception:
-        return
 
 
 def save_signal_state(conn: sqlite3.Connection, game_date: str, session: str,
@@ -2333,6 +2319,7 @@ def _insert_bet_ledger_from_latest(
             # Do NOT apply any post-threshold filtering.
             signals_used = list(mm.get("signals") or [])
 
+            snap_es = _snapshot_eval_status_for_prior(sg, market_type, mm)
             save_bet_snapshot(
                 conn,
                 game_date,
@@ -2343,6 +2330,7 @@ def _insert_bet_ledger_from_latest(
                 mm,
                 signals_used,
                 placed_at=str(placed_at or ""),
+                eval_status_override=snap_es,
             )
         except Exception:
             return
@@ -4330,6 +4318,7 @@ def evaluate_signals(
                     for mt, mm in (out["market_evals"] or {}).items():
                         if not isinstance(mm, dict) or not mm.get("evaluated"):
                             continue
+                        snap_es = _snapshot_eval_status_for_prior(scored, str(mt), mm)
                         save_bet_snapshot(
                             conn,
                             gd,
@@ -4340,6 +4329,7 @@ def evaluate_signals(
                             mm,
                             list(mm.get("signals") or []),
                             placed_at=placed_at,
+                            eval_status_override=snap_es,
                         )
                 except Exception:
                     pass
