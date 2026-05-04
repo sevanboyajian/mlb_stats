@@ -27,12 +27,14 @@
 --    4. Odds          : game_odds, game_odds_f5, player_props, line_movement
 --    5. Backtesting   : model_predictions, backtest_results
 --    6. Operations    : ingest_log, odds_ingest_log, signal_state,
---                      shadow_filter_b_watch, bet_ledger,
+--                      shadow_filter_b_watch, bet_ledger, bet_snapshots,
 --                       brief_log, daily_pnl, brief_picks
 --    7. Pipeline      : pipeline_jobs, pipeline_job_runs, runner_lock
 -- ============================================================
 -- # CHANGE LOG (latest first)
 -- # -------------------------
+-- # 2026-05-02  bet_snapshots: prior-report source of truth (matches ensure_bet_snapshots /
+-- #              generate_daily_brief.save_bet_snapshot).
 -- # 2026-04-17  Consolidated application DDL into this file: game_probable_pitchers,
 -- #              brief_log, daily_pnl, brief_picks, game_odds_f5, v_closing_f5_odds,
 -- #              runner_lock; columns players.era_season, games.wind_source
@@ -987,6 +989,33 @@ CREATE TABLE IF NOT EXISTS brief_picks (
 -- One row per game+market per date (prevents duplicate staking across sessions).
 CREATE UNIQUE INDEX IF NOT EXISTS uq_brief_picks_game_market
 ON brief_picks (game_date, game_pk, market);
+
+
+-- ------------------------------------------------------------
+-- bet_snapshots
+-- Frozen model + market eval at placement time (stake > 0 only).
+-- PRIOR report FULL SLATE reads this table — it does not re-run score_game.
+-- Populated by generate_daily_brief.save_bet_snapshot and
+-- backfill_missing_bet_snapshots_from_ledger.
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS bet_snapshots (
+    game_date      TEXT    NOT NULL,
+    game_pk        INTEGER NOT NULL,
+    market_type    TEXT    NOT NULL,   -- 'ML' | 'TOTAL' | 'RL'
+    bet_side       TEXT    NOT NULL,
+    bet            TEXT    NOT NULL,
+    odds_taken     INTEGER,
+    score          INTEGER NOT NULL,
+    model_p        REAL,
+    implied_p      REAL,
+    edge           REAL,
+    eval_status    TEXT,               -- BET | SKIPPED_EDGE | NO_MODEL | NO_EDGE
+    signals_used   TEXT,               -- JSON array of signal display names
+    placed_at      TEXT    NOT NULL    -- ET timestamp (e.g. '2026-05-03 13:45 ET')
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ux_bet_snapshots_key
+    ON bet_snapshots (game_date, game_pk, market_type);
 
 
 -- ------------------------------------------------------------
