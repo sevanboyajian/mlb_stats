@@ -1,0 +1,76 @@
+-- One-time cleanup: phantom staked rows in bet_ledger vs brief_picks
+-- -----------------------------------------------------------------
+-- Preconditions:
+--   * Join keys: bet_ledger.game_date, game_pk, and market normalized to brief_picks.market.
+--   * brief_picks currently has NO stake_multiplier column in the main schema; the second
+--     DELETE block only applies after:
+--       ALTER TABLE brief_picks ADD COLUMN stake_multiplier REAL;
+--
+-- Preview counts (run before DELETE):
+--   See scripts/remove_phantom_bet_ledger.py which prints counts then optional --execute.
+
+-- market_type on bet_ledger: 'moneyline','total','spread' (from signal_state)
+-- market on brief_picks: 'ML','TOTAL','RL'
+
+-- -----------------------------------------------------------------
+-- 1) Staked ledger rows with no matching brief_picks (primary case for BAL/HOU/CWS phantoms)
+-- -----------------------------------------------------------------
+-- SELECT COUNT(*) AS n_orphans
+-- FROM bet_ledger bl
+-- LEFT JOIN brief_picks bp
+--   ON bp.game_date = bl.game_date
+--  AND bp.game_pk = bl.game_pk
+--  AND bp.market = (
+--        CASE trim(lower(COALESCE(bl.market_type, '')))
+--            WHEN 'moneyline' THEN 'ML'
+--            WHEN 'total' THEN 'TOTAL'
+--            WHEN 'spread' THEN 'RL'
+--            WHEN 'runline' THEN 'RL'
+--            ELSE trim(COALESCE(bl.market_type, ''))
+--        END
+--    )
+-- WHERE COALESCE(bl.stake_units, 0) > 0
+--   AND bp.id IS NULL;
+
+-- DELETE FROM bet_ledger
+-- WHERE id IN (
+--     SELECT bl.id
+--     FROM bet_ledger bl
+--     LEFT JOIN brief_picks bp
+--       ON bp.game_date = bl.game_date
+--      AND bp.game_pk = bl.game_pk
+--      AND bp.market = (
+--            CASE trim(lower(COALESCE(bl.market_type, '')))
+--                WHEN 'moneyline' THEN 'ML'
+--                WHEN 'total' THEN 'TOTAL'
+--                WHEN 'spread' THEN 'RL'
+--                WHEN 'runline' THEN 'RL'
+--                ELSE trim(COALESCE(bl.market_type, ''))
+--            END
+--        )
+--     WHERE COALESCE(bl.stake_units, 0) > 0
+--       AND bp.id IS NULL
+-- );
+
+-- -----------------------------------------------------------------
+-- 2) After stake_multiplier exists on brief_picks: delete staked rows tied to bp.stake_multiplier = 0
+-- -----------------------------------------------------------------
+-- DELETE FROM bet_ledger
+-- WHERE id IN (
+--     SELECT bl.id
+--     FROM bet_ledger bl
+--     INNER JOIN brief_picks bp
+--       ON bp.game_date = bl.game_date
+--      AND bp.game_pk = bl.game_pk
+--      AND bp.market = (
+--            CASE trim(lower(COALESCE(bl.market_type, '')))
+--                WHEN 'moneyline' THEN 'ML'
+--                WHEN 'total' THEN 'TOTAL'
+--                WHEN 'spread' THEN 'RL'
+--                WHEN 'runline' THEN 'RL'
+--                ELSE trim(COALESCE(bl.market_type, ''))
+--            END
+--        )
+--     WHERE COALESCE(bl.stake_units, 0) > 0
+--       AND bp.stake_multiplier = 0
+-- );
