@@ -203,3 +203,6 @@ EDGE_CLEAR = 0.06
 EDGE_STRONG = 0.06
 EDGE_MAX = 0.15
 
+# MV-F wind-fade: live execution gate (pp on away implied vs morning open). Enforced in score_game.
+MV_F_CLV_GATE = 0.5
+

@@ -6,6 +6,8 @@ Reads from mlb_stats.db and outputs the formatted betting brief.
 
 CHANGE LOG (latest first)
 ──────────────────────────
+2026-05-02  ``score_game``: MV-F uses ``edge_utils.MV_F_CLV_GATE`` (live CLV vs open); failing clears
+            staking and aligns cards/ledger with documented wind-fade execution policy.
 2026-05-02  ``ScoredGame.pick_is_actionable`` (see ``score_game._compute_pick_is_actionable``) gates
             BET cards, ``signal_state`` TOP/NEXT, ``brief_picks``, and ``bet_ledger`` inserts
             (``_ledger_signal_row_is_actionable`` re-scores at each row's ``recorded_at``).
@@ -721,12 +723,7 @@ WIND_IN_MIN_MPH    = 10
 WIND_OUT_MVB_MPH   = 15     # MV-B raised to 15 mph for higher signal confidence
 HOME_FAV_MV_F_LOW  = -130   # e.g. -130
 HOME_FAV_MV_F_HIGH = -160   # e.g. -160  (more negative = bigger fav)
-MV_F_CLV_GATE      = 0.5    # CLV gate (pp): only bet MV-F when opening away ML
-                             # implied prob is ≥0.5pp lower than closing implied.
-                             # Mar 2026 backtest (N=137): CLV≥+0.5pp → SBRO +24.0%
-                             # OW +10.6%. CLV<+0.5pp → SBRO −9.4%. Both eras pass.
-                             # This is a LIVE EXECUTION filter — compare current
-                             # away ML to the morning opening line at bet time.
+# MV-F CLV threshold (pp): single source in edge_utils.MV_F_CLV_GATE — applied in score_game.
 S1_PRICE_LOW       = -105   # S1 standalone lower price bound
 S1_PRICE_HIGH      = -170   # S1 standalone upper price bound
 DOG_IMPL_LOW       = 0.35   # 35%

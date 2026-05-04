@@ -23,6 +23,7 @@ from batch.pipeline.edge_utils import (
     EDGE_MAX,
     EDGE_MIN,
     EDGE_STRONG,
+    MV_F_CLV_GATE,
     american_to_implied_prob,
     compute_edge,
     fractional_kelly,
@@ -1289,6 +1290,28 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
     edge_ok = (edge is not None) and (edge >= EDGE_MIN) and (
         diversity_ok or owm_standalone_ok or wind_total_ok
     )
+
+    # MV-F documented live gate: any firing MV-F on away_ml requires CLV vs open ≥ MV_F_CLV_GATE (pp).
+    away_bucket = list(buckets.get("away_ml", []) or [])
+    mv_f_fires_here = any(
+        str(getattr(s, "signal_id", "") or "") == "MV-F" and bool(getattr(s, "fires", False))
+        for s in away_bucket
+    )
+    if (
+        best_side == "away_ml"
+        and mv_f_fires_here
+        and mkt.clv_available
+        and mkt.clv_away_delta is not None
+        and float(mkt.clv_away_delta) < float(MV_F_CLV_GATE)
+    ):
+        try:
+            d = float(mkt.clv_away_delta)
+            extra_flags.append(
+                f"MV-F CLV gate: away implied delta {d:+.2f}pp < +{float(MV_F_CLV_GATE):.1f}pp required — no bet"
+            )
+        except Exception:
+            extra_flags.append("MV-F CLV gate: insufficient positive CLV vs open — no bet")
+        edge_ok = False
 
     # Overall evaluation status (best-side ML only; totals/RL are per-market in market_evals)
     if model_p is None or implied_p is None:
