@@ -885,6 +885,47 @@ def _compute_pick_is_actionable(
     return bool(mm.get("edge_ok")) and str(mm.get("eval_status") or "") == "BET"
 
 
+def _align_market_evals_with_actionability(
+    market_evals: dict[str, Any],
+    *,
+    pick_is_actionable: bool,
+    best_side: str | None,
+) -> None:
+    """
+    Mutate per-market rows so ``eval_status`` / ``edge_ok`` match the single brief gate
+    (``pick_is_actionable``): same predicate as ``format_bet_block`` / ``bet_snapshots``.
+
+    Raw ML rows can show ``BET`` from edge math while aggregate rules zero stake
+    (e.g. MV-F without diversity + context, CLV veto, venue suppression reflected in stake).
+    """
+    if not isinstance(market_evals, dict):
+        return
+    mk_map = {
+        "away_ml": "ML",
+        "home_ml": "ML",
+        "over_total": "TOTAL",
+        "under_total": "TOTAL",
+        "away_rl": "RL",
+        "home_rl": "RL",
+    }
+    primary = mk_map.get(str(best_side or "").strip())
+
+    for mk, mm in market_evals.items():
+        if not isinstance(mm, dict) or not mm.get("evaluated"):
+            continue
+        if not pick_is_actionable:
+            mm["eval_status"] = "NO_BET"
+            mm["edge_ok"] = False
+            continue
+        if (
+            primary
+            and str(mk).strip().upper() != primary
+            and str(mm.get("eval_status") or "").strip() == "BET"
+        ):
+            mm["eval_status"] = "NO_BET"
+            mm["edge_ok"] = False
+
+
 @dataclass
 class ScoredGame:
     game: FullyDressedGame
@@ -1431,6 +1472,15 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
         int(best_score),
         market_evals,
     )
+
+    _align_market_evals_with_actionability(
+        market_evals,
+        pick_is_actionable=pick_is_actionable,
+        best_side=best_side,
+    )
+
+    if not pick_is_actionable and str(eval_status or "").strip() == "BET":
+        eval_status = "NO_BET"
 
     return ScoredGame(
         game=g,

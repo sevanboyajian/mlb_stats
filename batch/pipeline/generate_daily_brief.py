@@ -6,6 +6,10 @@ Reads from mlb_stats.db and outputs the formatted betting brief.
 
 CHANGE LOG (latest first)
 ──────────────────────────
+2026-05-03  ``score_game._align_market_evals_with_actionability``: per-market ``eval_status`` / ``edge_ok``
+            aligned with ``pick_is_actionable`` (same gate as ``format_bet_block`` / ``bet_snapshots``);
+            fixes MV-F ML rows showing ``BET`` while aggregate gates suppress the card.  ``format_bet_block``
+            stake line: ``pick_is_actionable is True`` only (no legacy ``None`` → ``stake_multiplier``).
 2026-05-02  ``score_game``: MV-F uses ``edge_utils.MV_F_CLV_GATE`` (live CLV vs open); failing clears
             staking and aligns cards/ledger with documented wind-fade execution policy.
 2026-05-02  ``ScoredGame.pick_is_actionable`` (see ``score_game._compute_pick_is_actionable``) gates
@@ -4536,8 +4540,9 @@ def format_bet_block(scored_game: object, *, is_late_signal: bool = False) -> st
     """
     tier = getattr(scored_game, "output_tier", None)
     sm = float(getattr(scored_game, "stake_multiplier", 0.0) or 0.0)
-    actionable = getattr(scored_game, "pick_is_actionable", None)
-    stake = 0.0 if actionable is False else sm
+    # Single gate with ``bet_snapshots`` / ``save_brief_picks``: explicit True only (not ``None`` legacy).
+    actionable = bool(getattr(scored_game, "pick_is_actionable", False))
+    stake = sm if actionable else 0.0
     best_score = int(getattr(scored_game, "best_aggregate_score", 0) or 0)
     confidence = score_to_confidence(best_score)
     tier_txt = tier_label(tier)
