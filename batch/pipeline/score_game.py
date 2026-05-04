@@ -852,6 +852,38 @@ def _compute_confidence_score(
     return score, basis
 
 
+def _compute_pick_is_actionable(
+    stake: float,
+    best_side: str | None,
+    best_aggregate_score: int,
+    market_evals: dict[str, Any],
+) -> bool:
+    """
+    Single predicate for BET card / brief persistence / bet_ledger materialization parity.
+    Requires nonzero stake, publishable aggregate score, and per-market edge alignment
+    when that market has a full market_eval row.
+    """
+    if float(stake) <= 0 or not best_side:
+        return False
+    if int(best_aggregate_score) < 5:
+        return False
+    mk_map = {
+        "away_ml": "ML",
+        "home_ml": "ML",
+        "over_total": "TOTAL",
+        "under_total": "TOTAL",
+        "away_rl": "RL",
+        "home_rl": "RL",
+    }
+    mk = mk_map.get(str(best_side).strip())
+    if not mk:
+        return True
+    mm = market_evals.get(mk) if isinstance(market_evals, dict) else None
+    if not isinstance(mm, dict) or not mm.get("evaluated"):
+        return True
+    return bool(mm.get("edge_ok")) and str(mm.get("eval_status") or "") == "BET"
+
+
 @dataclass
 class ScoredGame:
     game: FullyDressedGame
@@ -861,6 +893,8 @@ class ScoredGame:
     output_tier: str | None
     tier_basis: str
     stake_multiplier: float
+    # True only when the published pick card is a real BET (matches NO BET / ledger gates).
+    pick_is_actionable: bool
     top_pick: SignalFinding | None
     data_flags: list[str]
     active_bets: list[SignalFinding] = field(default_factory=list)
@@ -1368,6 +1402,13 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
             "Staking independently (validated: 69% win rate, 116 games, 2025)."
         )
 
+    pick_is_actionable = _compute_pick_is_actionable(
+        float(stake),
+        best_side,
+        int(best_score),
+        market_evals,
+    )
+
     return ScoredGame(
         game=g,
         signals_fired=scored_signals,
@@ -1376,6 +1417,7 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
         output_tier=tier,
         tier_basis=stake_basis,
         stake_multiplier=stake,
+        pick_is_actionable=pick_is_actionable,
         top_pick=top_pick,
         data_flags=data_flags,
         active_bets=active_bets,

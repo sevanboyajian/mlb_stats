@@ -6,6 +6,9 @@ Reads from mlb_stats.db and outputs the formatted betting brief.
 
 CHANGE LOG (latest first)
 ──────────────────────────
+2026-05-02  ``ScoredGame.pick_is_actionable`` (see ``score_game._compute_pick_is_actionable``) gates
+            BET cards, ``signal_state`` TOP/NEXT, ``brief_picks``, and ``bet_ledger`` inserts
+            (``_ledger_signal_row_is_actionable`` re-scores at each row's ``recorded_at``).
 2026-05-02  Word (``build_docx_from_text``): PRIMARY BRIEF ALERT SCHEDULE parses into a 3-column
             table (15/25/40 width ratio) instead of proportional plain text; second banner line centred.
 2026-05-02  Forward brief banner: title line sans date + second line ``slate-date · hh:mm AM/PM ET``;
@@ -2044,8 +2047,9 @@ def save_signal_state(conn: sqlite3.Connection, game_date: str, session: str,
                       avoid_entries: list, now: datetime.datetime | None = None) -> None:
     """Persist TOP / NEXT (up to 5) / AVOID signals into signal_state (append-only).
 
-    TOP/NEXT rows are written only when the pick entry has ``ScoredGame.stake_multiplier > 0``
-    (parity with brief STAKE / NO BET and ``save_brief_picks``). Callers should pass the first
+    TOP/NEXT rows are written only when ``_scored_pick_stake_units(entry) > 0``
+    (``ScoredGame.pick_is_actionable`` + stake; parity with brief STAKE / NO BET and ``save_brief_picks``).
+    Callers should pass the first
     staked ranks as ``top_entry`` / ``next_entries`` when the slate is sorted by stake first.
     """
     if not PERSIST_WRITES:
@@ -2225,6 +2229,41 @@ def _ledger_latest_from_signal_rows(
     return latest
 
 
+def _ledger_signal_row_is_actionable(conn: sqlite3.Connection, game_date: str, r: sqlite3.Row) -> bool:
+    """Re-score at the row's recorded_at and require ScoredGame.pick_is_actionable (ledger/brief parity)."""
+    st = (r["signal_type"] or "").strip()
+    if st not in ("top", "next"):
+        return True
+    rec_dt = _parse_recorded_at_et_ledger(r["recorded_at"])
+    as_of = rec_dt if rec_dt is not None else _now_et()
+    try:
+        games = load_games(conn, game_date, verbose=False, as_of_dt=as_of)
+    except Exception:
+        return False
+    gmap = {int(g["game_pk"]): g for g in games if g.get("game_pk") is not None}
+    game = gmap.get(int(r["game_pk"]))
+    if not game:
+        return False
+    try:
+        team_ids = list({int(game["home_team_id"]), int(game["away_team_id"])})
+    except Exception:
+        return False
+    try:
+        streaks = load_streaks(conn, game_date, team_ids, verbose=False)
+        starters = load_starters(conn, game_date, verbose=False)
+    except Exception:
+        return False
+    sess = str(r["session"] or "primary").strip() or "primary"
+    try:
+        sigs = evaluate_signals(conn, game, streaks, sess, starters)
+    except Exception:
+        return False
+    sg = sigs.get("_scored_game")
+    if sg is None:
+        return False
+    return bool(getattr(sg, "pick_is_actionable", False))
+
+
 def _insert_bet_ledger_from_latest(
     conn: sqlite3.Connection,
     game_date: str,
@@ -2326,10 +2365,17 @@ def _insert_bet_ledger_from_latest(
     except Exception:
         # Best-effort; fall back to unique index behavior only.
         pass
+    actionable_cache: dict[tuple, bool] = {}
     for (_gpk, _mt, _st), (_dt, r) in latest.items():
         sig_type = (r["signal_type"] or "").strip()
         if sig_type not in ("top", "next", "avoid"):
             continue
+        if sig_type in ("top", "next"):
+            ck = (int(r["game_pk"]), str(r["session"] or ""), str(r["recorded_at"] or ""))
+            if ck not in actionable_cache:
+                actionable_cache[ck] = _ledger_signal_row_is_actionable(conn, game_date, r)
+            if not actionable_cache[ck]:
+                continue
         mt = str(r["market_type"] or "")
         stake = 0.0 if sig_type == "avoid" else 1.0
         odds_val = None if sig_type == "avoid" else r["odds"]
@@ -3206,12 +3252,24 @@ def _log_suppressed_brief_pick(entry: dict, pick: dict, scored: object | None) -
         pass
 
 
-def _scored_pick_stake_units(entry: dict) -> float:
-    sg = (entry.get("sigs") or {}).get("_scored_game")
+def _effective_stake_for_scored_game(sg: object | None) -> float:
+    """Stake units for ranking / persistence when ``pick_is_actionable`` is present; else legacy stake only."""
+    if sg is None:
+        return 0.0
     try:
-        return float(getattr(sg, "stake_multiplier", 0.0) or 0.0) if sg is not None else 0.0
+        sm = float(getattr(sg, "stake_multiplier", 0.0) or 0.0)
+        pa = getattr(sg, "pick_is_actionable", None)
+        if pa is False:
+            return 0.0
+        if pa is True:
+            return sm
+        return sm
     except Exception:
         return 0.0
+
+
+def _scored_pick_stake_units(entry: dict) -> float:
+    return _effective_stake_for_scored_game((entry.get("sigs") or {}).get("_scored_game"))
 
 
 def save_brief_picks(
@@ -4228,6 +4286,7 @@ def evaluate_signals(
             "output_tier": None,
             "tier_basis": "",
             "stake_multiplier": 0.0,
+            "pick_is_actionable": False,
             "_scored_game": None,
             "market_evals": {},
         }
@@ -4249,6 +4308,7 @@ def evaluate_signals(
             "output_tier": None,
             "tier_basis": "",
             "stake_multiplier": 0.0,
+            "pick_is_actionable": False,
             "_scored_game": None,
             "market_evals": {},
         }
@@ -4258,6 +4318,7 @@ def evaluate_signals(
             out["output_tier"] = scored.output_tier
             out["tier_basis"] = scored.tier_basis
             out["stake_multiplier"] = scored.stake_multiplier
+            out["pick_is_actionable"] = bool(getattr(scored, "pick_is_actionable", False))
             if verbose and scored.tier_basis:
                 ab = f"{fdg.identifiers.away_team_abbr}@{fdg.identifiers.home_team_abbr}"
                 print(f"  [verbose] score {ab}: tier={scored.output_tier!r} | {scored.tier_basis}")
@@ -4302,6 +4363,7 @@ def evaluate_signals(
                 "output_tier": scored.output_tier,
                 "tier_basis": scored.tier_basis or "",
                 "stake_multiplier": float(scored.stake_multiplier or 0.0),
+                "pick_is_actionable": bool(getattr(scored, "pick_is_actionable", False)),
                 "_scored_game": scored,
                 "market_evals": getattr(scored, "market_evals", {}) or {},
             }
@@ -4486,7 +4548,9 @@ def format_bet_block(scored_game: object, *, is_late_signal: bool = False) -> st
     When ``is_late_signal`` is True and stake > 0, appends a caution after the STAKE line.
     """
     tier = getattr(scored_game, "output_tier", None)
-    stake = float(getattr(scored_game, "stake_multiplier", 0.0) or 0.0)
+    sm = float(getattr(scored_game, "stake_multiplier", 0.0) or 0.0)
+    actionable = getattr(scored_game, "pick_is_actionable", None)
+    stake = 0.0 if actionable is False else sm
     best_score = int(getattr(scored_game, "best_aggregate_score", 0) or 0)
     confidence = score_to_confidence(best_score)
     tier_txt = tier_label(tier)
@@ -6038,10 +6102,7 @@ def build_primary_brief(games, streaks, starters, game_date,
         if sg is None:
             lean_entries.append(e)
             continue
-        try:
-            st = float(getattr(sg, "stake_multiplier", 0.0) or 0.0)
-        except Exception:
-            st = 0.0
+        st = _effective_stake_for_scored_game(sg)
         if st > 0:
             bet_entries.append(e)
         else:
@@ -6067,10 +6128,7 @@ def build_primary_brief(games, streaks, starters, game_date,
         sg = (e.get("sigs") or {}).get("_scored_game")
         if sg is None:
             continue
-        try:
-            st = float(getattr(sg, "stake_multiplier", 0.0) or 0.0)
-        except Exception:
-            st = 0.0
+        st = _effective_stake_for_scored_game(sg)
         if st <= 0:
             continue
         # Prefer readable bet label from the scored object
@@ -6110,10 +6168,7 @@ def build_primary_brief(games, streaks, starters, game_date,
 
     def _entry_rank(e: dict) -> tuple[int, float, int, int]:
         sg = (e.get("sigs") or {}).get("_scored_game")
-        try:
-            st = float(getattr(sg, "stake_multiplier", 0.0) or 0.0) if sg is not None else 0.0
-        except Exception:
-            st = 0.0
+        st = _effective_stake_for_scored_game(sg) if sg is not None else 0.0
         try:
             edge = float(getattr(sg, "edge", 0.0) or 0.0) if sg is not None else 0.0
         except Exception:
