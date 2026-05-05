@@ -76,6 +76,14 @@ SIGNAL_STRENGTH: dict[str, str] = {
 
 WIND_SIGNAL_IDS = frozenset({"MV-F", "MV-B", "H3b"})
 
+# ML market signals with an explicit recommended side (``bet_side`` is home_ml or away_ml).
+# If such a signal fires on the opposite ML side from the scored pick, it must not appear
+# as a supporting Core signal on the card and must not be double-counted (buckets already
+# separate sides; card text formerly listed all ``signals_fired``).
+ML_DIRECTIONAL_CONFLICT_SIGNAL_IDS: frozenset[str] = frozenset(
+    {"OWM", "S1H2", "S1+H2", "MV-F", "LHP_FADE", "S1", "NF4"}
+)
+
 SIGNAL_BASE_SCORE: dict[str, int] = {
     "S1H2": 8,
     "MV-F": 8,
@@ -703,6 +711,31 @@ def _is_hostile_environment(g: FullyDressedGame, signal: SignalFinding) -> bool:
         if env.wind_out:
             return True
     return False
+
+
+def _collect_opposing_ml_directional_signals(
+    best_side: str | None,
+    scored_signals: list[SignalFinding],
+) -> list[SignalFinding]:
+    """
+    Fired ML-directional signals whose ``bet_side`` is the opposite ML bucket from ``best_side``.
+
+    Used for brief warnings and ``ScoredGame.contradicted`` — detection logic is unchanged.
+    """
+    if best_side not in ("away_ml", "home_ml"):
+        return []
+    want_opp = "home_ml" if best_side == "away_ml" else "away_ml"
+    out: list[SignalFinding] = []
+    for s in scored_signals:
+        if not bool(s.fires):
+            continue
+        sid = str(s.signal_id or "").strip()
+        if sid not in ML_DIRECTIONAL_CONFLICT_SIGNAL_IDS:
+            continue
+        bs = str(s.bet_side or "").strip()
+        if bs == want_opp:
+            out.append(s)
+    return out
 
 
 def _avoid_affects_top(avoids: list[AvoidFinding], top: SignalFinding) -> bool:
@@ -1482,6 +1515,27 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
     if not pick_is_actionable and str(eval_status or "").strip() == "BET":
         eval_status = "NO_BET"
 
+    opposing_ml = _collect_opposing_ml_directional_signals(best_side, scored_signals)
+    if opposing_ml:
+        home_abbr = (g.identifiers.home_team_abbr or "").strip() or "HOME"
+        away_abbr = (g.identifiers.away_team_abbr or "").strip() or "AWAY"
+        pick_away = best_side == "away_ml"
+        for s in opposing_ml:
+            sid = str(s.signal_id or "").strip()
+            lbl = signal_display_name(sid)
+            if sid == "OWM":
+                # OWM always recommends home_ml; only appears in opposing_ml when the pick is away_ml.
+                msg = (
+                    f"⚠ SIGNAL CONFLICT: OWM fires for {home_abbr} ML — contradicts this {away_abbr} ML pick."
+                )
+            else:
+                backs = away_abbr if str(s.bet_side) == "away_ml" else home_abbr
+                pick_team = away_abbr if pick_away else home_abbr
+                msg = (
+                    f"⚠ SIGNAL CONFLICT: {lbl} supports {backs} ML — contradicts this {pick_team} ML pick."
+                )
+            data_flags.append(msg)
+
     return ScoredGame(
         game=g,
         signals_fired=scored_signals,
@@ -1496,7 +1550,7 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
         active_bets=active_bets,
         all_bets=scored_signals,
         watch_list=[],
-        contradicted=[],
+        contradicted=opposing_ml,
         aggregated_by_side=aggregated_scores,
         best_side=best_side,
         best_aggregate_score=int(best_score),
@@ -1558,7 +1612,7 @@ def scored_game_to_eval_dict(scored: ScoredGame, session: str) -> dict[str, Any]
     mkt = g.market
 
     # Internal ids (model fire order) + July reinforcer as synthetic tag (analytics)
-    internal_signal_ids: list[str] = [s.signal_id for s in scored.signals_fired]
+    internal_signal_ids: list[str] = [s.signal_id for s in scored.signals_fired if s.fires]
 
     gdb = _gdb()
     month = _game_month(ids.game_date_et)
@@ -1571,20 +1625,31 @@ def scored_game_to_eval_dict(scored: ScoredGame, session: str) -> dict[str, Any]
         and pf >= gdb.JULY_OVER_MIN_PF
         and not g.environment.is_wind_suppressed
     )
-    fired_id_set = {s.signal_id for s in scored.signals_fired}
-    if july_ok and (fired_id_set & {"H3b", "MV-B"}) and "JulyOVER" not in internal_signal_ids:
+    fired_id_set = {s.signal_id for s in scored.signals_fired if s.fires}
+    if (
+        july_ok
+        and scored.best_side == "over_total"
+        and (fired_id_set & {"H3b", "MV-B"})
+        and "JulyOVER" not in internal_signal_ids
+    ):
         internal_signal_ids.append("JulyOVER")
 
-    # Brief: (signal_id, per-signal confidence) for display grouping — sorted by score in output
+    # Brief: only signals that support the scored pick (same ``bet_side`` bucket as ``best_side``).
+    # Using all ``signals_fired`` used to list opposing ML signals (e.g. OWM on home) on away-ML cards.
     brief_findings: list[tuple[str, int]] = [
-        (s.signal_id, int(s.confidence_score or 0)) for s in scored.signals_fired
+        (s.signal_id, int(s.confidence_score or 0))
+        for s in (scored.active_bets or [])
+        if bool(s.fires)
     ]
-    if july_ok and (fired_id_set & {"H3b", "MV-B"}) and "JulyOVER" not in {
-        a for a, _ in brief_findings
-    }:
+    if (
+        july_ok
+        and scored.best_side == "over_total"
+        and (fired_id_set & {"H3b", "MV-B"})
+        and "JulyOVER" not in {a for a, _ in brief_findings}
+    ):
         july_sc = 5
         for s in scored.signals_fired:
-            if s.signal_id in ("H3b", "MV-B"):
+            if s.signal_id in ("H3b", "MV-B") and s.fires:
                 july_sc = max(july_sc, int(s.confidence_score or 0))
         brief_findings.append(("JulyOVER", july_sc))
 

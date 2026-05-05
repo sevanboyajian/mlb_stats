@@ -4527,14 +4527,37 @@ def color_text(text: str, color: str) -> str:
     return f"{c}{text}{r}"
 
 
+def _signals_for_pick_card(scored_game: object) -> list:
+    """
+    Signals that belong to the scored pick bucket only (``active_bets``).
+
+    ``signals_fired`` includes every evaluated signal across all bet sides; using it on the
+    card incorrectly listed opposing ML signals (e.g. OWM on home) on an away-ML pick.
+    """
+    active = list(getattr(scored_game, "active_bets", []) or [])
+    if active:
+        return [s for s in active if bool(getattr(s, "fires", False))]
+    return []
+
+
+def _signal_conflict_lines_for_card(scored_game: object) -> list[str]:
+    """Human conflict warnings added in ``score_game`` (``data_flags`` prefix)."""
+    out: list[str] = []
+    for fl in getattr(scored_game, "data_flags", []) or []:
+        t = str(fl).strip()
+        if t.startswith("⚠ SIGNAL CONFLICT:"):
+            out.append(t)
+    return out
+
+
 def format_bet_block(scored_game: object, *, is_late_signal: bool = False) -> str:
     """
     ASCII pick card from a ``ScoredGame`` (primary / additional brief rows).
 
     ``[HIGH · nn%]`` uses **game** ``best_aggregate_score`` + ``output_tier``.
-    BET shows the aggregate bucket id (e.g. ``AWAY_ML``). Signals: all
-    ``signals_fired``, sorted by per-signal ``confidence_score``, grouped
-    Core (≥7) / Support (5–6) / Minor (≤4) with ``humanize_signal`` labels.
+    BET shows the aggregate bucket id (e.g. ``AWAY_ML``). Signals:
+    **pick-aligned** only (``active_bets`` / same ``bet_side`` as ``best_side``), sorted
+    by per-signal ``confidence_score``, grouped Core (≥7) / Support (5–6) / Minor (≤4).
 
     When ``is_late_signal`` is True and stake > 0, appends a caution after the STAKE line.
     """
@@ -4547,7 +4570,7 @@ def format_bet_block(scored_game: object, *, is_late_signal: bool = False) -> st
     confidence = score_to_confidence(best_score)
     tier_txt = tier_label(tier)
 
-    grouped = group_signals(list(getattr(scored_game, "signals_fired", []) or []))
+    grouped = group_signals(_signals_for_pick_card(scored_game))
 
     def fmt_group(label: str, items: list[str]) -> str:
         return f"{label}: " + " · ".join(items) if items else ""
@@ -4566,6 +4589,9 @@ def format_bet_block(scored_game: object, *, is_late_signal: bool = False) -> st
         signal_lines = "(none)"
 
     why_line = generate_why_line(list(getattr(scored_game, "active_bets", []) or []))
+    conflict_txt = ""
+    for c in _signal_conflict_lines_for_card(scored_game):
+        conflict_txt += f"│\n│  {c}\n"
 
     pick = getattr(scored_game, "top_pick", None)
     best_side = getattr(scored_game, "best_side", None)
@@ -4608,7 +4634,7 @@ def format_bet_block(scored_game: object, *, is_late_signal: bool = False) -> st
 {head_line}
 │
 │  {why_line}
-│
+{conflict_txt}│
 │  SIGNAL:
 {signal_lines}
 │
@@ -4622,8 +4648,10 @@ def signal_summary_for_doc(sigs: dict) -> str:
     """Word table SIGNAL column: same Core / Support / Minor grouping as ``format_bet_block``."""
     sg = sigs.get("_scored_game")
     if sg is not None:
-        grouped = group_signals(list(getattr(sg, "signals_fired", []) or []))
+        grouped = group_signals(_signals_for_pick_card(sg))
         parts: list[str] = []
+        for c in _signal_conflict_lines_for_card(sg):
+            parts.append(c)
         if grouped["Core"]:
             parts.append("Core: " + " · ".join(grouped["Core"]))
         if grouped["Support"]:
