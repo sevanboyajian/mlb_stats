@@ -151,3 +151,17 @@
 [job] start_et=2026-05-04 18:55:25 ET (claimed)
 [job] end_et=2026-05-04 18:55:42 ET status=complete rc=0
 [run_pipeline] sleep-until-due: next pending at 2026-05-04 19:10 ET (~900s)
+
+[job] id=1386 type=group_brief job_date_et=2026-05-04 game_group_id=3 scheduled_time=2026-05-04 19:10 ET
+[job] command='python batch/pipeline/generate_daily_brief.py --session primary --date 2026-05-04 --as-of "2026-05-04 19:10" --game-group-id 3'
+[job] context: group_id=3 window=[2026-05-04 19:10 ET -> 2026-05-04 19:12 ET]
+[job] start_et=2026-05-04 19:10:42 ET (claimed)
+[job] end_et=2026-05-04 19:10:46 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-04 19:12 ET (~120s)
+
+[job] id=1390 type=ledger_snapshot job_date_et=2026-05-04 game_group_id=3 scheduled_time=2026-05-04 19:12 ET
+[job] command='python batch/pipeline/daily_results_report.py --date 2026-05-04'
+[job] context: group_id=3 window=[2026-05-04 19:10 ET -> 2026-05-04 19:40 ET]
+[job] start_et=2026-05-04 19:12:46 ET (claimed)
+[job] end_et=2026-05-04 19:12:46 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-04 20:08 ET (~3360s)
