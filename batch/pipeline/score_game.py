@@ -1279,7 +1279,35 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
             best_score = total
             best_side = side
 
+    # --- ML directional conflict: penalize winning aggregate by opposing-side ML signals ---
+    # Buckets already separate home vs away; OWM never appears in away_ml. Cross-side signals
+    # (e.g. OWM on home while pick is away_ml) still inflated ranking perception until display-only
+    # fixes — subtract their confidence total from the *pick* aggregate so MODEL SCORE / snapshots
+    # align with “no credit” for contradictory drivers (same list as ``contradicted``).
+    opposing_ml = _collect_opposing_ml_directional_signals(best_side, scored_signals)
+    ml_direction_penalty = sum(int(s.confidence_score or 0) for s in opposing_ml)
+    if ml_direction_penalty and best_side:
+        best_score = max(0, int(best_score) - ml_direction_penalty)
+        aggregated_scores[best_side] = int(best_score)
+        extra_flags.append(
+            f"ML directional penalty −{ml_direction_penalty} "
+            f"(opposing signals: {', '.join(s.signal_id for s in opposing_ml)})"
+        )
+
     agg_best_score = int(best_score)
+
+    # Sync ML market_eval score when it tracks the same winning ML side (bet_snapshots / PRIOR).
+    try:
+        ml_ev = market_evals.get("ML")
+        if (
+            isinstance(ml_ev, dict)
+            and ml_ev.get("evaluated")
+            and str(ml_ev.get("best_side") or "") == str(best_side or "")
+            and best_side in ("away_ml", "home_ml")
+        ):
+            ml_ev["score"] = int(aggregated_scores.get(best_side, 0) or 0)
+    except Exception:
+        pass
 
     # --- env_ceiling penalty (soft, never blocks) ---
     env_penalty = 0
@@ -1515,7 +1543,6 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
     if not pick_is_actionable and str(eval_status or "").strip() == "BET":
         eval_status = "NO_BET"
 
-    opposing_ml = _collect_opposing_ml_directional_signals(best_side, scored_signals)
     if opposing_ml:
         home_abbr = (g.identifiers.home_team_abbr or "").strip() or "HOME"
         away_abbr = (g.identifiers.away_team_abbr or "").strip() or "AWAY"
