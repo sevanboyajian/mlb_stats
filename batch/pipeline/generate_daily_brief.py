@@ -1777,6 +1777,8 @@ def ensure_bet_snapshots(conn: sqlite3.Connection) -> None:
             implied_p      REAL,
             edge           REAL,
             eval_status    TEXT,
+            conflict_penalty INTEGER DEFAULT 0,
+            conflict_signals TEXT DEFAULT NULL,
             signals_used   TEXT,               -- JSON list[str]
             placed_at      TEXT    NOT NULL    -- ET timestamp string
         )
@@ -1794,9 +1796,42 @@ def ensure_bet_snapshots(conn: sqlite3.Connection) -> None:
         cols = [r[1] for r in conn.execute("PRAGMA table_info(bet_snapshots)").fetchall()]
         if cols and "eval_status" not in cols:
             conn.execute("ALTER TABLE bet_snapshots ADD COLUMN eval_status TEXT")
+        if cols and "conflict_penalty" not in cols:
+            conn.execute("ALTER TABLE bet_snapshots ADD COLUMN conflict_penalty INTEGER DEFAULT 0")
+        if cols and "conflict_signals" not in cols:
+            conn.execute("ALTER TABLE bet_snapshots ADD COLUMN conflict_signals TEXT DEFAULT NULL")
+        if cols:
             conn.commit()
     except Exception:
         pass
+
+
+def _parse_snapshot_conflict_from_flags(data_flags: object) -> tuple[int, str | None]:
+    """
+    Extract ``ML directional penalty −N (opposing signals: A, B)`` from score_game flags.
+
+    score_game uses a Unicode minus (U+2212); accept ASCII '-' as a defensive fallback.
+    Store the penalty as a positive integer so queries can use ``conflict_penalty > 0``.
+    """
+    try:
+        flags = list(data_flags or [])
+    except Exception:
+        flags = []
+    for raw in flags:
+        s = str(raw or "").strip()
+        if not s.startswith("ML directional penalty"):
+            continue
+        try:
+            import re
+
+            m = re.search(r"ML directional penalty\s*[−-]\s*(\d+)", s)
+            penalty = int(m.group(1)) if m else 0
+            sm = re.search(r"\(opposing signals:\s*([^)]+)\)", s)
+            signals = sm.group(1).strip() if sm else None
+            return penalty, (signals or None)
+        except Exception:
+            return 0, None
+    return 0, None
 
 
 def _snapshot_eval_status_for_prior(scored: object | None, market_key: str, mm: dict) -> str:
@@ -1839,6 +1874,7 @@ def save_bet_snapshot(
     *,
     placed_at: str | None = None,
     eval_status_override: str | None = None,
+    data_flags: object = None,
 ) -> None:
     """
     Persist a snapshot of model/market eval at brief time (audit + PRIOR).
@@ -1899,13 +1935,23 @@ def save_bet_snapshot(
             except Exception:
                 eval_status = None
 
+        conflict_penalty, conflict_signals = _parse_snapshot_conflict_from_flags(
+            data_flags
+            if data_flags is not None
+            else (
+                scored_game.get("data_flags")
+                if isinstance(scored_game, dict)
+                else getattr(scored_game, "data_flags", None)
+            )
+        )
+
         conn.execute(
             """
             INSERT OR REPLACE INTO bet_snapshots
                 (game_date, game_pk, market_type, bet_side, bet,
                  odds_taken, score, model_p, implied_p, edge, eval_status,
-                 signals_used, placed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 conflict_penalty, conflict_signals, signals_used, placed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(game_date),
@@ -1919,6 +1965,8 @@ def save_bet_snapshot(
                 float(implied_p) if implied_p is not None else None,
                 float(edge) if edge is not None else None,
                 eval_status,
+                int(conflict_penalty or 0),
+                conflict_signals,
                 json.dumps(list(signals or [])),
                 placed_at_txt,
             ),
@@ -2335,6 +2383,7 @@ def _insert_bet_ledger_from_latest(
                 signals_used,
                 placed_at=str(placed_at or ""),
                 eval_status_override=snap_es,
+                data_flags=getattr(sg, "data_flags", None),
             )
         except Exception:
             return
@@ -4334,6 +4383,7 @@ def evaluate_signals(
                             list(mm.get("signals") or []),
                             placed_at=placed_at,
                             eval_status_override=snap_es,
+                            data_flags=getattr(scored, "data_flags", None),
                         )
                 except Exception:
                     pass

@@ -1010,6 +1010,8 @@ CREATE TABLE IF NOT EXISTS bet_snapshots (
     implied_p      REAL,
     edge           REAL,
     eval_status    TEXT,               -- BET | SKIPPED_EDGE | NO_MODEL | NO_EDGE
+    conflict_penalty INTEGER DEFAULT 0, -- positive directional conflict penalty applied to score
+    conflict_signals TEXT DEFAULT NULL, -- opposing signal ids that triggered the penalty
     signals_used   TEXT,               -- JSON array of signal display names
     placed_at      TEXT    NOT NULL    -- ET timestamp (e.g. '2026-05-03 13:45 ET')
 );
