@@ -617,19 +617,19 @@ def build_docx_from_text(session: str, game_date: str, brief_text: str) -> "Docu
             continue
 
         # Section headings (Top Pick / No Signal / Ledger Summary etc.)
-        if any(
-            k in s.upper()
-            for k in (
-                "TOP PICK",
-                "ADDITIONAL MODEL SELECTIONS",
-                "NO SIGNAL",
-                "BET LEDGER SUMMARY",
-                "SIGNAL TRACKER",
-                "HOT PITCHER",
-                "PITCHER STREAK",
-                "TODAY'S SLATE",
-                "TODAYS SLATE",
-            )
+        # IMPORTANT: use "starts with" checks, not substring checks.
+        # PRIOR report bet lines contain "SIGNAL: No Signal" which must NOT become a big/bold heading.
+        su = s.upper()
+        if (
+            su.startswith("TOP PICK")
+            or su.startswith("ADDITIONAL MODEL SELECTIONS")
+            or su.startswith("NO SIGNAL")
+            or su.startswith("BET LEDGER SUMMARY")
+            or su.startswith("SIGNAL TRACKER")
+            or su.startswith("HOT PITCHER")
+            or su.startswith("PITCHER STREAK")
+            or su.startswith("TODAY'S SLATE")
+            or su.startswith("TODAYS SLATE")
         ):
             _add_line(s, size_pt=12, bold=True)
             continue
