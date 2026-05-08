@@ -1939,15 +1939,22 @@ def save_bet_snapshot(
             except Exception:
                 eval_status = None
 
-        conflict_penalty, conflict_signals = _parse_snapshot_conflict_from_flags(
-            data_flags
-            if data_flags is not None
-            else (
-                scored_game.get("data_flags")
-                if isinstance(scored_game, dict)
-                else getattr(scored_game, "data_flags", None)
+        if str(eval_status or "").strip() != "BET":
+            return
+
+        market_key = str(market_type or "").strip().upper()
+        if market_key == "ML":
+            conflict_penalty, conflict_signals = _parse_snapshot_conflict_from_flags(
+                data_flags
+                if data_flags is not None
+                else (
+                    scored_game.get("data_flags")
+                    if isinstance(scored_game, dict)
+                    else getattr(scored_game, "data_flags", None)
+                )
             )
-        )
+        else:
+            conflict_penalty, conflict_signals = 0, None
 
         conn.execute(
             """
@@ -1960,7 +1967,7 @@ def save_bet_snapshot(
             (
                 str(game_date),
                 int(game_pk),
-                str(market_type or "").strip().upper(),
+                market_key,
                 bet_side,
                 str(bet or ""),
                 int(odds) if odds is not None else None,
@@ -2376,6 +2383,12 @@ def _insert_bet_ledger_from_latest(
             signals_used = list(mm.get("signals") or [])
 
             snap_es = _snapshot_eval_status_for_prior(sg, market_type, mm)
+            if (
+                snap_es != "BET"
+                or not bool(getattr(sg, "pick_is_actionable", False))
+                or float(getattr(sg, "stake_multiplier", 0.0) or 0.0) <= 0.0
+            ):
+                return
             save_bet_snapshot(
                 conn,
                 game_date,
@@ -4377,6 +4390,12 @@ def evaluate_signals(
                         if not isinstance(mm, dict) or not mm.get("evaluated"):
                             continue
                         snap_es = _snapshot_eval_status_for_prior(scored, str(mt), mm)
+                        if (
+                            snap_es != "BET"
+                            or not bool(getattr(scored, "pick_is_actionable", False))
+                            or float(getattr(scored, "stake_multiplier", 0.0) or 0.0) <= 0.0
+                        ):
+                            continue
                         save_bet_snapshot(
                             conn,
                             gd,
