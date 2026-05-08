@@ -1819,12 +1819,12 @@ def _parse_snapshot_conflict_from_flags(data_flags: object) -> tuple[int, str | 
         flags = []
     for raw in flags:
         s = str(raw or "").strip()
-        if not s.startswith("ML directional penalty"):
+        if "directional penalty" not in s:
             continue
         try:
             import re
 
-            m = re.search(r"ML directional penalty\s*[−-]\s*(\d+)", s)
+            m = re.search(r"directional penalty\s*[−-]\s*(\d+)", s)
             penalty = int(m.group(1)) if m else 0
             sm = re.search(r"\(opposing signals:\s*([^)]+)\)", s)
             signals = sm.group(1).strip() if sm else None
@@ -1875,6 +1875,7 @@ def save_bet_snapshot(
     placed_at: str | None = None,
     eval_status_override: str | None = None,
     data_flags: object = None,
+    score_override: int | None = None,
 ) -> None:
     """
     Persist a snapshot of model/market eval at brief time (audit + PRIOR).
@@ -1894,7 +1895,10 @@ def save_bet_snapshot(
     # ``scored_game`` is expected to be the per-market eval dict (mm) with keys:
     # score, model_p, implied_p, edge, best_side.
     try:
-        score = int(getattr(scored_game, "score", None) or scored_game.get("score") or 0)
+        if score_override is not None:
+            score = int(score_override)
+        else:
+            score = int(getattr(scored_game, "score", None) or scored_game.get("score") or 0)
     except Exception:
         score = 0
     try:
@@ -2384,6 +2388,7 @@ def _insert_bet_ledger_from_latest(
                 placed_at=str(placed_at or ""),
                 eval_status_override=snap_es,
                 data_flags=getattr(sg, "data_flags", None),
+                score_override=int(getattr(sg, "best_aggregate_score", 0) or 0),
             )
         except Exception:
             return
@@ -4384,6 +4389,7 @@ def evaluate_signals(
                             placed_at=placed_at,
                             eval_status_override=snap_es,
                             data_flags=getattr(scored, "data_flags", None),
+                            score_override=int(getattr(scored, "best_aggregate_score", 0) or 0),
                         )
                 except Exception:
                     pass
