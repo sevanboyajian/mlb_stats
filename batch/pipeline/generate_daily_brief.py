@@ -1958,11 +1958,19 @@ def save_bet_snapshot(
 
         conn.execute(
             """
-            INSERT OR REPLACE INTO bet_snapshots
+            INSERT INTO bet_snapshots
                 (game_date, game_pk, market_type, bet_side, bet,
                  odds_taken, score, model_p, implied_p, edge, eval_status,
                  conflict_penalty, conflict_signals, signals_used, placed_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(game_date, game_pk, market_type) DO UPDATE SET
+                score = excluded.score,
+                conflict_penalty = excluded.conflict_penalty,
+                conflict_signals = excluded.conflict_signals,
+                model_p = excluded.model_p,
+                implied_p = excluded.implied_p,
+                edge = excluded.edge,
+                eval_status = excluded.eval_status
             """,
             (
                 str(game_date),
