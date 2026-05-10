@@ -1970,7 +1970,10 @@ def save_bet_snapshot(
                 model_p = excluded.model_p,
                 implied_p = excluded.implied_p,
                 edge = excluded.edge,
-                eval_status = excluded.eval_status
+                eval_status = CASE
+                    WHEN bet_snapshots.eval_status = 'BET' THEN bet_snapshots.eval_status
+                    ELSE excluded.eval_status
+                END
             """,
             (
                 str(game_date),
