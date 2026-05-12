@@ -1,0 +1,168 @@
+[run_pipeline] force-unlock: runner_lock not present (nothing to clear)
+[run_pipeline] db=C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\data\mlb_stats.db
+[run_pipeline] mode=loop poll_seconds=60 ghost=False stale_minutes=30 timeout_minutes=30 sleep_until_due=True scope_job_date_et='2026-05-11' exit_when_no_pending=True
+[run_pipeline] sleep-until-due: next pending at 2026-05-11 06:00 ET (~4140s)
+
+[job] id=1636 type=stats_pull job_date_et=2026-05-11 game_group_id=0 scheduled_time=2026-05-11 06:00 ET
+[job] command='python batch/ingestion/load_mlb_stats.py'
+[job] start_et=2026-05-11 06:00:12 ET (claimed)
+[job] end_et=2026-05-11 06:00:29 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-11 06:05 ET (~300s)
+
+[job] id=1637 type=load_today job_date_et=2026-05-11 game_group_id=0 scheduled_time=2026-05-11 06:05 ET
+[job] command='python batch/ingestion/load_today.py --date 2026-05-11'
+[job] start_et=2026-05-11 06:05:30 ET (claimed)
+[job] end_et=2026-05-11 06:05:32 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-11 06:07 ET (~120s)
+
+[job] id=1638 type=load_weather job_date_et=2026-05-11 game_group_id=0 scheduled_time=2026-05-11 06:07 ET
+[job] command='python batch/ingestion/load_weather.py --date 2026-05-11'
+[job] start_et=2026-05-11 06:07:32 ET (claimed)
+[job] end_et=2026-05-11 06:07:50 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-11 06:08 ET (~60s)
+
+[job] id=1639 type=odds_pull job_date_et=2026-05-11 game_group_id=0 scheduled_time=2026-05-11 06:08 ET
+[job] command='python batch/ingestion/load_odds.py --pregame --markets game --date 2026-05-11'
+[job] start_et=2026-05-11 06:08:50 ET (claimed)
+[job] end_et=2026-05-11 06:08:50 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-11 06:09 ET (~60s)
+
+[job] id=1640 type=build_team_wma job_date_et=2026-05-11 game_group_id=0 scheduled_time=2026-05-11 06:09 ET
+[job] command='python -m batch.pipeline.build_team_wma --seasons 2025 2026'
+[job] start_et=2026-05-11 06:09:50 ET (claimed)
+[job] end_et=2026-05-11 06:09:51 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-11 06:10 ET (~60s)
+
+[job] id=1642 type=day_setup job_date_et=2026-05-11 game_group_id=0 scheduled_time=2026-05-11 06:10 ET
+[job] command='python batch/jobs/schedule_pipeline_day.py --groups-only --date-et 2026-05-11'
+[job] start_et=2026-05-11 06:10:51 ET (claimed)
+[job] end_et=2026-05-11 06:10:51 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-11 06:11 ET (~60s)
+
+[job] id=1641 type=build_pitcher_wma job_date_et=2026-05-11 game_group_id=0 scheduled_time=2026-05-11 06:11 ET
+[job] command='python -m batch.pipeline.build_pitcher_wma --seasons 2025 2026'
+[job] start_et=2026-05-11 06:11:51 ET (claimed)
+[job] end_et=2026-05-11 06:11:52 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-11 06:15 ET (~240s)
+
+[job] id=1643 type=prior_report job_date_et=2026-05-11 game_group_id=0 scheduled_time=2026-05-11 06:15 ET
+[job] command='python batch/pipeline/generate_daily_brief.py --session prior --date 2026-05-11 --as-of "2026-05-11 06:15"'
+[job] start_et=2026-05-11 06:15:52 ET (claimed)
+[job] end_et=2026-05-11 06:15:54 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-11 06:20 ET (~300s)
+
+[job] id=1644 type=early_peek job_date_et=2026-05-11 game_group_id=0 scheduled_time=2026-05-11 06:20 ET
+[job] command='python batch/pipeline/generate_daily_brief.py --session morning --date 2026-05-11 --as-of "2026-05-11 06:20"'
+[job] start_et=2026-05-11 06:20:54 ET (claimed)
+[job] end_et=2026-05-11 06:20:57 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-11 06:22 ET (~120s)
+
+[job] id=1645 type=email_runlog_morning job_date_et=2026-05-11 game_group_id=0 scheduled_time=2026-05-11 06:22 ET
+[job] command='python batch/jobs/email_run_log.py --date 2026-05-11 --kind morning'
+[job] start_et=2026-05-11 06:22:57 ET (claimed)
+[job] end_et=2026-05-11 06:22:58 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-11 16:40 ET (~37080s)
+
+[job] id=1647 type=odds_pull job_date_et=2026-05-11 game_group_id=1 scheduled_time=2026-05-11 16:40 ET
+[job] command='python batch/ingestion/load_odds.py --pregame --markets game --date 2026-05-11'
+[job] context: group_id=1 window=[2026-05-11 16:35 ET -> 2026-05-11 16:45 ET]
+[job] start_et=2026-05-11 16:40:58 ET (claimed)
+[job] end_et=2026-05-11 16:40:59 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-11 16:45 ET (~300s)
+
+[job] id=1651 type=odds_check job_date_et=2026-05-11 game_group_id=1 scheduled_time=2026-05-11 16:45 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-05-11'
+[job] context: group_id=1 window=[2026-05-11 16:35 ET -> 2026-05-11 16:50 ET]
+[job] start_et=2026-05-11 16:45:59 ET (claimed)
+[job] end_et=2026-05-11 16:45:59 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-11 17:25 ET (~2400s)
+
+[job] id=1655 type=weather job_date_et=2026-05-11 game_group_id=1 scheduled_time=2026-05-11 17:25 ET
+[job] command='python batch/ingestion/load_weather.py --date 2026-05-11'
+[job] context: group_id=1 window=[2026-05-11 17:10 ET -> 2026-05-11 17:40 ET]
+[job] start_et=2026-05-11 17:25:59 ET (claimed)
+[job] end_et=2026-05-11 17:26:14 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-11 17:37 ET (~660s)
+
+[job] id=1648 type=odds_pull job_date_et=2026-05-11 game_group_id=2 scheduled_time=2026-05-11 17:37 ET
+[job] command='python batch/ingestion/load_odds.py --pregame --markets game --date 2026-05-11'
+[job] context: group_id=2 window=[2026-05-11 17:32 ET -> 2026-05-11 17:42 ET]
+[job] start_et=2026-05-11 17:37:14 ET (claimed)
+[job] end_et=2026-05-11 17:37:15 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-11 17:40 ET (~180s)
+
+[job] id=1659 type=group_brief job_date_et=2026-05-11 game_group_id=1 scheduled_time=2026-05-11 17:40 ET
+[job] command='python batch/pipeline/generate_daily_brief.py --session primary --date 2026-05-11 --as-of "2026-05-11 17:40" --game-group-id 1'
+[job] context: group_id=1 window=[2026-05-11 17:40 ET -> 2026-05-11 17:42 ET]
+[job] start_et=2026-05-11 17:40:15 ET (claimed)
+[job] end_et=2026-05-11 17:40:18 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-11 17:42 ET (~120s)
+
+[job] id=1652 type=odds_check job_date_et=2026-05-11 game_group_id=2 scheduled_time=2026-05-11 17:42 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-05-11'
+[job] context: group_id=2 window=[2026-05-11 17:32 ET -> 2026-05-11 17:47 ET]
+[job] start_et=2026-05-11 17:42:19 ET (claimed)
+[job] end_et=2026-05-11 17:42:19 ET status=complete rc=0
+
+[job] id=1663 type=ledger_snapshot job_date_et=2026-05-11 game_group_id=1 scheduled_time=2026-05-11 17:42 ET
+[job] command='python batch/pipeline/daily_results_report.py --date 2026-05-11'
+[job] context: group_id=1 window=[2026-05-11 17:40 ET -> 2026-05-11 18:10 ET]
+[job] start_et=2026-05-11 17:42:19 ET (claimed)
+[job] end_et=2026-05-11 17:42:19 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-11 18:22 ET (~2400s)
+
+[job] id=1656 type=weather job_date_et=2026-05-11 game_group_id=2 scheduled_time=2026-05-11 18:22 ET
+[job] command='python batch/ingestion/load_weather.py --date 2026-05-11'
+[job] context: group_id=2 window=[2026-05-11 18:07 ET -> 2026-05-11 18:37 ET]
+[job] start_et=2026-05-11 18:22:19 ET (claimed)
+[job] end_et=2026-05-11 18:22:32 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-11 18:35 ET (~780s)
+
+[job] id=1649 type=odds_pull job_date_et=2026-05-11 game_group_id=3 scheduled_time=2026-05-11 18:35 ET
+[job] command='python batch/ingestion/load_odds.py --pregame --markets game --date 2026-05-11'
+[job] context: group_id=3 window=[2026-05-11 18:30 ET -> 2026-05-11 18:40 ET]
+[job] start_et=2026-05-11 18:35:32 ET (claimed)
+[job] end_et=2026-05-11 18:35:33 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-11 18:37 ET (~120s)
+
+[job] id=1660 type=group_brief job_date_et=2026-05-11 game_group_id=2 scheduled_time=2026-05-11 18:37 ET
+[job] command='python batch/pipeline/generate_daily_brief.py --session primary --date 2026-05-11 --as-of "2026-05-11 18:37" --game-group-id 2'
+[job] context: group_id=2 window=[2026-05-11 18:37 ET -> 2026-05-11 18:39 ET]
+[job] start_et=2026-05-11 18:37:33 ET (claimed)
+[job] end_et=2026-05-11 18:37:36 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-11 18:39 ET (~120s)
+
+[job] id=1664 type=ledger_snapshot job_date_et=2026-05-11 game_group_id=2 scheduled_time=2026-05-11 18:39 ET
+[job] command='python batch/pipeline/daily_results_report.py --date 2026-05-11'
+[job] context: group_id=2 window=[2026-05-11 18:37 ET -> 2026-05-11 19:07 ET]
+[job] start_et=2026-05-11 18:39:36 ET (claimed)
+[job] end_et=2026-05-11 18:39:37 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-11 18:40 ET (~60s)
+
+[job] id=1653 type=odds_check job_date_et=2026-05-11 game_group_id=3 scheduled_time=2026-05-11 18:40 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-05-11'
+[job] context: group_id=3 window=[2026-05-11 18:30 ET -> 2026-05-11 18:45 ET]
+[job] start_et=2026-05-11 18:40:37 ET (claimed)
+[job] end_et=2026-05-11 18:40:37 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-11 19:20 ET (~2400s)
+
+[job] id=1657 type=weather job_date_et=2026-05-11 game_group_id=3 scheduled_time=2026-05-11 19:20 ET
+[job] command='python batch/ingestion/load_weather.py --date 2026-05-11'
+[job] context: group_id=3 window=[2026-05-11 19:05 ET -> 2026-05-11 19:35 ET]
+[job] start_et=2026-05-11 19:20:37 ET (claimed)
+[job] end_et=2026-05-11 19:20:50 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-11 19:35 ET (~900s)
+
+[job] id=1661 type=group_brief job_date_et=2026-05-11 game_group_id=3 scheduled_time=2026-05-11 19:35 ET
+[job] command='python batch/pipeline/generate_daily_brief.py --session primary --date 2026-05-11 --as-of "2026-05-11 19:35" --game-group-id 3'
+[job] context: group_id=3 window=[2026-05-11 19:35 ET -> 2026-05-11 19:37 ET]
+[job] start_et=2026-05-11 19:35:50 ET (claimed)
+[job] end_et=2026-05-11 19:35:52 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-11 19:37 ET (~120s)
+
+[job] id=1665 type=ledger_snapshot job_date_et=2026-05-11 game_group_id=3 scheduled_time=2026-05-11 19:37 ET
+[job] command='python batch/pipeline/daily_results_report.py --date 2026-05-11'
+[job] context: group_id=3 window=[2026-05-11 19:35 ET -> 2026-05-11 20:05 ET]
+[job] start_et=2026-05-11 19:37:52 ET (claimed)
+[job] end_et=2026-05-11 19:37:52 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-11 20:40 ET (~3780s)
