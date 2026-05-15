@@ -6,9 +6,8 @@ Reads from mlb_stats.db and outputs the formatted betting brief.
 
 CHANGE LOG (latest first)
 ──────────────────────────
-2026-05-15  Output: .txt brief is default; ``--docx`` opts into Word. Subscribers are emailed
-            the .txt attachment by default (``--no-email`` to skip). ``--docx`` saves .docx
-            locally only; email remains .txt.
+2026-05-15  Output: .txt brief is default; ``--docx`` also saves Word. Email attaches .txt by
+            default; with ``--docx``, email attaches .docx instead (``--no-email`` to skip).
 2026-05-03  ``score_game._align_market_evals_with_actionability``: per-market ``eval_status`` / ``edge_ok``
             aligned with ``pick_is_actionable`` (same gate as ``format_bet_block`` / ``bet_snapshots``);
             fixes MV-F ML rows showing ``BET`` while aggregate gates suppress the card.  ``format_bet_block``
@@ -221,10 +220,9 @@ File saved under outputs/briefs/ (default name: brief-SLATE-DATE_RUN-STAMP_ET.do
 
 EMAIL (DEFAULT)
 ---------------
-When a .txt brief is saved, subscribers for group_brief are emailed the text
-file as an attachment (SMTP via delivery/email_sender.py). Use --no-email to
-skip. With --docx, the Word file is saved locally only; email still sends .txt
-unless you add a future --email-docx flag.
+When a brief file is saved, subscribers for group_brief are emailed an
+attachment (SMTP via delivery/email_sender.py). Default attachment: .txt.
+With --docx: attachment is the .docx file instead. Use --no-email to skip.
 
 SESSION FILTERING MODEL
 -----------------------
@@ -7582,7 +7580,7 @@ def parse_args():
     p.add_argument(
         "--docx", action="store_true",
         help="Also write a formatted Word (.docx) brief alongside the .txt file. "
-        "Requires python-docx. Email still sends .txt unless --no-email.",
+        "Requires python-docx. Email attaches .docx instead of .txt when this flag is set.",
     )
     p.add_argument(
         "--no-email", action="store_true",
@@ -7638,15 +7636,21 @@ def _brief_email_subscription(session: str) -> str:
     return "group_brief"
 
 
-def _maybe_email_brief_txt(
+def _docx_path_for(output_file: str | None, default_stem: str) -> str:
+    if output_file:
+        return str(Path(output_file).with_suffix(".docx"))
+    return str(OUTPUT_DIR / f"{default_stem}.docx")
+
+
+def _maybe_email_brief(
     *,
-    txt_path: str,
+    attach_path: str,
     slate_date: str,
     session: str,
     game_group_id: int | None = None,
 ) -> None:
     """
-    Email the saved .txt brief to DB subscribers. Non-fatal: never raises.
+    Email the brief attachment (.txt or .docx) to DB subscribers. Non-fatal.
     """
     try:
         recipients: list[str] = []
@@ -7665,13 +7669,15 @@ def _maybe_email_brief_txt(
         from delivery.email_sender import send_report_email
 
         g_suffix = f" g{int(game_group_id)}" if game_group_id is not None and int(game_group_id) > 0 else ""
-        subject = f"MLB brief {slate_date} ({session}{g_suffix}) — {Path(txt_path).name}"
+        attach_name = Path(attach_path).name
+        subject = f"MLB brief {slate_date} ({session}{g_suffix}) — {attach_name}"
+        kind = "Word report" if attach_name.lower().endswith(".docx") else "Text report"
         body = (
             f"Slate date: {slate_date}\n"
             f"Session: {session}\n"
-            f"Text report: {txt_path}\n"
+            f"{kind}: {attach_path}\n"
         )
-        ok, msg = send_report_email(txt_path, subject, recipients, body=body)
+        ok, msg = send_report_email(attach_path, subject, recipients, body=body)
         if ok:
             print(f"  ✓ [email] {msg}")
         else:
@@ -7687,27 +7693,25 @@ def _maybe_write_docx(
     brief_text: str,
     output_file: str | None,
     default_stem: str,
-) -> None:
-    """Write optional Word brief when ``--docx`` is set."""
+) -> str | None:
+    """Write Word brief when ``--docx`` is set. Returns path on success, else None."""
     if not DOCX_AVAILABLE:
         print("\n  ⚠  Word output skipped: python-docx is not installed.")
         print("     Install with: pip install python-docx")
-        return
+        return None
     try:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        docx_path = (
-            str(Path(output_file).with_suffix(".docx"))
-            if output_file
-            else str(OUTPUT_DIR / f"{default_stem}.docx")
-        )
+        docx_path = _docx_path_for(output_file, default_stem)
         doc = build_docx_from_text(session, slate_date, strip_ansi(brief_text))
         doc.save(docx_path)
         print(f"  ✓ Word brief saved to: {docx_path}")
+        return docx_path
     except Exception as e:
         print(f"\n  ⚠  Word output failed: {e}")
         import traceback
 
         traceback.print_exc()
+        return None
 
 
 def main():
@@ -7868,19 +7872,21 @@ def main():
                 fh.write(brief_text)
             print(f"\n  ✓ Prior day report saved to: {output_file}")
 
-        if not args.dry_run and not args.no_file and output_file and not args.no_email:
-            _maybe_email_brief_txt(
-                txt_path=output_file,
-                slate_date=key_date,
-                session="prior",
-            )
+        docx_path = None
         if not args.dry_run and not args.no_file and args.docx:
-            _maybe_write_docx(
+            docx_path = _maybe_write_docx(
                 session="prior",
                 slate_date=key_date,
                 brief_text=brief_text,
                 output_file=output_file,
                 default_stem=stem,
+            )
+        if not args.dry_run and not args.no_file and output_file and not args.no_email:
+            email_attach = docx_path if (args.docx and docx_path) else output_file
+            _maybe_email_brief(
+                attach_path=email_attach,
+                slate_date=key_date,
+                session="prior",
             )
 
         # ── Log ───────────────────────────────────────────────────────────
@@ -8074,20 +8080,22 @@ def main():
             fh.write(strip_ansi(brief_text))
         print(f"\n  ✓ Brief saved to: {output_file}")
 
-    if not args.dry_run and not args.no_file and output_file and not args.no_email:
-        _maybe_email_brief_txt(
-            txt_path=output_file,
-            slate_date=today,
-            session=session,
-            game_group_id=_ggid,
-        )
+    docx_path = None
     if not args.dry_run and not args.no_file and args.docx:
-        _maybe_write_docx(
+        docx_path = _maybe_write_docx(
             session=session,
             slate_date=today,
             brief_text=brief_text,
             output_file=output_file,
             default_stem=default_stem,
+        )
+    if not args.dry_run and not args.no_file and output_file and not args.no_email:
+        email_attach = docx_path if (args.docx and docx_path) else output_file
+        _maybe_email_brief(
+            attach_path=email_attach,
+            slate_date=today,
+            session=session,
+            game_group_id=_ggid,
         )
 
     # ── Log ──────────────────────────────────────────────────────────────

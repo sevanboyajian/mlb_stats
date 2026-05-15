@@ -25,8 +25,8 @@ python batch/pipeline/generate_daily_brief.py [options]
 
 - Builds **text** daily betting briefs by session: prior, morning, early, afternoon, primary, closing, late.
 - Writes **`.txt`** to **`outputs/briefs/`** by default and records runs in **`brief_log`** (unless **`--dry-run`**).
-- **Emails** the `.txt` brief to `group_brief` subscribers when SMTP is configured (see below). Use **`--no-email`** to skip.
-- **`--docx`** optionally also writes a formatted Word file (requires `python-docx`); email still sends `.txt` unless you disable email.
+- **Emails** the brief to `group_brief` subscribers when SMTP is configured (see below). Default attachment: **`.txt`**. Use **`--no-email`** to skip.
+- **`--docx`** also writes Word (requires `python-docx`); email attaches **`.docx`** instead of `.txt` when this flag is set.
 - **`--sync-bet-ledger-only`** skips brief generation and runs **`generate_bets_from_signal_state`** for **`--date`** (pregame materialization window — see script output and pipeline scheduling).
 
 ### Game groups and pipeline `group_brief`
@@ -116,8 +116,8 @@ python batch/pipeline/generate_daily_brief.py --session primary --date YYYY-MM-D
 | Topic | Location / behavior |
 |-------|---------------------|
 | Default file | `outputs/briefs/brief-{slate}_{stamp}_ET[_gN].txt` (see `--output`) |
-| **`--docx`** | Also write `.docx` alongside `.txt` (optional; not emailed by default) |
-| **`--no-email`** | Skip SMTP delivery of the `.txt` brief |
+| **`--docx`** | Also write `.docx`; email attaches Word instead of `.txt` |
+| **`--no-email`** | Skip SMTP delivery |
 | **`--no-file`** | Console only |
 | **`--output PATH`** | Write to given path |
 | Duplicate guard | Skips if already in **`brief_log`** unless **`--force`**; per `(date, session, game_group_id)` when `--game-group-id` is set |
@@ -127,7 +127,7 @@ python batch/pipeline/generate_daily_brief.py --session primary --date YYYY-MM-D
 
 Recipients come from **`delivery.recipient_resolver.get_recipients('group_brief')`** (active admins plus users subscribed to `group_brief`). Configure SMTP in repo-root **`.env`** (see **`config/.env.template`**): `SMTP_HOST`, `SMTP_USER`, `SMTP_PASSWORD`, etc.
 
-The message attaches the **`.txt`** brief. Word output is local-only unless you copy or extend delivery later.
+Default: message attaches the **`.txt`** brief. With **`--docx`**: attaches the **`.docx`** file (falls back to `.txt` if Word generation fails).
 
 ---
 
