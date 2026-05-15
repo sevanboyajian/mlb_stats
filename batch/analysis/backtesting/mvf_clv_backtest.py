@@ -37,7 +37,28 @@ if str(_REPO_ROOT) not in sys.path:
 from core.db.connection import connect as db_connect
 from core.db.connection import get_db_path
 
-MVF_CANDIDATE_SQL = """
+# Effective hours before first pitch for a game_odds row: prefer stored column;
+# if NULL (common on older backfills), derive from first pitch - snapshot time.
+# ``game_alias`` must reference the games row for that game_pk (e.g. ``g`` or ``gx``).
+_SESSION_EFF_HOURS_TMPL = """
+COALESCE(
+    {odds_alias}.hours_before_game,
+    (
+        julianday(replace(trim(replace({game_alias}.game_start_utc, 'Z', '')), 'T', ' '))
+        - julianday(replace(trim(replace({odds_alias}.captured_at_utc, 'Z', '')), 'T', ' '))
+    ) * 24.0
+)
+""".replace("\n", " ").strip()
+
+
+def _session_eff_hours(odds_alias: str, game_alias: str = "g") -> str:
+    return _SESSION_EFF_HOURS_TMPL.format(odds_alias=odds_alias, game_alias=game_alias)
+
+
+_SESSION_JOIN_COND = _session_eff_hours("go_session", "g")
+_SESSION_SUBQUERY = _session_eff_hours("go3", "gx")
+
+MVF_CANDIDATE_SQL = f"""
 SELECT
     g.game_pk,
     g.game_date_et                          AS game_date,
@@ -58,7 +79,7 @@ SELECT
     go_session.away_ml                      AS session_away_ml,
     go_session.home_ml                      AS session_home_ml,
     go_session.captured_at_utc              AS session_captured_utc,
-    go_session.hours_before_game            AS session_hours_before
+    ({_SESSION_JOIN_COND})                  AS session_hours_before
 
 FROM games g
 JOIN venues v ON v.venue_id = g.venue_id
@@ -90,15 +111,17 @@ JOIN game_odds go_session
     AND go_session.market_type = 'moneyline'
     AND go_session.bookmaker   = go_open.bookmaker
     AND go_session.away_ml     IS NOT NULL
-    AND go_session.hours_before_game BETWEEN 3.5 AND 8.0
+    AND g.game_start_utc       IS NOT NULL
+    AND ({_SESSION_JOIN_COND}) BETWEEN 3.5 AND 8.0
     AND go_session.id = (
             SELECT go3.id FROM game_odds go3
+            INNER JOIN games gx ON gx.game_pk = go3.game_pk
             WHERE  go3.game_pk     = g.game_pk
               AND  go3.market_type = 'moneyline'
               AND  go3.bookmaker   = go_open.bookmaker
               AND  go3.away_ml     IS NOT NULL
-              AND  go3.hours_before_game BETWEEN 3.5 AND 8.0
-            ORDER BY go3.hours_before_game DESC
+              AND ({_SESSION_SUBQUERY}) BETWEEN 3.5 AND 8.0
+            ORDER BY ({_SESSION_SUBQUERY}) DESC
             LIMIT 1)
 
 WHERE g.season         = ?
@@ -582,7 +605,11 @@ def generate_report(
         "to identify MV-F candidates, matching the live pipeline's entry conditions. "
         "CLV delta computed as: session_away_implied_prob - open_away_implied_prob "
         "(in pp). Gate threshold: +0.5pp. P&L graded at flat 1 unit, session-time "
-        "away ML odds."
+        "away ML odds. Session pregame hours use game_odds.hours_before_game when "
+        "set; if NULL, hours are derived from games.game_start_utc minus "
+        "captured_at_utc (same formula as load_odds). Run "
+        "batch/jobs/backfill_game_odds_hours.py --dry-run to audit rows; omit "
+        "--dry-run to persist hours for other queries."
     )
     out.append("")
 
