@@ -1,0 +1,70 @@
+MV-F CLV GATE BACKTEST REPORT
+Run date: 2026-05-15
+Season: 2026   Data source: MLB DB (game_odds + games + venues)
+MV-F criteria: wind IN >= 10 mph, wind-sensitive venue (HIGH/MODERATE), home fav -130 to -170
+
+========================================================================
+TOP-LINE VERDICT
+========================================================================
+VERDICT: CLV gate HURTS performance. Gate OFF ROI (-45.25%) exceeds Gate ON ROI (-100.00%). Recommend removing or weakening the CLV gate.
+Gate suppresses 3 of 4 candidates (75.0%). Suppressed group ROI: -27.00%
+
+========================================================================
+SUMMARY TABLE
+========================================================================
+Group                           N    W    L    Win%      P&L     ROI%
+---------------------------------------------------------------------
+Gate ON                         1    0    1    0.0%   -1.000 -100.00%
+Gate OFF (all candidates)       4    1    3   25.0%   -1.810  -45.25%
+Gate suppressed only (clv_ga    3    1    2   33.3%   -0.810  -27.00%
+
+========================================================================
+SEGMENTATION (Gate OFF candidates)
+========================================================================
+
+By CLV gate bucket
+------------------
+Group                           N    W    L    Win%      P&L     ROI%
+---------------------------------------------------------------------
+clv_negative (clv_delta_pp <    1    0    1    0.0%   -1.000 -100.00%
+clv_zero_to_half (0 <= clv <    2    1    1   50.0%   +0.190   +9.50%
+clv_half_to_two (0.5 <= clv     1    0    1    0.0%   -1.000 -100.00%
+clv_two_plus (clv >= 2.0)       0    0    0    0.0%   +0.000   +0.00%
+
+By wind speed
+-------------
+Group                           N    W    L    Win%      P&L     ROI%
+---------------------------------------------------------------------
+wind_10_to_14 (10-14 mph)       4    1    3   25.0%   -1.810  -45.25%
+wind_15_to_19 (15-19 mph)       0    0    0    0.0%   +0.000   +0.00%
+wind_20_plus (>= 20 mph)        0    0    0    0.0%   +0.000   +0.00%
+
+By venue wind sensitivity
+-------------------------
+Group                           N    W    L    Win%      P&L     ROI%
+---------------------------------------------------------------------
+venue_HIGH                      3    0    3    0.0%   -3.000 -100.00%
+venue_MODERATE                  1    1    0  100.0%   +1.190 +119.00%
+
+By home favorite strength (open line)
+-------------------------------------
+Group                           N    W    L    Win%      P&L     ROI%
+---------------------------------------------------------------------
+fav_130_to_145 (open home -1    2    1    1   50.0%   +0.190   +9.50%
+fav_146_to_160 (open home -1    1    0    1    0.0%   -1.000 -100.00%
+fav_161_to_170 (open home -1    1    0    1    0.0%   -1.000 -100.00%
+
+========================================================================
+GAME-LEVEL DETAIL
+========================================================================
+Tag    Date         Venue                          Wind   HmML   AwML   CLVpp  Gate  Won     P&L
+------------------------------------------------------------------------------------------------
+[SUPP] 2026-04-26   Oriole Park at Camden Yards      14   -143    119   +0.00  SUPP    Y  +1.190
+[PASS] 2026-04-30   Citizens Bank Park               10   -149    119   +0.82  PASS    N  -1.000
+[SUPP] 2026-05-01   Wrigley Field                    13   -143    119   +0.00  SUPP    N  -1.000
+[SUPP] 2026-05-06   Wrigley Field                    14   -168    144   -0.86  SUPP    N  -1.000
+
+========================================================================
+METHODOLOGY NOTE
+========================================================================
+Signal validity (model score, edge) was not available for suppressed signals in the DB. This backtest uses venue + wind + odds criteria only to identify MV-F candidates, matching the live pipeline's entry conditions. CLV delta computed as: session_away_implied_prob - open_away_implied_prob (in pp). Gate threshold: +0.5pp. P&L graded at flat 1 unit, session-time away ML odds.
