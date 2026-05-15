@@ -199,7 +199,7 @@ ORDER BY game_start_utc;
 | Use | Command / note |
 |-----|----------------|
 | Streamlit Scout UI | `cd online/app` then `streamlit run scout.py` |
-| Brief email delivery | Configured via env (e.g. **`BRIEF_SMTP_*`**, **`BRIEF_EMAIL_TO`**); see **`delivery/email_sender.py`** and **`config/.env.template`** |
+| Brief email delivery | **`generate_daily_brief.py`** emails **`.txt`** to `group_brief` subscribers; SMTP via **`SMTP_*`** / **`BRIEF_SMTP_*`** in **`.env`** — see **`delivery/email_sender.py`**, **`config/.env.template`** |
 
 ---
 

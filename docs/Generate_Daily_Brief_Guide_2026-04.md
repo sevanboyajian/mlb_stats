@@ -23,11 +23,24 @@ python batch/pipeline/generate_daily_brief.py [options]
 
 ## What it does
 
-- Builds **text** (and optional file output) **daily betting briefs** by session: prior, morning, early, afternoon, primary, closing, late.
-- Writes to **`outputs/briefs/`** by default and records runs in **`brief_log`** (unless **`--dry-run`**).
+- Builds **text** daily betting briefs by session: prior, morning, early, afternoon, primary, closing, late.
+- Writes **`.txt`** to **`outputs/briefs/`** by default and records runs in **`brief_log`** (unless **`--dry-run`**).
+- **Emails** the `.txt` brief to `group_brief` subscribers when SMTP is configured (see below). Use **`--no-email`** to skip.
+- **`--docx`** optionally also writes a formatted Word file (requires `python-docx`); email still sends `.txt` unless you disable email.
 - **`--sync-bet-ledger-only`** skips brief generation and runs **`generate_bets_from_signal_state`** for **`--date`** (pregame materialization window — see script output and pipeline scheduling).
 
+### Game groups and pipeline `group_brief`
+
+Intraday briefs are scheduled **per start-time group**, not per game. See **`docs/Pipeline_Operations_Guide_2026-04.md`** → *Game grouping methodology* for the full rules (30-minute UTC clustering, `game_group_id`, odds-block merge).
+
+Summary:
+
+- **One `group_brief` per group** (~30 minutes before that group’s anchor first pitch).
+- **Each brief still shows the full pickable slate** at run time (all unplayed games), not only games in that group.
+- Pipeline passes **`--game-group-id N`** so each group can log and filename (`_gN`) without tripping duplicate guards.
+
 ---
+
 
 ## Sessions (`--session`)
 
@@ -102,17 +115,25 @@ python batch/pipeline/generate_daily_brief.py --session primary --date YYYY-MM-D
 
 | Topic | Location / behavior |
 |-------|---------------------|
-| Default file | `outputs/briefs/YYYY-MM-DD_SESSION.txt` (see `--output`) |
+| Default file | `outputs/briefs/brief-{slate}_{stamp}_ET[_gN].txt` (see `--output`) |
+| **`--docx`** | Also write `.docx` alongside `.txt` (optional; not emailed by default) |
+| **`--no-email`** | Skip SMTP delivery of the `.txt` brief |
 | **`--no-file`** | Console only |
-| **`--output PATH`** | Append to given path |
-| Duplicate guard | Skips if already in **`brief_log`** unless **`--force`** |
+| **`--output PATH`** | Write to given path |
+| Duplicate guard | Skips if already in **`brief_log`** unless **`--force`**; per `(date, session, game_group_id)` when `--game-group-id` is set |
 | **`--warn-missing`** | Continue with partial data (missing fields warned) |
+
+### Email delivery
+
+Recipients come from **`delivery.recipient_resolver.get_recipients('group_brief')`** (active admins plus users subscribed to `group_brief`). Configure SMTP in repo-root **`.env`** (see **`config/.env.template`**): `SMTP_HOST`, `SMTP_USER`, `SMTP_PASSWORD`, etc.
+
+The message attaches the **`.txt`** brief. Word output is local-only unless you copy or extend delivery later.
 
 ---
 
 ## Pipeline integration
 
-- **`group_brief`** → `python batch/pipeline/generate_daily_brief.py --session primary --date {job_date_et}`
+- **`group_brief`** → `python batch/pipeline/generate_daily_brief.py --session primary --date {job_date_et}` (runner adds `--as-of` and `--game-group-id`)
 - **`bet_ledger_sync`** → `python batch/pipeline/generate_daily_brief.py --sync-bet-ledger-only --date {job_date_et}`
 
 Dependencies and ordering are enforced by **`run_pipeline.py`**, not by this script alone. See **`docs/Pipeline_Operations_Guide_2026-04.md`**.

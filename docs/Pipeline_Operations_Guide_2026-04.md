@@ -77,6 +77,28 @@ Inserted for **`job_date_et`** (typical ET times):
 | 6 | `prior_report` | 06:15 |
 | 7 | `early_peek` | 06:20 |
 
+### Game grouping methodology (`game_group_id`)
+
+Regular-season games for the slate date are clustered by **scheduled first pitch (UTC)** using `core/utils/game_start_grouping.py`:
+
+| Rule | Detail |
+|------|--------|
+| Input | `games` with `game_date_et`, `game_type = 'R'`, parseable `game_start_utc` |
+| Sort | `(game_start_utc, game_pk)` for deterministic ordering |
+| Window | Default **30 minutes** (`--group-window-min` on `schedule_pipeline_day.py`) |
+| Anchor | First game in a cluster sets the group anchor time |
+| Merge | Next game joins if `start − anchor ≤ window` |
+| Split | Otherwise start a new group; `group_id` = 1..N |
+| Group 0 | Morning globals (`stats_pull`, `prior_report`, `early_peek`, …) — not a start-time cluster |
+
+**Brief count vs game count:** the pipeline schedules **one `group_brief` job per group** (at anchor T0 − 30m ET), not one per game. A spread-out slate (many gaps > 30 minutes between anchors) yields **more groups than games ÷ 2** — e.g. 11 games can produce 7 groups and 7 intraday briefs.
+
+**Brief content vs group membership:** each `group_brief` run still evaluates the **full remaining unplayed slate** for that date (minus games already started, with a short grace). `game_group_id` controls **when** the brief runs, duplicate checks in `brief_log`, and filename suffixes (`_g1`, `_g2`, …) — not which matchups appear in the signal evaluation.
+
+Adjacent groups whose anchors are within **30 minutes** are merged into one **odds block** for `odds_pull` / `odds_check` / `weather` (representative group only; `covered_group_ids` lists the rest). See `schedule_pipeline_day.py` (`PREREQ_MERGE_MIN = 30`).
+
+Optional: `--group-report PATH` writes a UTF-8 slate/group listing when scheduling.
+
 ### Per-group job types (after games exist)
 
 - **`odds_pull` / `odds_check` / `weather`** — one row per **merged odds block** or group per current script logic.
@@ -144,7 +166,7 @@ Mappings live in **`_build_command()`** in `run_pipeline.py` (abbreviated):
 | `odds_pull` | `python batch/ingestion/load_odds.py --pregame --markets game --date …` (+ `--force` if slate date ≠ local today) |
 | `odds_check` | `python diagnostics/check_odds_ready.py --date {job_date_et}` |
 | `weather` | `python batch/ingestion/load_weather.py --date {job_date_et}` |
-| `group_brief` | `python batch/pipeline/generate_daily_brief.py --session primary --date {job_date_et}` |
+| `group_brief` | `python batch/pipeline/generate_daily_brief.py --session primary --date {job_date_et}` (+ `--game-group-id` from runner) |
 | `bet_ledger_sync` | `python batch/pipeline/generate_daily_brief.py --sync-bet-ledger-only --date {job_date_et}` |
 | `ledger_snapshot` | `python batch/pipeline/daily_results_report.py --date {job_date_et}` |
 | `schedule_next_day_globals` | `python batch/jobs/schedule_pipeline_day.py --globals-only --date-et {next_calendar_day}` |
