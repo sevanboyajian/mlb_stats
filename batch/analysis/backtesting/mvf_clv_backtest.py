@@ -13,7 +13,7 @@ USAGE
     python batch/analysis/backtesting/mvf_clv_backtest.py
     python batch/analysis/backtesting/mvf_clv_backtest.py --report
 
-    MLB_DB_PATH=C:\\path\\to\\mlb_stats.db python batch/analysis/backtesting/mvf_clv_backtest.py --report
+    MLB_DB_PATH=data/mlb_stats.db python batch/analysis/backtesting/mvf_clv_backtest.py --seasons 2021 2022 2023 2024 2025 --report
 """
 
 from __future__ import annotations
@@ -37,6 +37,38 @@ if str(_REPO_ROOT) not in sys.path:
 from core.db.connection import connect as db_connect
 from core.db.connection import get_db_path
 
+
+def classify_wind_direction(wind_string: str | None) -> str:
+    """
+    Classify a stored wind_direction string into a wind class.
+    Returns one of: 'IN', 'OUT', 'CROSS', 'VARIES', 'CALM', 'UNKNOWN'
+
+    The stored strings are self-describing — they encode direction
+    relative to the field, not compass. Classification is string-based.
+
+    IN:     'In From LF', 'In From RF', 'In From CF'
+    OUT:    'Out To LF',  'Out To RF',  'Out To CF'
+    CROSS:  'L To R', 'R To L'
+    VARIES: 'Varies'
+    CALM:   'Calm'
+    UNKNOWN: anything else (None, empty, unrecognized)
+    """
+    if not wind_string:
+        return "UNKNOWN"
+    s = wind_string.strip()
+    if "In From" in s:
+        return "IN"
+    if "Out To" in s:
+        return "OUT"
+    if "L To R" in s or "R To L" in s:
+        return "CROSS"
+    if "Varies" in s:
+        return "VARIES"
+    if "Calm" in s:
+        return "CALM"
+    return "UNKNOWN"
+
+
 # Effective hours before first pitch for a game_odds row: prefer stored column;
 # if NULL (common on older backfills), derive from first pitch - snapshot time.
 # ``game_alias`` must reference the games row for that game_pk (e.g. ``g`` or ``gx``).
@@ -58,10 +90,13 @@ def _session_eff_hours(odds_alias: str, game_alias: str = "g") -> str:
 _SESSION_JOIN_COND = _session_eff_hours("go_session", "g")
 _SESSION_SUBQUERY = _session_eff_hours("go3", "gx")
 
-MVF_CANDIDATE_SQL = f"""
+def _mvf_candidate_sql(season_placeholders: str) -> str:
+    """``season_placeholders``: comma-separated ``?`` for ``IN`` clause."""
+    return f"""
 SELECT
     g.game_pk,
     g.game_date_et                          AS game_date,
+    g.season                                AS season,
     g.home_team_id,
     g.away_team_id,
     g.home_score,
@@ -124,10 +159,9 @@ JOIN game_odds go_session
             ORDER BY ({_SESSION_SUBQUERY}) DESC
             LIMIT 1)
 
-WHERE g.season         = ?
+WHERE g.season IN ({season_placeholders})
   AND g.game_type      = 'R'
   AND g.status         = 'Final'
-  AND g.wind_direction LIKE '%IN%'
   AND g.wind_mph       >= 10
   AND v.wind_effect    IN ('HIGH', 'MODERATE')
   AND go_open.home_ml  BETWEEN -170 AND -130
@@ -178,23 +212,45 @@ def enrich_mvf_row(row: dict[str, Any]) -> dict[str, Any]:
 
 def build_mvf_candidate_universe(
     db_path: str,
-    season: int = 2026,
-) -> list[dict[str, Any]]:
+    seasons: int | list[int] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """
-    Load MV-F candidate games (gate passed or not) for one season.
+    Load MV-F candidate rows from DB (all wind directions matching odds
+    windows), classify wind in Python, keep only ``wind_class == 'IN'``.
 
-    Candidates match wind / venue / home-fav band filters; CLV gate is computed
-    in Python from opening vs session-time away ML.
+    Returns:
+        candidates — enriched rows (always ``wind_class='IN'`` here)
+        wind_breakdown — counts by classify_wind_direction() **before** IN filter
     """
+    if seasons is None:
+        seasons_list = [2026]
+    elif isinstance(seasons, int):
+        seasons_list = [seasons]
+    else:
+        seasons_list = sorted(set(int(s) for s in seasons))
+
+    placeholders = ",".join("?" * len(seasons_list))
+    sql = _mvf_candidate_sql(placeholders)
+
     conn = db_connect(db_path)
     try:
         conn.row_factory = sqlite3.Row
-        cur = conn.execute(MVF_CANDIDATE_SQL, (int(season),))
+        cur = conn.execute(sql, seasons_list)
         rows = [dict(r) for r in cur.fetchall()]
     finally:
         conn.close()
 
-    return [enrich_mvf_row(r) for r in rows]
+    wind_breakdown = {k: 0 for k in ("IN", "OUT", "CROSS", "VARIES", "CALM", "UNKNOWN")}
+    candidates: list[dict[str, Any]] = []
+    for row in rows:
+        wc = classify_wind_direction(row.get("wind_direction"))
+        wind_breakdown[wc] += 1
+        if wc != "IN":
+            continue
+        row["wind_class"] = "IN"
+        candidates.append(enrich_mvf_row(row))
+
+    return candidates, wind_breakdown
 
 
 def pnl_units_for_candidate(candidate: dict[str, Any]) -> float:
@@ -359,6 +415,22 @@ MVF_SEGMENT_SPECS: list[tuple[str, str, Any]] = [
     ("wind_10_to_14", "wind_10_to_14 (10-14 mph)", _in_wind_10_to_14),
     ("wind_15_to_19", "wind_15_to_19 (15-19 mph)", _in_wind_15_to_19),
     ("wind_20_plus", "wind_20_plus (>= 20 mph)", _in_wind_20_plus),
+    # IN-from cardinal (raw wind_direction substring — excludes OUT/CROSS in universe)
+    (
+        "in_from_lf",
+        "in_from_lf (In From LF)",
+        lambda r: "In From LF" in str(r.get("wind_direction") or ""),
+    ),
+    (
+        "in_from_rf",
+        "in_from_rf (In From RF)",
+        lambda r: "In From RF" in str(r.get("wind_direction") or ""),
+    ),
+    (
+        "in_from_cf",
+        "in_from_cf (In From CF)",
+        lambda r: "In From CF" in str(r.get("wind_direction") or ""),
+    ),
     # Venue sensitivity
     ("venue_HIGH", "venue_HIGH", lambda r: _venue_effect(r) == "HIGH"),
     ("venue_MODERATE", "venue_MODERATE", lambda r: _venue_effect(r) == "MODERATE"),
@@ -383,6 +455,7 @@ MVF_SEGMENT_SPECS: list[tuple[str, str, Any]] = [
 MVF_SEGMENT_GROUP_ORDER: list[tuple[str, list[str]]] = [
     ("By CLV gate bucket", ["clv_negative", "clv_zero_to_half", "clv_half_to_two", "clv_two_plus"]),
     ("By wind speed", ["wind_10_to_14", "wind_15_to_19", "wind_20_plus"]),
+    ("By wind IN sub-type (LF / RF / CF)", ["in_from_lf", "in_from_rf", "in_from_cf"]),
     ("By venue wind sensitivity", ["venue_HIGH", "venue_MODERATE"]),
     (
         "By home favorite strength (open line)",
@@ -391,7 +464,6 @@ MVF_SEGMENT_GROUP_ORDER: list[tuple[str, list[str]]] = [
 ]
 
 _SEGMENT_LABEL_BY_KEY = {k: lbl for k, lbl, _ in MVF_SEGMENT_SPECS}
-_SEGMENT_PRED_BY_KEY = {k: pred for k, _, pred in MVF_SEGMENT_SPECS}
 
 
 def segment_mvf_results(
@@ -515,19 +587,29 @@ def generate_report(
     gate_off_results: list[dict[str, Any]],
     run_date: str,
     *,
-    season: int = 2026,
+    seasons: list[int],
+    wind_breakdown: dict[str, int] | None = None,
 ) -> str:
     """Build full plain-text MV-F CLV gate backtest report."""
     out: list[str] = []
+    season_label = ", ".join(str(s) for s in seasons)
 
     # Section 1 — header
     out.append("MV-F CLV GATE BACKTEST REPORT")
     out.append(f"Run date: {run_date}")
-    out.append(f"Season: {season}   Data source: MLB DB (game_odds + games + venues)")
+    out.append(f"Season(s): {season_label}   Data source: MLB DB (game_odds + games + venues)")
     out.append(
-        "MV-F criteria: wind IN >= 10 mph, wind-sensitive venue "
-        "(HIGH/MODERATE), home fav -130 to -170"
+        "MV-F criteria: true IN wind via classify_wind_direction ('In From *'); excludes "
+        "OUT/CROSS/VARIES/CALM/UNKNOWN. wind_mph >= 10, venue HIGH/MODERATE, "
+        "home fav open -130 to -170, session ML snapshot 3.5-8h before start."
     )
+    if wind_breakdown is not None:
+        out.append(
+            "Wind class breakdown (pre-IN filter, same SQL cohort): "
+            f"IN={wind_breakdown['IN']} OUT={wind_breakdown['OUT']} "
+            f"CROSS={wind_breakdown['CROSS']} VARIES={wind_breakdown['VARIES']} "
+            f"CALM={wind_breakdown['CALM']} UNKNOWN={wind_breakdown['UNKNOWN']}"
+        )
     out.append("")
 
     # Section 2 — verdict
@@ -567,31 +649,38 @@ def generate_report(
     out.append("GAME-LEVEL DETAIL")
     out.append("=" * 72)
     detail_hdr = (
-        f"{'Tag':<6} {'Date':<12} {'Venue':<28} {'Wind':>6} "
-        f"{'HmML':>6} {'AwML':>6} {'CLVpp':>7} {'Gate':>5} {'Won':>4} {'P&L':>7}"
+        f"{'Tag':<6} {'Sz':>4} {'Date':<12} {'Venue':<22} {'mph':>4} {'WCls':>5} "
+        f"{'WindRaw':<34} {'HmML':>6} {'AwML':>6} {'CLVpp':>7} {'Gt':>4} {'W':>3} {'P&L':>7}"
     )
     out.append(detail_hdr)
     out.append("-" * len(detail_hdr))
 
     sorted_rows = sorted(
         gate_off_results,
-        key=lambda r: (str(r.get("game_date") or ""), int(r.get("game_pk") or 0)),
+        key=lambda r: (
+            int(r.get("season") or 0),
+            str(r.get("game_date") or ""),
+            int(r.get("game_pk") or 0),
+        ),
     )
     for r in sorted_rows:
         tag = "[PASS]" if r.get("clv_gate_passed") == 1 else "[SUPP]"
-        venue = str(r.get("venue_name") or "")[:28]
+        sz = int(r["season"]) if r.get("season") is not None else "?"
+        venue = str(r.get("venue_name") or "")[:22]
         wind = r.get("wind_mph")
-        wind_s = f"{int(wind)}" if wind is not None else "?"
+        mph_s = f"{int(wind)}" if wind is not None else "?"
+        w_cls = str(r.get("wind_class") or "IN")[:5]
+        raw_dir = str(r.get("wind_direction") or "")[:34]
         hm = r.get("open_home_ml")
         aw = r.get("session_away_ml")
         clv = r.get("clv_delta_pp")
         clv_s = f"{float(clv):+.2f}" if clv is not None else "N/A"
-        gate_s = "PASS" if r.get("clv_gate_passed") == 1 else "SUPP"
+        gate_s = "PS" if r.get("clv_gate_passed") == 1 else "SP"
         won = "Y" if r.get("away_won") == 1 else "N"
         pnl = float(r.get("pnl_units", 0))
         out.append(
-            f"{tag:<6} {str(r.get('game_date') or ''):<12} {venue:<28} {wind_s:>6} "
-            f"{hm:>6} {aw:>6} {clv_s:>7} {gate_s:>5} {won:>4} {pnl:+7.3f}"
+            f"{tag:<6} {sz!s:>4} {str(r.get('game_date') or ''):<12} {venue:<22} {mph_s:>4} "
+            f"{w_cls:>5} {raw_dir:<34} {hm:>6} {aw:>6} {clv_s:>7} {gate_s:>4} {won:>3} {pnl:+7.3f}"
         )
 
     # Section 6 — methodology
@@ -609,7 +698,9 @@ def generate_report(
         "set; if NULL, hours are derived from games.game_start_utc minus "
         "captured_at_utc (same formula as load_odds). Run "
         "batch/jobs/backfill_game_odds_hours.py --dry-run to audit rows; omit "
-        "--dry-run to persist hours for other queries."
+        "--dry-run to persist hours for other queries. Wind direction filter uses "
+        "classify_wind_direction() in Python (true 'In From *' only); OUT/CROSS/"
+        "VARIES/CALM/UNKNOWN rows are excluded from the MV-F candidate set."
     )
     out.append("")
 
@@ -628,10 +719,26 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--season",
         type=int,
-        default=2026,
-        help="Season to backtest (default: 2026)",
+        default=None,
+        help="Single season to backtest (ignored if --seasons is set). Default: 2026.",
+    )
+    p.add_argument(
+        "--seasons",
+        nargs="+",
+        type=int,
+        default=None,
+        metavar="YEAR",
+        help="One or more seasons (e.g. --seasons 2021 2022 2023). Overrides --season.",
     )
     return p.parse_args()
+
+
+def _resolved_seasons(args: argparse.Namespace) -> list[int]:
+    if getattr(args, "seasons", None):
+        return sorted(set(int(s) for s in args.seasons))
+    if args.season is not None:
+        return [int(args.season)]
+    return [2026]
 
 
 def _resolve_db_path() -> str:
@@ -650,18 +757,28 @@ def _resolve_db_path() -> str:
 def main() -> int:
     args = parse_args()
     run_date = dt.date.today().isoformat()
-    season = int(args.season)
+    seasons_list = _resolved_seasons(args)
+    season_label = ", ".join(str(s) for s in seasons_list)
 
     db_path = _resolve_db_path()
     if not Path(db_path).is_file():
         print(f"Database not found: {db_path}")
         return 1
 
-    candidates = build_mvf_candidate_universe(db_path, season=season)
-    print(f"MV-F candidate universe: {len(candidates)} row(s)  (db={db_path}, season={season})")
+    candidates, wind_breakdown = build_mvf_candidate_universe(db_path, seasons=seasons_list)
+    print(
+        f"MV-F candidate universe: {len(candidates)} row(s)  "
+        f"(db={db_path}, season(s)={season_label})"
+    )
+    print(
+        "Wind class breakdown (pre-IN filter): "
+        f"IN={wind_breakdown['IN']} OUT={wind_breakdown['OUT']} "
+        f"CROSS={wind_breakdown['CROSS']} VARIES={wind_breakdown['VARIES']} "
+        f"CALM={wind_breakdown['CALM']} UNKNOWN={wind_breakdown['UNKNOWN']}"
+    )
 
     if not candidates:
-        print("No candidates — check filters / data.")
+        print("No IN-wind candidates — check filters / data.")
         return 1
 
     n_pass = sum(1 for r in candidates if r.get("clv_gate_passed") == 1)
@@ -719,7 +836,8 @@ def main() -> int:
             segments,
             gate_off_results,
             run_date,
-            season=season,
+            seasons=seasons_list,
+            wind_breakdown=wind_breakdown,
         )
         REPORTS_DIR.mkdir(parents=True, exist_ok=True)
         report_path = REPORTS_DIR / f"mvf_clv_backtest_{run_date}.txt"
