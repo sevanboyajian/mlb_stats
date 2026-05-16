@@ -5840,7 +5840,7 @@ def build_morning_brief(games, streaks, starters, game_date,
                     x = float(v)
                     if x >= 0.850:
                         return "Elite offense"
-                    if x >= 0.780:
+                    if x >= 0.800:  # aligned to _eval_owm() ops_threshold 2026-05-16
                         return "Strong offense"
                     if x >= 0.720:
                         return "Above average"
