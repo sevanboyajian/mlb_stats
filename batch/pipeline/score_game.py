@@ -554,7 +554,7 @@ def _eval_owm(g: FullyDressedGame, game_month: int) -> SignalFinding:
     has been struggling recently. Independent of weather and odds band.
 
     Conditions:
-      - Home team rolling_ops_wma >= 0.780 (2025 backtest: strong recent offense)
+      - Home team rolling_ops_wma >= 0.800 (2021-2025 backtest: strong recent offense)
       - Away starter era_wma >= 5.00 (struggling pitcher)
       - Home ML not more extreme than -275 (cap on heavy favorites)
       - Away starter has >= 2 starts in WMA window (sufficient data)
@@ -579,7 +579,9 @@ def _eval_owm(g: FullyDressedGame, game_month: int) -> SignalFinding:
     # Market gate — not heavy dog; cap extreme home favorites
     mkt = g.market
     home_impl = mkt.home_impl
-    ops_threshold = 0.780   # 2025 backtest: 69.0% win / +11.5% ROI at this level
+    ops_threshold = 0.800  # raised from 0.780 — backtest 2021-2025:
+                           # N=185, 64.9% win rate, +2.6% ROI
+                           # (vs 0.780: N=214, 63.6% win, +1.0% ROI)
     era_threshold = 5.00    # 2025 backtest: optimal balance of N and win rate
     ml_cap = -275    # cap: avoid extreme favorites where 1 loss = big drawdown
     market_ok = (
@@ -826,9 +828,34 @@ def _compute_confidence_score(
         if env.wind_out and not env.is_wind_suppressed:
             mods.append(("wind OUT — offense environment", +1))
 
-        # Booster 5: second signal present
+        # Booster 5: home starter also struggling — game becomes a bullpen
+        # contest; home team has structural advantage in that scenario.
+        # Backtest 2021-2025: home_sp_bad (ERA WMA >= 5.00) group:
+        # N=43, 72.1% win rate, +17.4% ROI vs full signal 64.9% / +2.6%
+        home_sp = fdg.matchup.home_sp
+        if home_sp.era_wma is not None and float(home_sp.era_wma) >= 5.00:
+            mods.append(
+                ("home SP also struggling — bullpen contest amplifies home edge", +1)
+            )
+
+        # Booster 6: second signal present
         if second_signal:
             mods.append(("second signal present", +1))
+
+        # Booster 7: narrow OPS differential — when both offenses are similar,
+        # market underprices away starter ERA struggles (pricing looks balanced).
+        # Backtest 2021-2025: diff_narrow (home OPS - away OPS < 0.050):
+        # N=24, 75.0% win rate, +27.8% ROI vs full signal 64.9% / +2.6%
+        # Note: requires away_ops_wma to be populated in away_offense block.
+        # If away_ops_wma is unavailable (None), skip silently — do not penalize.
+        away_ops_wma = getattr(fdg.matchup.away_offense, "rolling_ops_wma", None)
+        home_ops_wma_val = home_off.rolling_ops_wma
+        if away_ops_wma is not None and home_ops_wma_val is not None:
+            ops_diff = float(home_ops_wma_val) - float(away_ops_wma)
+            if ops_diff < 0.050:
+                mods.append(
+                    ("narrow OPS differential — market underprices SP struggles", +1)
+                )
 
         # Penalty: home team below .500 implied (slight dog territory)
         mkt = fdg.market
@@ -1374,7 +1401,9 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
     has_context = any(s.signal_id in context_ids for s in fired_best)
     diversity_ok = bool(has_matchup and has_context)
 
-    # OWM is validated independently (69% win rate, 116 games 2025).
+    # OWM validated independently (backtest 2021-2025: N=185, 64.9% win,
+    # +2.6% ROI at OPS>=0.800, ERA>=5.00). Threshold raised from 0.780
+    # on 2026-05-16 based on 5-season backtest evidence.
     # It fires on home_ml which is the opposite side from context signals
     # (S1H2/S1 fire on away_ml) so diversity_ok will never be True for OWM.
     # Allow OWM to stake independently when score >= 8.
@@ -1523,8 +1552,11 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
     stake_basis = "aggregated_scoring"
     if owm_standalone_ok and not diversity_ok:
         stake_basis = (
-            "OWM signal — home offense hot vs struggling away SP. "
-            "Staking independently (validated: 69% win rate, 116 games, 2025)."
+            "OWM signal — home offense hot (OPS WMA >= 0.800) vs struggling "
+            "away SP (ERA WMA >= 5.00). "
+            "Staking independently (backtest 2021-2025: N=185, 64.9% win, +2.6% ROI). "
+            "Score boosted when home SP also struggling (+17.4% ROI sub-group) "
+            "or OPS differential narrow (+27.8% ROI sub-group)."
         )
 
     pick_is_actionable = _compute_pick_is_actionable(
