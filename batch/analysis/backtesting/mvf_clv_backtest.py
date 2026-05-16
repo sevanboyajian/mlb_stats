@@ -26,7 +26,7 @@ import sqlite3
 import sys
 from pathlib import Path
 from statistics import mean
-from typing import Any
+from typing import Any, NamedTuple
 
 # Repo root on sys.path so `python batch/analysis/backtesting/mvf_clv_backtest.py` works.
 _SCRIPT_DIR = Path(__file__).resolve().parent
@@ -197,6 +197,17 @@ def enrich_mvf_row(row: dict[str, Any]) -> dict[str, Any]:
     out["clv_gate_passed"] = (
         1 if (clv_delta_pp is not None and clv_delta_pp >= 0.5) else 0
     )
+    out["alt_gate_passed"] = (
+        1 if (clv_delta_pp is not None and float(clv_delta_pp) >= 2.0) else 0
+    )
+    wd = str(out.get("wind_direction") or "")
+    out["is_rf_wind"] = 1 if "In From RF" in wd else 0
+    out["alt_gate_no_rf"] = (
+        1 if out["alt_gate_passed"] == 1 and out["is_rf_wind"] == 0 else 0
+    )
+
+    if out.get("season") is not None:
+        out["season"] = int(out["season"])
 
     home_score = out.get("home_score")
     away_score = out.get("away_score")
@@ -301,21 +312,23 @@ def _summarize_mvf_results(results: list[dict[str, Any]], label: str) -> dict[st
     }
 
 
+class GradePack(NamedTuple):
+    """Summaries for gate-on/off/suppressed plus alt CLV gate variants."""
+
+    gate_on_summary: dict[str, Any]
+    gate_off_summary: dict[str, Any]
+    gate_suppressed_summary: dict[str, Any]
+    alt_gate_summary: dict[str, Any]
+    alt_gate_no_rf_summary: dict[str, Any]
+    rf_alt_gate_summary: dict[str, Any]
+
+
 def grade_mvf_candidates(
     candidates: list[dict[str, Any]],
-) -> tuple[
-    dict[str, Any],
-    dict[str, Any],
-    dict[str, Any],
-    list[dict[str, Any]],
-    list[dict[str, Any]],
-]:
+) -> tuple[GradePack, list[dict[str, Any]]]:
     """
-    Grade MV-F away-ML bets at session odds; compare gate-on vs gate-off.
-
-    Returns:
-        gate_on_summary, gate_off_summary, gate_suppressed_summary,
-        gate_on_results, gate_off_results
+    Grade MV-F away-ML bets at session odds; compare gate-on vs gate-off
+    and alt gates (>=2.0pp CLV, and same excluding In From RF).
     """
     graded: list[dict[str, Any]] = []
     for c in candidates:
@@ -327,6 +340,14 @@ def grade_mvf_candidates(
     gate_off_results = list(graded)
     gate_suppressed_results = [r for r in graded if r.get("clv_gate_passed") == 0]
 
+    alt_gate_results = [r for r in graded if r.get("alt_gate_passed") == 1]
+    alt_gate_no_rf_results = [r for r in graded if r.get("alt_gate_no_rf") == 1]
+    rf_alt_gate_results = [
+        r
+        for r in graded
+        if r.get("alt_gate_passed") == 1 and r.get("is_rf_wind") == 1
+    ]
+
     gate_on_summary = _summarize_mvf_results(gate_on_results, "Gate ON")
     gate_off_summary = _summarize_mvf_results(
         gate_off_results, "Gate OFF (all candidates)"
@@ -334,14 +355,26 @@ def grade_mvf_candidates(
     gate_suppressed_summary = _summarize_mvf_results(
         gate_suppressed_results, "Gate suppressed only (clv_gate_passed=0)"
     )
-
-    return (
-        gate_on_summary,
-        gate_off_summary,
-        gate_suppressed_summary,
-        gate_on_results,
-        gate_off_results,
+    alt_gate_summary = _summarize_mvf_results(
+        alt_gate_results, "Alt gate (CLV>=2.0pp)"
     )
+    alt_gate_no_rf_summary = _summarize_mvf_results(
+        alt_gate_no_rf_results, "Alt gate minus RF (CLV>=2.0pp, not In From RF)"
+    )
+    rf_alt_gate_summary = _summarize_mvf_results(
+        rf_alt_gate_results,
+        "RF winds passing alt gate (CLV>=2.0pp, In From RF)",
+    )
+
+    pack = GradePack(
+        gate_on_summary=gate_on_summary,
+        gate_off_summary=gate_off_summary,
+        gate_suppressed_summary=gate_suppressed_summary,
+        alt_gate_summary=alt_gate_summary,
+        alt_gate_no_rf_summary=alt_gate_no_rf_summary,
+        rf_alt_gate_summary=rf_alt_gate_summary,
+    )
+    return pack, gate_off_results
 
 
 def _clv_delta(r: dict[str, Any]) -> float | None:
@@ -431,6 +464,11 @@ MVF_SEGMENT_SPECS: list[tuple[str, str, Any]] = [
         "in_from_cf (In From CF)",
         lambda r: "In From CF" in str(r.get("wind_direction") or ""),
     ),
+    (
+        "non_rf_only",
+        "non_rf_only (LF + CF only; excludes In From RF)",
+        lambda r: int(r.get("is_rf_wind") or 0) == 0,
+    ),
     # Venue sensitivity
     ("venue_HIGH", "venue_HIGH", lambda r: _venue_effect(r) == "HIGH"),
     ("venue_MODERATE", "venue_MODERATE", lambda r: _venue_effect(r) == "MODERATE"),
@@ -455,7 +493,10 @@ MVF_SEGMENT_SPECS: list[tuple[str, str, Any]] = [
 MVF_SEGMENT_GROUP_ORDER: list[tuple[str, list[str]]] = [
     ("By CLV gate bucket", ["clv_negative", "clv_zero_to_half", "clv_half_to_two", "clv_two_plus"]),
     ("By wind speed", ["wind_10_to_14", "wind_15_to_19", "wind_20_plus"]),
-    ("By wind IN sub-type (LF / RF / CF)", ["in_from_lf", "in_from_rf", "in_from_cf"]),
+    (
+        "By wind IN sub-type (LF / RF / CF)",
+        ["in_from_lf", "in_from_rf", "in_from_cf", "non_rf_only"],
+    ),
     ("By venue wind sensitivity", ["venue_HIGH", "venue_MODERATE"]),
     (
         "By home favorite strength (open line)",
@@ -548,30 +589,134 @@ def _compact_summary_table_lines(summaries: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
-def _format_verdict_block(
-    gate_on_summary: dict[str, Any],
-    gate_off_summary: dict[str, Any],
-    gate_suppressed_summary: dict[str, Any],
-) -> list[str]:
-    on_roi = float(gate_on_summary["roi_pct"])
-    off_roi = float(gate_off_summary["roi_pct"])
-    lines: list[str] = []
-    if off_roi > on_roi:
+def _roi_pct(summary: dict[str, Any]) -> float:
+    return float(summary["roi_pct"])
+
+
+def _three_gate_comparison_lines(pack: GradePack) -> list[str]:
+    hdr = (
+        f"{'Gate Variant':<34} {'N':>4} {'W':>4} {'L':>4} "
+        f"{'Win%':>7} {'P&L':>8} {'ROI%':>8}"
+    )
+    sep = "-" * len(hdr)
+    lines = [hdr, sep]
+    variants = [
+        ("Current gate  (CLV >= 0.5pp)", pack.gate_on_summary),
+        ("Alt gate      (CLV >= 2.0pp)", pack.alt_gate_summary),
+        ("Alt gate - RF excl.", pack.alt_gate_no_rf_summary),
+    ]
+    for name, s in variants:
         lines.append(
-            "VERDICT: CLV gate HURTS performance. Gate OFF ROI "
-            f"({off_roi:.2f}%) exceeds Gate ON ROI ({on_roi:.2f}%). "
-            "Recommend removing or weakening the CLV gate."
+            f"{name:<34} {s['n_bets']:4d} {s['n_wins']:4d} {s['n_losses']:4d} "
+            f"{s['win_rate'] * 100:6.1f}% {s['total_pnl']:+8.3f} "
+            f"{s['roi_pct']:+7.2f}%"
         )
+    return lines
+
+
+def _gate_policy_action(pack: GradePack) -> str:
+    """REMOVE / RAISE / RETAIN vs current 0.5pp gate (priority: REMOVE, then RAISE)."""
+    go = _roi_pct(pack.gate_on_summary)
+    off = _roi_pct(pack.gate_off_summary)
+    alt = _roi_pct(pack.alt_gate_summary)
+    if off > go:
+        return "REMOVE"
+    if alt > go:
+        return "RAISE"
+    return "RETAIN"
+
+
+def _better_worse(alt_s: dict[str, Any], go_s: dict[str, Any]) -> str:
+    if int(alt_s["n_bets"]) == 0 or int(go_s["n_bets"]) == 0:
+        return "N/A"
+    a, g = _roi_pct(alt_s), _roi_pct(go_s)
+    if a > g:
+        return "BETTER"
+    if a < g:
+        return "WORSE"
+    return "NEUTRAL"
+
+
+def _rf_exclusion_vs_alt(pack: GradePack) -> str:
+    alt = pack.alt_gate_summary
+    nr = pack.alt_gate_no_rf_summary
+    if int(alt["n_bets"]) == 0:
+        return "N/A"
+    a1, a2 = _roi_pct(nr), _roi_pct(alt)
+    if a1 > a2:
+        return "ADDS"
+    if a1 < a2:
+        return "SUBTRACTS"
+    return "NEUTRAL"
+
+
+def _format_multi_verdict_lines(
+    pack_full: GradePack,
+    pack_hist: GradePack | None,
+    pack_2026: GradePack | None,
+) -> list[str]:
+    lines: list[str] = []
+    pol_full = _gate_policy_action(pack_full)
+    lines.append(f"VERDICT: {pol_full} current gate at 0.5pp.")
+    lines.append(
+        f"Alt gate (2.0pp) {_better_worse(pack_full.alt_gate_summary, pack_full.gate_on_summary)} "
+        "on full sample."
+    )
+    if pack_2026 is not None and int(pack_2026.gate_off_summary["n_bets"]) > 0:
+        bw26 = _better_worse(pack_2026.alt_gate_summary, pack_2026.gate_on_summary)
+        suf26 = (
+            " (no CLV>=2.0pp bets in 2026 sample)."
+            if bw26 == "N/A"
+            else ""
+        )
+        lines.append(f"Alt gate (2.0pp) {bw26} on 2026 intraday data.{suf26}")
     else:
         lines.append(
-            "VERDICT: CLV gate HELPS performance. Gate ON ROI "
-            f"({on_roi:.2f}%) exceeds Gate OFF ROI ({off_roi:.2f}%). "
-            "Recommend retaining the CLV gate."
+            "Alt gate (2.0pp): no 2026 candidates in this run - intraday comparison N/A."
         )
-    n_supp = int(gate_suppressed_summary["n_bets"])
-    n_off = int(gate_off_summary["n_bets"])
+
+    rf_w = _rf_exclusion_vs_alt(pack_full)
+    if rf_w == "ADDS":
+        lines.append("RF exclusion ADDS value vs alt gate alone.")
+    elif rf_w == "SUBTRACTS":
+        lines.append("RF exclusion SUBTRACTS value vs alt gate alone.")
+    elif rf_w == "N/A":
+        lines.append("RF exclusion vs alt gate alone: N/A (no alt-gate bets).")
+    else:
+        lines.append(
+            "RF exclusion is neutral vs alt gate alone (same ROI on alt-gate subset)."
+        )
+
+    if pack_hist is not None and int(pack_hist.gate_off_summary["n_bets"]) > 0:
+        lines.append(
+            f"Gate policy - historical (2021-2025): {_gate_policy_action(pack_hist)}."
+        )
+    else:
+        lines.append("Gate policy - historical (2021-2025): N/A (no pre-2026 rows in query).")
+
+    if pack_2026 is not None and int(pack_2026.gate_off_summary["n_bets"]) > 0:
+        lines.append(f"Gate policy - 2026 only: {_gate_policy_action(pack_2026)}.")
+    else:
+        lines.append("Gate policy - 2026 only: N/A (no 2026 rows in query).")
+
+    if (
+        pack_hist is not None
+        and pack_2026 is not None
+        and int(pack_hist.gate_off_summary["n_bets"]) > 0
+        and int(pack_2026.gate_off_summary["n_bets"]) > 0
+    ):
+        h_pol = _gate_policy_action(pack_hist)
+        y_pol = _gate_policy_action(pack_2026)
+        if h_pol != y_pol:
+            lines.append(
+                f"NOTE: Gate-policy verdict differs between historical ({h_pol}) "
+                f"and 2026 ({y_pol}); see season-split tables."
+            )
+
+    n_supp = int(pack_full.gate_suppressed_summary["n_bets"])
+    n_off = int(pack_full.gate_off_summary["n_bets"])
     pct = (100.0 * n_supp / n_off) if n_off else 0.0
-    supp_roi = float(gate_suppressed_summary["roi_pct"])
+    supp_roi = _roi_pct(pack_full.gate_suppressed_summary)
     lines.append(
         f"Gate suppresses {n_supp} of {n_off} candidates ({pct:.1f}%). "
         f"Suppressed group ROI: {supp_roi:.2f}%"
@@ -579,10 +724,20 @@ def _format_verdict_block(
     return lines
 
 
+_FLAT_DATA_WARNING = (
+    "NOTE: 2021-2025 data uses SBRO/OddsWarehouse flat snapshots. "
+    "Many games show CLV delta = 0.00 because opening and session odds were "
+    "identical in the source data, not because the market did not move. "
+    "These games are suppressed by the CLV gate due to data quality, not signal "
+    "invalidity. 2026 results (intraday DK/FD pulls) are the cleaner test of "
+    "gate performance."
+)
+
+
 def generate_report(
-    gate_on_summary: dict[str, Any],
-    gate_off_summary: dict[str, Any],
-    gate_suppressed_summary: dict[str, Any],
+    pack_full: GradePack,
+    pack_hist: GradePack | None,
+    pack_2026: GradePack | None,
     segments: dict[str, dict[str, Any]],
     gate_off_results: list[dict[str, Any]],
     run_date: str,
@@ -612,22 +767,52 @@ def generate_report(
         )
     out.append("")
 
-    # Section 2 — verdict
+    # Section 2 — three-way gate comparison + verdict + season split
     out.append("=" * 72)
-    out.append("TOP-LINE VERDICT")
+    out.append("THREE-WAY GATE COMPARISON (full sample)")
     out.append("=" * 72)
-    out.extend(_format_verdict_block(gate_on_summary, gate_off_summary, gate_suppressed_summary))
+    out.extend(_three_gate_comparison_lines(pack_full))
     out.append("")
 
-    # Section 3 — summary table
     out.append("=" * 72)
-    out.append("SUMMARY TABLE")
+    out.append("VERDICT")
+    out.append("=" * 72)
+    out.extend(_format_multi_verdict_lines(pack_full, pack_hist, pack_2026))
+    out.append("")
+
+    out.append("=" * 72)
+    out.append("SEASON SPLIT")
+    out.append("=" * 72)
+
+    title_hist = "Historical (2021-2025)"
+    line_hist = f"-- {title_hist} " + "-" * (72 - 4 - len(title_hist))
+    out.append(line_hist)
+    if pack_hist is not None and int(pack_hist.gate_off_summary["n_bets"]) > 0:
+        out.extend(_three_gate_comparison_lines(pack_hist))
+        out.append("")
+        out.append(_FLAT_DATA_WARNING)
+    else:
+        out.append("(No pre-2026 candidates in this season selection.)")
+    out.append("")
+
+    title_26 = "2026 only (intraday odds - clean CLV data)"
+    line_26 = f"-- {title_26} " + "-" * (72 - 4 - len(title_26))
+    out.append(line_26)
+    if pack_2026 is not None and int(pack_2026.gate_off_summary["n_bets"]) > 0:
+        out.extend(_three_gate_comparison_lines(pack_2026))
+    else:
+        out.append("(No 2026 candidates in this season selection.)")
+    out.append("")
+
+    # Section 3 — legacy gate ON/OFF/suppressed summary
+    out.append("=" * 72)
+    out.append("SUMMARY TABLE (Gate ON / OFF / suppressed)")
     out.append("=" * 72)
     out.extend(
         _compact_summary_table_lines([
-            gate_on_summary,
-            gate_off_summary,
-            gate_suppressed_summary,
+            pack_full.gate_on_summary,
+            pack_full.gate_off_summary,
+            pack_full.gate_suppressed_summary,
         ])
     )
     out.append("")
@@ -649,8 +834,9 @@ def generate_report(
     out.append("GAME-LEVEL DETAIL")
     out.append("=" * 72)
     detail_hdr = (
-        f"{'Tag':<6} {'Sz':>4} {'Date':<12} {'Venue':<22} {'mph':>4} {'WCls':>5} "
-        f"{'WindRaw':<34} {'HmML':>6} {'AwML':>6} {'CLVpp':>7} {'Gt':>4} {'W':>3} {'P&L':>7}"
+        f"{'Tag':<6} {'Sz':>4} {'Date':<12} {'Venue':<18} {'mph':>4} {'WCls':>5} "
+        f"{'WindRaw':<28} {'HmML':>6} {'AwML':>6} {'CLVpp':>7} {'Gt':>4} "
+        f"{'AltGt':>5} {'RF':>3} {'W':>3} {'P&L':>7}"
     )
     out.append(detail_hdr)
     out.append("-" * len(detail_hdr))
@@ -666,21 +852,24 @@ def generate_report(
     for r in sorted_rows:
         tag = "[PASS]" if r.get("clv_gate_passed") == 1 else "[SUPP]"
         sz = int(r["season"]) if r.get("season") is not None else "?"
-        venue = str(r.get("venue_name") or "")[:22]
+        venue = str(r.get("venue_name") or "")[:18]
         wind = r.get("wind_mph")
         mph_s = f"{int(wind)}" if wind is not None else "?"
         w_cls = str(r.get("wind_class") or "IN")[:5]
-        raw_dir = str(r.get("wind_direction") or "")[:34]
+        raw_dir = str(r.get("wind_direction") or "")[:28]
         hm = r.get("open_home_ml")
         aw = r.get("session_away_ml")
         clv = r.get("clv_delta_pp")
         clv_s = f"{float(clv):+.2f}" if clv is not None else "N/A"
         gate_s = "PS" if r.get("clv_gate_passed") == 1 else "SP"
+        alt_s = "Y" if r.get("alt_gate_passed") == 1 else "N"
+        rf_s = "Y" if r.get("is_rf_wind") == 1 else "N"
         won = "Y" if r.get("away_won") == 1 else "N"
         pnl = float(r.get("pnl_units", 0))
         out.append(
-            f"{tag:<6} {sz!s:>4} {str(r.get('game_date') or ''):<12} {venue:<22} {mph_s:>4} "
-            f"{w_cls:>5} {raw_dir:<34} {hm:>6} {aw:>6} {clv_s:>7} {gate_s:>4} {won:>3} {pnl:+7.3f}"
+            f"{tag:<6} {sz!s:>4} {str(r.get('game_date') or ''):<12} {venue:<18} {mph_s:>4} "
+            f"{w_cls:>5} {raw_dir:<28} {hm:>6} {aw:>6} {clv_s:>7} {gate_s:>4} "
+            f"{alt_s:>5} {rf_s:>3} {won:>3} {pnl:+7.3f}"
         )
 
     # Section 6 — methodology
@@ -693,8 +882,9 @@ def generate_report(
         "signals in the DB. This backtest uses venue + wind + odds criteria only "
         "to identify MV-F candidates, matching the live pipeline's entry conditions. "
         "CLV delta computed as: session_away_implied_prob - open_away_implied_prob "
-        "(in pp). Gate threshold: +0.5pp. P&L graded at flat 1 unit, session-time "
-        "away ML odds. Session pregame hours use game_odds.hours_before_game when "
+        "(in pp). Current gate threshold: +0.5pp; alt gate: +2.0pp CLV away-implied "
+        "movement; optional exclusion of In From RF on alt gate. P&L graded at flat "
+        "1 unit, session-time away ML odds. Session pregame hours use game_odds.hours_before_game when "
         "set; if NULL, hours are derived from games.game_start_utc minus "
         "captured_at_utc (same formula as load_odds). Run "
         "batch/jobs/backfill_game_odds_hours.py --dry-run to audit rows; omit "
@@ -784,32 +974,56 @@ def main() -> int:
     n_pass = sum(1 for r in candidates if r.get("clv_gate_passed") == 1)
     print(f"  clv_gate_passed=1: {n_pass}  |  clv_gate_passed=0: {len(candidates) - n_pass}")
 
-    (
-        gate_on_summary,
-        gate_off_summary,
-        gate_suppressed_summary,
-        _gate_on_results,
-        gate_off_results,
-    ) = grade_mvf_candidates(candidates)
+    pack_full, gate_off_results = grade_mvf_candidates(candidates)
+
+    hist_candidates = [c for c in candidates if int(c.get("season") or 0) < 2026]
+    candidates_2026 = [c for c in candidates if int(c.get("season") or 0) == 2026]
+    pack_hist = grade_mvf_candidates(hist_candidates)[0] if hist_candidates else None
+    pack_2026 = grade_mvf_candidates(candidates_2026)[0] if candidates_2026 else None
 
     segments = segment_mvf_results(gate_off_results)
 
-    # Always: top-line verdict + compact summary table
     print("\n" + "=" * 72)
-    print("TOP-LINE VERDICT")
+    print("THREE-WAY GATE COMPARISON (full sample)")
     print("=" * 72)
-    for line in _format_verdict_block(
-        gate_on_summary, gate_off_summary, gate_suppressed_summary
-    ):
+    for line in _three_gate_comparison_lines(pack_full):
         print(line)
 
     print("\n" + "=" * 72)
-    print("SUMMARY TABLE")
+    print("VERDICT")
+    print("=" * 72)
+    for line in _format_multi_verdict_lines(pack_full, pack_hist, pack_2026):
+        print(line)
+
+    print("\n" + "=" * 72)
+    print("SEASON SPLIT")
+    print("=" * 72)
+    title_hist = "Historical (2021-2025)"
+    print(f"-- {title_hist} " + "-" * (72 - 4 - len(title_hist)))
+    if pack_hist is not None and int(pack_hist.gate_off_summary["n_bets"]) > 0:
+        for line in _three_gate_comparison_lines(pack_hist):
+            print(line)
+        print()
+        print(_FLAT_DATA_WARNING)
+    else:
+        print("(No pre-2026 candidates in this season selection.)")
+
+    print()
+    title_26 = "2026 only (intraday odds - clean CLV data)"
+    print(f"-- {title_26} " + "-" * (72 - 4 - len(title_26)))
+    if pack_2026 is not None and int(pack_2026.gate_off_summary["n_bets"]) > 0:
+        for line in _three_gate_comparison_lines(pack_2026):
+            print(line)
+    else:
+        print("(No 2026 candidates in this season selection.)")
+
+    print("\n" + "=" * 72)
+    print("SUMMARY TABLE (Gate ON / OFF / suppressed)")
     print("=" * 72)
     for line in _compact_summary_table_lines([
-        gate_on_summary,
-        gate_off_summary,
-        gate_suppressed_summary,
+        pack_full.gate_on_summary,
+        pack_full.gate_off_summary,
+        pack_full.gate_suppressed_summary,
     ]):
         print(line)
 
@@ -820,7 +1034,7 @@ def main() -> int:
 
     clv_neg = segments["clv_negative"]["n_bets"]
     clv_zfh = segments["clv_zero_to_half"]["n_bets"]
-    suppressed_n = gate_suppressed_summary["n_bets"]
+    suppressed_n = int(pack_full.gate_suppressed_summary["n_bets"])
     if clv_neg + clv_zfh != suppressed_n:
         print(
             f"\n  Note: clv_negative + clv_zero_to_half = {clv_neg + clv_zfh} "
@@ -830,9 +1044,9 @@ def main() -> int:
 
     if args.report:
         report_text = generate_report(
-            gate_on_summary,
-            gate_off_summary,
-            gate_suppressed_summary,
+            pack_full,
+            pack_hist,
+            pack_2026,
             segments,
             gate_off_results,
             run_date,
