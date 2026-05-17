@@ -1766,6 +1766,171 @@ def ledger_season_staked_graded_stats(
     }
 
 
+def get_additional_model_selections(
+    conn: sqlite3.Connection,
+    game_date: str,
+    top_pick_game_pk: int | None,
+    limit: int = 5,
+) -> list[dict]:
+    """
+    Read up to ``limit`` non-actionable scored games from game_signal_log
+    for display in ADDITIONAL MODEL SELECTIONS.
+    """
+    import json
+
+    from batch.pipeline.score_game import SIGNAL_DISPLAY_NAME
+
+    if limit <= 0:
+        return []
+
+    try:
+        rows = conn.execute(
+            """
+            SELECT
+                gsl.game_pk,
+                gsl.home_team,
+                gsl.away_team,
+                gsl.score,
+                gsl.best_side,
+                gsl.market_type,
+                gsl.eval_status,
+                gsl.edge,
+                gsl.model_p,
+                gsl.implied_p,
+                gsl.odds,
+                gsl.signals_fired,
+                gsl.suppression_reasons,
+                gsl.session,
+                g.home_score,
+                g.away_score,
+                g.game_date_et
+            FROM game_signal_log gsl
+            JOIN games g ON g.game_pk = gsl.game_pk
+            WHERE gsl.game_date = ?
+              AND gsl.score >= 5
+              AND gsl.pick_is_actionable = 0
+              AND (? IS NULL OR gsl.game_pk != ?)
+            ORDER BY gsl.score DESC, gsl.edge DESC NULLS LAST
+            LIMIT ?
+            """,
+            (game_date, top_pick_game_pk, top_pick_game_pk, limit),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+
+    results: list[dict] = []
+    for row in rows:
+        (
+            game_pk,
+            home_team,
+            away_team,
+            score,
+            best_side,
+            market_type,
+            eval_status,
+            edge,
+            model_p,
+            implied_p,
+            odds,
+            signals_fired_json,
+            suppression_json,
+            session,
+            _home_score,
+            _away_score,
+            _game_date_et,
+        ) = row
+
+        try:
+            signals_fired = json.loads(signals_fired_json or "[]")
+        except Exception:
+            signals_fired = []
+        try:
+            suppression_reasons = json.loads(suppression_json or "[]")
+        except Exception:
+            suppression_reasons = []
+
+        fired_names = [
+            SIGNAL_DISPLAY_NAME.get(
+                str(s.get("signal_id", "")),
+                str(s.get("signal_id", "")),
+            )
+            for s in signals_fired
+            if s.get("fires") and s.get("signal_id")
+        ]
+
+        odds_str = (
+            f"+{odds}"
+            if odds is not None and odds > 0
+            else str(odds) if odds is not None else "N/A"
+        )
+
+        edge_str = f"{edge * 100:+.1f}%" if edge is not None else "N/A"
+        model_pct = f"{model_p * 100:.0f}%" if model_p is not None else "N/A"
+        implied_pct = f"{implied_p * 100:.0f}%" if implied_p is not None else "N/A"
+
+        if best_side == "home_ml":
+            bet_label = f"{home_team} ML"
+        elif best_side == "away_ml":
+            bet_label = f"{away_team} ML"
+        elif best_side == "over_total":
+            bet_label = "OVER"
+        elif best_side == "under_total":
+            bet_label = "UNDER"
+        elif best_side and "rl" in str(best_side):
+            bet_label = f"{away_team} +1.5"
+        else:
+            bet_label = best_side or "N/A"
+
+        primary_suppression = None
+        if suppression_reasons:
+            raw = str(suppression_reasons[0])
+            raw = raw.lstrip("\u26a0 ").lstrip("! ").strip()
+            primary_suppression = raw[:120]
+
+        results.append({
+            "game_pk": int(game_pk),
+            "home_team": str(home_team or ""),
+            "away_team": str(away_team or ""),
+            "score": int(score or 0),
+            "best_side": best_side,
+            "market_type": market_type,
+            "eval_status": eval_status,
+            "edge": edge,
+            "edge_str": edge_str,
+            "model_p": model_p,
+            "model_pct": model_pct,
+            "implied_pct": implied_pct,
+            "odds": odds,
+            "odds_str": odds_str,
+            "bet_label": bet_label,
+            "signals_fired": signals_fired,
+            "fired_names": fired_names,
+            "suppression_reasons": suppression_reasons,
+            "primary_suppression": primary_suppression,
+            "session": session,
+        })
+
+    return results
+
+
+def _entry_pick_is_actionable(entry: dict) -> bool:
+    sg = (entry.get("sigs") or {}).get("_scored_game")
+    return bool(sg is not None and getattr(sg, "pick_is_actionable", False))
+
+
+def _format_gsl_eval_status_line(eval_status: str | None) -> str:
+    es = str(eval_status or "").strip()
+    if es == "SKIPPED_EDGE":
+        return "Status: Edge present but below threshold — SKIPPED_EDGE"
+    if es == "NO_EDGE":
+        return "Status: No actionable edge — NO_EDGE"
+    if es == "NO_BET":
+        return "Status: Signal fired but gated — NO_BET"
+    if es == "NO_MODEL":
+        return "Status: Insufficient data for model probability."
+    return f"Status: {es}" if es else "Status: N/A"
+
+
 def ensure_bet_snapshots(conn: sqlite3.Connection) -> None:
     """
     Persistent snapshot of bet decisions at placement time (stake>0).
@@ -4388,6 +4553,25 @@ def evaluate_signals(
             "market_evals": {},
         }
     elif scored is not None:
+        if PERSIST_WRITES:
+            try:
+                from batch.pipeline.score_game import save_game_signal_log
+
+                save_game_signal_log(
+                    conn=conn,
+                    scored=scored,
+                    session=session,
+                    game_date=str(fdg.identifiers.game_date_et),
+                )
+            except Exception as e:
+                import logging
+
+                gpk = getattr(getattr(scored, "game", None), "identifiers", None)
+                logging.warning(
+                    "game_signal_log write failed for %s: %s",
+                    getattr(gpk, "game_pk", "?"),
+                    e,
+                )
         try:
             out = scored_game_to_eval_dict(scored, session)
             out["output_tier"] = scored.output_tier
@@ -6396,20 +6580,59 @@ def build_primary_brief(games, streaks, starters, game_date,
         lines.append("")
 
     # ── Additional Picks ─────────────────────────────────────────────────
-    rest = all_picks[1:]
-    lines.append(section(f"📋  ADDITIONAL MODEL SELECTIONS  ({len(rest)})", width=BW))
-    if not rest:
+    rest_entries = all_picks[1:]
+    bet_overflow_cards = [e for e in rest_entries if _entry_pick_is_actionable(e)]
+    top_pick_game_pk: int | None = None
+    if all_picks:
+        try:
+            top_pick_game_pk = int(all_picks[0]["game"]["game_pk"])
+        except (TypeError, ValueError, KeyError):
+            top_pick_game_pk = None
+
+    additional_selections: list[dict] = []
+    if PERSIST_WRITES and conn is not None:
+        overflow_pks = {
+            int(e["game"]["game_pk"]) for e in bet_overflow_cards
+        }
+        limit_gsl = max(0, 5 - len(bet_overflow_cards))
+        raw_additional = get_additional_model_selections(
+            conn=conn,
+            game_date=game_date,
+            top_pick_game_pk=top_pick_game_pk,
+            limit=limit_gsl,
+        )
+        additional_selections = [
+            a for a in raw_additional if a["game_pk"] not in overflow_pks
+        ]
+
+    total_additional = len(bet_overflow_cards) + len(additional_selections)
+    lines.append(
+        section(f"📋  ADDITIONAL MODEL SELECTIONS  ({total_additional})", width=BW)
+    )
+    if additional_selections:
+        lines.append(
+            "\n  Includes "
+            f"{len(additional_selections)} model evaluation(s) the signal gate "
+            "did not approve — shown for context only.\n"
+            "  Verify all lines independently before placing any bet.\n"
+        )
+    if total_additional == 0:
         lines.append("\n  No additional confirmed signals today.\n")
-    for i, entry in enumerate(rest, start=1):
-        g    = entry["game"]
+
+    card_num = 0
+    for entry in bet_overflow_cards:
+        card_num += 1
+        g = entry["game"]
         sigs = entry["sigs"]
         best = sorted(sigs["picks"], key=lambda x: x["priority"])[0]
-        lines.append(f"\n  #{i}  {matchup_line(g)}")
+        lines.append(f"\n  #{card_num}  {matchup_line(g)}")
         lines.append(f"       {weather_line(g)}")
         lines.append(f"       {entry['starter']}")
         lines.append(f"       {entry['streak']}")
-        alert = movement_alert(conn, game_date, session,
-                               g["game_pk"], g.get("total_line"), g.get("home_ml"))
+        alert = movement_alert(
+            conn, game_date, session,
+            g["game_pk"], g.get("total_line"), g.get("home_ml"),
+        )
         if alert:
             lines.append("")
             lines.append(alert)
@@ -6455,13 +6678,37 @@ def build_primary_brief(games, streaks, starters, game_date,
                 lines.append(
                     f"             {textwrap.fill(note, width=66, subsequent_indent='             ')}"
                 )
-        lines.append(f"       {textwrap.fill(best['reason'], width=66, subsequent_indent='       ')}")
+        lines.append(
+            f"       {textwrap.fill(best['reason'], width=66, subsequent_indent='       ')}"
+        )
         if sigs["data_flags"]:
             for f in sigs["data_flags"]:
                 if _is_model_confirmation_flag(f):
                     lines.append(f"       {f}")
                 else:
                     lines.append(f"       DATA: {f}")
+        lines.append("")
+
+    for sel in additional_selections:
+        card_num += 1
+        away = sel["away_team"]
+        home = sel["home_team"]
+        sess_label = str(sel.get("session") or session or "primary")
+        fired_txt = " · ".join(sel["fired_names"]) if sel["fired_names"] else "None"
+        lines.append(f"\n  #{card_num}  {away}  vs  {home} (h)    [{sess_label} session]")
+        lines.append(
+            f"       Model wanted: {sel['bet_label']} {sel['odds_str']}"
+        )
+        lines.append(
+            f"       Signals: {fired_txt} (score={sel['score']})"
+        )
+        lines.append(
+            f"       Edge: {sel['edge_str']}  |  Model: {sel['model_pct']}  "
+            f"->  Market: {sel['implied_pct']}"
+        )
+        lines.append(f"       {_format_gsl_eval_status_line(sel.get('eval_status'))}")
+        if sel.get("primary_suppression"):
+            lines.append(f"       ! {sel['primary_suppression']}")
         lines.append("")
 
     # ── Hot pitcher streak (separate monitor; half-stake until N≥50) ──────

@@ -28,11 +28,12 @@
 --    5. Backtesting   : model_predictions, backtest_results
 --    6. Operations    : ingest_log, odds_ingest_log, signal_state,
 --                      shadow_filter_b_watch, bet_ledger, bet_snapshots,
---                       brief_log, daily_pnl, brief_picks
+--                      game_signal_log, brief_log, daily_pnl, brief_picks
 --    7. Pipeline      : pipeline_jobs, pipeline_job_runs, runner_lock
 -- ============================================================
 -- # CHANGE LOG (latest first)
 -- # -------------------------
+-- # 2026-05-16  game_signal_log: one row per game per day (upsert); all scored games.
 -- # 2026-05-02  bet_snapshots: prior-report source of truth (matches ensure_bet_snapshots /
 -- #              generate_daily_brief.save_bet_snapshot).
 -- # 2026-04-17  Consolidated application DDL into this file: game_probable_pitchers,
@@ -1021,25 +1022,42 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_bet_snapshots_key
 
 
 -- ------------------------------------------------------------
--- PLANNED (not created yet): game_signal_log
+-- game_signal_log
+-- One row per game per ET date (latest brief session wins via upsert).
+-- Populated by score_game.save_game_signal_log from generate_daily_brief
+-- for every successfully scored game, whether or not a bet fired.
 -- ------------------------------------------------------------
--- One row per game per session when the Fully Dressed / scoring function ran.
--- Stores which cell of the tier matrix applied and which signals fired — supports
--- post-season debugging ("why did this game show Tier 1?") and backtests without
--- re-running enrichment. Uncomment and adjust when ready to ship.
---
--- Proposed shape:
---   game_pk           INTEGER NOT NULL REFERENCES games (game_pk)
---   session           TEXT    NOT NULL   -- brief session key (primary / early / …)
---   output_tier       TEXT               -- Tier1 | Tier2 | Tier3 | Avoid | NULL
---   tier_basis        TEXT               -- human-readable tier driver
---   signals_fired     TEXT               -- JSON: fired signals + metadata
---   env_ceiling       TEXT               -- from GameEnvironment at scoring time
---   completeness_tier TEXT               -- from DataCompleteness at scoring time
---   computed_at       TEXT    NOT NULL   -- ISO / ET stamp when scoring ran
---
--- Index ideas: (game_pk), (session, computed_at). Unique key TBD: either one row
--- per (game_pk, session) overwrite, or append-only with (game_pk, session, computed_at).
+CREATE TABLE IF NOT EXISTS game_signal_log (
+    game_date       TEXT    NOT NULL,   -- ET date YYYY-MM-DD
+    game_pk         INTEGER NOT NULL,   -- MLB gamePk
+    session         TEXT    NOT NULL,   -- last session that scored this game
+    home_team       TEXT,               -- home team abbreviation
+    away_team       TEXT,               -- away team abbreviation
+    score           INTEGER NOT NULL,   -- best_aggregate_score from ScoredGame
+    best_side       TEXT,               -- home_ml | away_ml | over_total | under_total | away_rl
+    market_type     TEXT,               -- ML | TOTAL | RL
+    eval_status     TEXT,               -- BET | NO_BET | SKIPPED_EDGE | NO_EDGE | NO_MODEL
+    pick_is_actionable INTEGER NOT NULL DEFAULT 0,  -- 1 if bet fired, 0 otherwise
+    edge            REAL,               -- computed edge (float, signed)
+    model_p         REAL,               -- model win probability
+    implied_p       REAL,               -- market implied probability
+    odds            INTEGER,            -- odds for the best_side at scoring time
+    signals_fired   TEXT,               -- JSON array of {signal_id, score, fires} dicts
+    data_flags      TEXT,               -- JSON array of data_flags strings from ScoredGame
+    suppression_reasons TEXT,           -- JSON array: data_flags subset for quick filtering
+    updated_at      TEXT    NOT NULL,   -- ET timestamp of last upsert
+
+    PRIMARY KEY (game_date, game_pk)    -- one row per game per day, latest session wins
+);
+
+CREATE INDEX IF NOT EXISTS idx_gsl_date
+    ON game_signal_log (game_date);
+
+CREATE INDEX IF NOT EXISTS idx_gsl_score
+    ON game_signal_log (game_date, score DESC);
+
+CREATE INDEX IF NOT EXISTS idx_gsl_eval
+    ON game_signal_log (game_date, eval_status, score DESC);
 
 
 -- ------------------------------------------------------------

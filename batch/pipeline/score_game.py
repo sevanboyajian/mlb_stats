@@ -8,8 +8,10 @@ Central signal scoring — all model signal if/else logic lives here.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import os
+from datetime import datetime
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -1894,6 +1896,128 @@ def scored_game_to_eval_dict(scored: ScoredGame, session: str) -> dict[str, Any]
         "watch_reason": watch_reason,
         "data_flags": scored.data_flags,
     }
+
+
+def save_game_signal_log(
+    conn: sqlite3.Connection,
+    scored: ScoredGame,
+    session: str,
+    game_date: str,
+) -> None:
+    """
+    Upsert one row into game_signal_log for this scored game.
+    Called after score_game() for every evaluated game regardless
+    of whether a bet fired. One row per game per day — latest
+    session overwrites on conflict.
+    """
+    g = scored.game
+    ids = g.identifiers
+
+    mkt = g.market
+    if scored.best_side == "home_ml":
+        odds = mkt.home_ml_current
+    elif scored.best_side == "away_ml":
+        odds = mkt.away_ml_current
+    elif scored.best_side == "over_total":
+        odds = mkt.over_odds
+    elif scored.best_side == "under_total":
+        odds = mkt.under_odds
+    else:
+        odds = None
+
+    market_type = None
+    if scored.best_side in ("home_ml", "away_ml"):
+        market_type = "ML"
+    elif scored.best_side in ("over_total", "under_total"):
+        market_type = "TOTAL"
+    elif scored.best_side and "rl" in scored.best_side:
+        market_type = "RL"
+
+    signals_fired = [
+        {
+            "signal_id": str(s.signal_id or ""),
+            "score": int(s.confidence_score or 0),
+            "fires": bool(s.fires),
+        }
+        for s in (scored.signals_fired or [])
+    ]
+
+    data_flags = list(scored.data_flags or [])
+
+    suppression_keywords = (
+        "gate",
+        "blocked",
+        "suppressed",
+        "conflict",
+        "penalty",
+        "no bet",
+        "clv",
+    )
+    suppression_reasons = [
+        f
+        for f in data_flags
+        if any(kw in str(f).lower() for kw in suppression_keywords)
+    ]
+
+    updated_at = datetime.now().strftime("%Y-%m-%d %H:%M ET")
+
+    conn.execute(
+        """
+        INSERT INTO game_signal_log (
+            game_date, game_pk, session,
+            home_team, away_team,
+            score, best_side, market_type, eval_status,
+            pick_is_actionable, edge, model_p, implied_p, odds,
+            signals_fired, data_flags, suppression_reasons,
+            updated_at
+        ) VALUES (
+            ?, ?, ?,
+            ?, ?,
+            ?, ?, ?, ?,
+            ?, ?, ?, ?, ?,
+            ?, ?, ?,
+            ?
+        )
+        ON CONFLICT (game_date, game_pk) DO UPDATE SET
+            session             = excluded.session,
+            home_team           = excluded.home_team,
+            away_team           = excluded.away_team,
+            score               = excluded.score,
+            best_side           = excluded.best_side,
+            market_type         = excluded.market_type,
+            eval_status         = excluded.eval_status,
+            pick_is_actionable  = excluded.pick_is_actionable,
+            edge                = excluded.edge,
+            model_p             = excluded.model_p,
+            implied_p           = excluded.implied_p,
+            odds                = excluded.odds,
+            signals_fired       = excluded.signals_fired,
+            data_flags          = excluded.data_flags,
+            suppression_reasons = excluded.suppression_reasons,
+            updated_at          = excluded.updated_at
+        """,
+        (
+            str(game_date),
+            int(ids.game_pk),
+            str(session),
+            str(ids.home_team_abbr or ""),
+            str(ids.away_team_abbr or ""),
+            int(scored.best_aggregate_score or 0),
+            scored.best_side,
+            market_type,
+            scored.eval_status,
+            1 if scored.pick_is_actionable else 0,
+            float(scored.edge) if scored.edge is not None else None,
+            float(scored.model_p) if scored.model_p is not None else None,
+            float(scored.implied_p) if scored.implied_p is not None else None,
+            int(odds) if odds is not None else None,
+            json.dumps(signals_fired),
+            json.dumps(data_flags),
+            json.dumps(suppression_reasons),
+            updated_at,
+        ),
+    )
+    conn.commit()
 
 
 def evaluate_signals_scored(
