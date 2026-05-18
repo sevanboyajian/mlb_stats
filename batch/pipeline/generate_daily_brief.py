@@ -6,6 +6,7 @@ Reads from mlb_stats.db and outputs the formatted betting brief.
 
 CHANGE LOG (latest first)
 ──────────────────────────
+2026-05-16  Matchup lines show season W-L from ``standings`` (snapshot_date < slate date).
 2026-05-15  Output: .txt brief is default; ``--docx`` also saves Word. Email attaches .txt by
             default; with ``--docx``, email attaches .docx instead (``--no-email`` to skip).
 2026-05-03  ``score_game._align_market_evals_with_actionability``: per-market ``eval_status`` / ``edge_ok``
@@ -4310,6 +4311,94 @@ def load_streaks(conn: sqlite3.Connection, game_date: str, team_ids: list, verbo
     return streaks
 
 
+def load_team_season_records(
+    conn: sqlite3.Connection,
+    game_date: str,
+    season: int,
+    team_ids: list[int] | None = None,
+    *,
+    verbose: bool = False,
+) -> dict[int, tuple[int, int]]:
+    """
+    Season W-L per team entering ``game_date`` (pregame brief).
+
+    Uses the latest ``standings`` row with ``snapshot_date < game_date`` so
+    same-day finals are not counted on the morning/afternoon card.
+    """
+    params: list[object] = [int(season), str(game_date)]
+    team_filter = ""
+    if team_ids:
+        placeholders = ",".join("?" * len(team_ids))
+        team_filter = f" AND team_id IN ({placeholders})"
+        params.extend(int(t) for t in team_ids)
+    params.append(int(season))
+
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT s.team_id, s.wins, s.losses
+            FROM standings s
+            INNER JOIN (
+                SELECT team_id, MAX(snapshot_date) AS snap
+                FROM standings
+                WHERE season = ? AND snapshot_date < ?{team_filter}
+                GROUP BY team_id
+            ) latest ON latest.team_id = s.team_id
+                      AND latest.snap = s.snapshot_date
+            WHERE s.season = ?
+            """,
+            params,
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return {}
+
+    out: dict[int, tuple[int, int]] = {}
+    for team_id, wins, losses in rows:
+        if team_id is None or wins is None or losses is None:
+            continue
+        out[int(team_id)] = (int(wins), int(losses))
+
+    if verbose and out:
+        print(f"\n  [verbose] Season records entering {game_date} (standings, snap < date):")
+        for tid, (w, l) in sorted(out.items()):
+            print(f"           team_id={tid}  {w}-{l}")
+
+    return out
+
+
+def enrich_games_with_season_records(
+    conn: sqlite3.Connection,
+    games: list[dict],
+    game_date: str,
+    *,
+    verbose: bool = False,
+) -> list[dict]:
+    """Attach ``away_wl`` / ``home_wl`` tuples to each game dict for ``matchup_line``."""
+    if not games or conn is None:
+        return games
+    try:
+        season = int(games[0].get("season") or str(game_date)[:4])
+    except (TypeError, ValueError):
+        season = int(str(game_date)[:4])
+    team_ids = list(
+        {int(g["home_team_id"]) for g in games} | {int(g["away_team_id"]) for g in games}
+    )
+    records = load_team_season_records(
+        conn, game_date, season, team_ids, verbose=verbose
+    )
+    for g in games:
+        try:
+            aid = int(g["away_team_id"])
+            hid = int(g["home_team_id"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        if aid in records:
+            g["away_wl"] = records[aid]
+        if hid in records:
+            g["home_wl"] = records[hid]
+    return games
+
+
 def load_starters(conn: sqlite3.Connection, game_date: str, verbose: bool) -> dict:
     """
     Load probable starting pitchers for today's games.
@@ -4944,11 +5033,25 @@ def signal_summary_for_doc(sigs: dict) -> str:
     return ", ".join(sigs.get("signals") or []) or ""
 
 
+def _wl_suffix(game: dict, side: str) -> str:
+    """``(W-L)`` for away or home when ``away_wl`` / ``home_wl`` is on the game dict."""
+    wl = game.get(f"{side}_wl")
+    if not wl or len(wl) != 2:
+        return ""
+    try:
+        w, l = int(wl[0]), int(wl[1])
+    except (TypeError, ValueError):
+        return ""
+    return f" ({w}-{l})"
+
+
 def matchup_line(game: dict) -> str:
-    """Return formatted matchup string with (h) home indicator and ET start time."""
-    away  = game.get("away_abbr", "AWAY")
-    home  = game.get("home_abbr", "HOME")
+    """Return formatted matchup string with season W-L, (h) home indicator, and ET start."""
+    away = game.get("away_abbr", "AWAY")
+    home = game.get("home_abbr", "HOME")
     venue = game.get("venue_name") or ""
+    away_rec = _wl_suffix(game, "away")
+    home_rec = _wl_suffix(game, "home")
 
     # Convert game_start_utc → Eastern Time for display
     start_str = ""
@@ -4966,7 +5069,7 @@ def matchup_line(game: dict) -> str:
         except (ValueError, AttributeError):
             pass
 
-    return f"{away}  vs  {home} (h)    [{venue}]{start_str}"
+    return f"{away}{away_rec}  vs  {home}{home_rec} (h)    [{venue}]{start_str}"
 
 
 def weather_line(game: dict, *, wind_signal_hints: bool = True) -> str:
@@ -7053,7 +7156,7 @@ def _add_matchup_block(doc, game: dict, streaks: dict, starters: dict,
     venue = game.get("venue_name") or ""
     t     = _game_start_et(game)          # ET start time — always included
     start_suffix = f"  {t}" if t else ""
-    matchup_txt = f"{away}  vs  {home} (h)    [{venue}]{start_suffix}"
+    matchup_txt = matchup_line(game)
 
     p   = doc.add_paragraph()
     run = p.add_run(matchup_txt)
@@ -8243,6 +8346,8 @@ def main():
               f"\u2014 brief will run on the {with_odds} game(s) with odds.")
         print(f"     Pending odds: {missing_list}")
         print(f"     Re-run load_odds.py when lines are posted to update.\n")
+
+    enrich_games_with_season_records(conn, games, today, verbose=args.verbose)
 
     team_ids = list({g["home_team_id"] for g in games} | {g["away_team_id"] for g in games})
     streaks  = load_streaks(conn, today, team_ids, args.verbose)
