@@ -62,3 +62,14 @@
 [job] start_et=2026-05-18 06:22:50 ET (claimed)
 [job] end_et=2026-05-18 06:22:51 ET status=complete rc=0
 [run_pipeline] sleep-until-due: next pending at 2026-05-18 17:10 ET (~38880s)
+Traceback (most recent call last):
+  File "C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\batch\jobs\run_pipeline.py", line 2411, in <module>
+    main()
+  File "C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\batch\jobs\run_pipeline.py", line 2389, in main
+    run_loop(
+  File "C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\batch\jobs\run_pipeline.py", line 1911, in run_loop
+    if _sleep_until_next_pending_or_poll(
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\batch\jobs\run_pipeline.py", line 691, in _sleep_until_next_pending_or_poll
+    time.sleep(delta)
+KeyboardInterrupt
