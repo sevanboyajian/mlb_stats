@@ -1919,6 +1919,63 @@ def _entry_pick_is_actionable(entry: dict) -> bool:
     return bool(sg is not None and getattr(sg, "pick_is_actionable", False))
 
 
+def _collect_additional_selection_card_map(
+    bet_overflow_cards: list[dict],
+    additional_selections: list[dict],
+) -> dict[int, int]:
+    """Map ``game_pk`` -> card index in ADDITIONAL MODEL SELECTIONS (1-based)."""
+    pk_to_card: dict[int, int] = {}
+    card_num = 0
+    for entry in bet_overflow_cards:
+        try:
+            gpk = int(entry["game"]["game_pk"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        card_num += 1
+        pk_to_card[gpk] = card_num
+    for sel in additional_selections:
+        try:
+            gpk = int(sel["game_pk"])
+        except (TypeError, ValueError):
+            continue
+        card_num += 1
+        pk_to_card[gpk] = card_num
+    return pk_to_card
+
+
+def _no_signal_slate_tag_line(
+    entry: dict,
+    additional_pk_to_card: dict[int, int],
+    *,
+    bet_overflow_pks: set[int],
+) -> str | None:
+    """
+    One-line tag for NO SIGNAL rows so they are not confused with true low-conviction games.
+    """
+    try:
+        gpk = int(entry["game"]["game_pk"])
+    except (TypeError, ValueError, KeyError):
+        return None
+
+    if gpk in additional_pk_to_card:
+        n = additional_pk_to_card[gpk]
+        if gpk in bet_overflow_pks:
+            return (
+                f">> Also ADDITIONAL SELECTIONS #{n} (staked overflow — see card above)"
+            )
+        return (
+            f">> ADDITIONAL SELECTION #{n} above (model pass — NOT STAKED; context only)"
+        )
+
+    best_score = int((entry.get("sigs") or {}).get("best_aggregate_score") or 0)
+    if best_score >= 5:
+        return (
+            f">> Model score {best_score} but not staked — not in Additional Selections "
+            f"(top 5 context cards)"
+        )
+    return None
+
+
 def _format_gsl_eval_status_line(eval_status: str | None) -> str:
     es = str(eval_status or "").strip()
     if es == "SKIPPED_EDGE":
@@ -6709,8 +6766,23 @@ def build_primary_brief(games, streaks, starters, game_date,
         ]
 
     total_additional = len(bet_overflow_cards) + len(additional_selections)
+    additional_pk_to_card = _collect_additional_selection_card_map(
+        bet_overflow_cards, additional_selections
+    )
+    bet_overflow_pks: set[int] = set()
+    for e in bet_overflow_cards:
+        try:
+            bet_overflow_pks.add(int(e["game"]["game_pk"]))
+        except (TypeError, ValueError, KeyError):
+            pass
+
+    n_staked = len(bet_overflow_cards)
+    n_pass = len(additional_selections)
+    hdr_suffix = f"{total_additional} total"
+    if total_additional:
+        hdr_suffix = f"{total_additional} total — {n_staked} staked, {n_pass} model pass (not staked)"
     lines.append(
-        section(f"📋  ADDITIONAL MODEL SELECTIONS  ({total_additional})", width=BW)
+        section(f"📋  ADDITIONAL MODEL SELECTIONS  ({hdr_suffix})", width=BW)
     )
     if additional_selections:
         lines.append(
@@ -6718,6 +6790,11 @@ def build_primary_brief(games, streaks, starters, game_date,
             f"{len(additional_selections)} model evaluation(s) the signal gate "
             "did not approve — shown for context only.\n"
             "  Verify all lines independently before placing any bet.\n"
+        )
+    if total_additional:
+        lines.append(
+            "  Tags: [STAKED BET] = actionable overflow pick  |  "
+            "[ADDITIONAL — NOT STAKED] = model pass (context only; do not bet from this card).\n"
         )
     if total_additional == 0:
         lines.append("\n  No additional confirmed signals today.\n")
@@ -6728,7 +6805,7 @@ def build_primary_brief(games, streaks, starters, game_date,
         g = entry["game"]
         sigs = entry["sigs"]
         best = sorted(sigs["picks"], key=lambda x: x["priority"])[0]
-        lines.append(f"\n  #{card_num}  {matchup_line(g)}")
+        lines.append(f"\n  #{card_num}  [STAKED BET]  {matchup_line(g)}")
         lines.append(f"       {weather_line(g)}")
         lines.append(f"       {entry['starter']}")
         lines.append(f"       {entry['streak']}")
@@ -6798,7 +6875,10 @@ def build_primary_brief(games, streaks, starters, game_date,
         home = sel["home_team"]
         sess_label = str(sel.get("session") or session or "primary")
         fired_txt = " · ".join(sel["fired_names"]) if sel["fired_names"] else "None"
-        lines.append(f"\n  #{card_num}  {away}  vs  {home} (h)    [{sess_label} session]")
+        lines.append(
+            f"\n  #{card_num}  [ADDITIONAL — NOT STAKED]  "
+            f"{away}  vs  {home} (h)    [{sess_label} session]"
+        )
         lines.append(
             f"       Model wanted: {sel['bet_label']} {sel['odds_str']}"
         )
@@ -6848,11 +6928,20 @@ def build_primary_brief(games, streaks, starters, game_date,
 
     # ── No-signal slate ──────────────────────────────────────────────────
     if no_signal:
+        n_addl_in_nosig = sum(
+            1
+            for e in no_signal
+            if int(e["game"].get("game_pk") or 0) in additional_pk_to_card
+        )
+        nosig_hdr = (
+            f"—  NO SIGNAL  ({len(no_signal)} games — low conviction or no published pick)"
+        )
+        if n_addl_in_nosig:
+            nosig_hdr += f"; {n_addl_in_nosig} also in Additional Selections above"
+        lines.append(section(nosig_hdr, width=BW))
         lines.append(
-            section(
-                f"—  NO SIGNAL  ({len(no_signal)} games — market efficient or insufficient data)",
-                width=BW,
-            )
+            "  Unmarked rows = true no-signal slate. Rows tagged "
+            ">> ADDITIONAL SELECTION point to a [NOT STAKED] card above (not the same as no-signal).\n"
         )
         sb_count = sum(
             1
@@ -6873,6 +6962,13 @@ def build_primary_brief(games, streaks, starters, game_date,
         for entry in no_signal:
             g = entry["game"]
             lines.append(f"  {matchup_line(g)}  |  {weather_line(g)}")
+            tag = _no_signal_slate_tag_line(
+                entry,
+                additional_pk_to_card,
+                bet_overflow_pks=bet_overflow_pks,
+            )
+            if tag:
+                lines.append(f"    {tag}")
             lines.append(f"    {odds_summary_line(g)}")
             log_shadow_filter_b_candidate(
                 conn, slate_date=game_date, session=str(sess_key), game=g,
