@@ -103,6 +103,18 @@ SIGNAL_BASE_SCORE: dict[str, int] = {
     "baseline": 1,
 }
 
+# MV-B starter quality gate (ERA WMA — lower = better pitcher).
+MVB_HOME_SP_ERA_ELITE = 2.50   # suppress MV-B entirely
+MVB_SP_ERA_STRONG = 3.50       # penalize score (-1 per side)
+
+
+def _mvb_starter_eras(fdg: FullyDressedGame) -> tuple[float | None, float | None]:
+    home_sp = fdg.matchup.home_sp
+    away_sp = fdg.matchup.away_sp
+    home_era = getattr(home_sp, "era_wma", None) if home_sp else None
+    away_era = getattr(away_sp, "era_wma", None) if away_sp else None
+    return home_era, away_era
+
 # Debug/visibility weights: default to base score table.
 # Used only for printing/apply-tracing (model still uses confidence_score).
 SIGNAL_WEIGHTS: dict[str, int] = dict(SIGNAL_BASE_SCORE)
@@ -454,7 +466,22 @@ def _eval_lhp_fade(
     return [f for f in (ml_finding, rl_finding) if f is not None]
 
 
-def _eval_mv_b(g: FullyDressedGame, game_month: int) -> SignalFinding:
+def _eval_mv_b(
+    g: FullyDressedGame,
+    game_month: int,
+    extra_flags: list[str] | None = None,
+) -> SignalFinding:
+    """
+    Wind Boost Over (MV-B): wind OUT at wind-sensitive venues.
+
+    STARTER QUALITY GATE (added 2026-05-20):
+      Suppresses when home_sp ERA WMA < 2.50 (elite tier).
+      Penalizes -1 when home_sp ERA WMA < 3.50 (strong tier) — in scoring.
+      Penalizes -1 when away_sp ERA WMA < 3.50 (strong tier) — secondary only.
+      Rationale: elite home starters neutralize wind-out scoring boost.
+      Evidence: MIL@CHC 05-19 (Brown ERA WMA 1.60), wind-out games with
+      sub-3.50 home starters underperforming totals.
+    """
     gdb = _gdb()
     env = g.environment
     mkt = g.market
@@ -471,6 +498,22 @@ def _eval_mv_b(g: FullyDressedGame, game_month: int) -> SignalFinding:
         and mkt.total_current is not None
         and not g.completeness.h3b_blocked
     )
+
+    # ── Starter quality gate (after wind/venue checks pass) ───────────────
+    home_era, away_era = _mvb_starter_eras(g)
+    if fires:
+        if home_era is None:
+            if extra_flags is not None:
+                extra_flags.append("MV-B gate skipped: home SP ERA WMA unavailable")
+        elif float(home_era) < MVB_HOME_SP_ERA_ELITE:
+            if extra_flags is not None:
+                extra_flags.append(
+                    f"MV-B suppressed: home SP elite (ERA WMA "
+                    f"{float(home_era):.2f} < {MVB_HOME_SP_ERA_ELITE:.2f} — "
+                    f"run suppression overrides wind)"
+                )
+            fires = False
+
     # Aug/Sep: informational flag only (see score_game data_flags), not a fire gate.
     hi = mkt.home_impl
     venue_name = g.identifiers.venue_name or ""
@@ -482,6 +525,8 @@ def _eval_mv_b(g: FullyDressedGame, game_month: int) -> SignalFinding:
             f"MV-B — Wind OUT {mph:.0f} mph at {venue_name} "
             f"(wind_effect={wind_effect}, PF {pf:.0f}). "
             f"Home dog implied {home_impl_s} ({home_ml_s}). "
+            f"Starter quality gate: suppress home ERA WMA < {MVB_HOME_SP_ERA_ELITE:.2f}, "
+            f"penalize < {MVB_SP_ERA_STRONG:.2f}. "
             f"CLV note: line movement is a soft modifier only (not a gate)."
         )
     else:
@@ -490,6 +535,11 @@ def _eval_mv_b(g: FullyDressedGame, game_month: int) -> SignalFinding:
             f"wind_effect={env.wind_effect!r} (need HIGH/MODERATE) h3b_eligible={env.h3b_eligible} "
             f"pf={pf} total={mkt.total_current!r} h3b_blocked={g.completeness.h3b_blocked}"
         )
+        if home_era is not None and float(home_era) < MVB_HOME_SP_ERA_ELITE:
+            reason += (
+                f"; home SP elite ERA WMA {float(home_era):.2f} "
+                f"(<{MVB_HOME_SP_ERA_ELITE:.2f})"
+            )
     return SignalFinding(
         signal_id="MV-B",
         signal_strength=SIGNAL_STRENGTH["MV-B"],
@@ -779,6 +829,19 @@ def _compute_confidence_score(
         w = float(fdg.environment.wind_mph or 0)
         if 10 <= w <= 11:
             mods.append(("wind 10-11 mph (historically strongest bucket)", +1))
+        home_era_val, away_era_val = _mvb_starter_eras(fdg)
+        if home_era_val is not None and float(home_era_val) < MVB_SP_ERA_STRONG:
+            mods.append((
+                f"home SP strong (ERA WMA {float(home_era_val):.2f} < {MVB_SP_ERA_STRONG:.2f}) "
+                f"— reduces wind boost effectiveness",
+                -1,
+            ))
+        if away_era_val is not None and float(away_era_val) < MVB_SP_ERA_STRONG:
+            mods.append((
+                f"away SP strong (ERA WMA {float(away_era_val):.2f} < {MVB_SP_ERA_STRONG:.2f}) "
+                f"— secondary suppression factor",
+                -1,
+            ))
 
     if signal_id in ("LHP_FADE", "NF4"):
         away_sp = fdg.matchup.away_sp
@@ -896,8 +959,6 @@ def _compute_confidence_score(
         away_sp = fdg.matchup.away_sp
         if home_sp.quality_tier == "weak" and away_sp.quality_tier == "weak":
             mods.append(("weak vs weak matchup", -1))
-        elif away_sp.quality_tier == "strong":
-            mods.append(("away SP strong — confirms OVER edge", +1))
 
     if signal_id == "H3b" and game_month in (8, 9):
         mods.append(("Aug/Sep — H3b historically weak", -1))
@@ -1079,7 +1140,7 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
     mvf = _eval_mv_f(g, s1h2_fired)
     lhp_findings = _eval_lhp_fade(g, game_month, s1h2_fired)
     owm = _eval_owm(g, game_month)
-    mvb = _eval_mv_b(g, game_month)
+    mvb = _eval_mv_b(g, game_month, extra_flags)
     s1 = _eval_s1(g, home_streak, s1h2_fired)
     h3b = _eval_h3b(g, mvb.fires)
 
@@ -1116,6 +1177,21 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
         sig.confidence_score = int(score)
         sig.score_basis = basis
         scored_signals.append(sig)
+        if sig.signal_id == "MV-B":
+            home_era_val, away_era_val = _mvb_starter_eras(g)
+            if (
+                home_era_val is not None
+                and MVB_HOME_SP_ERA_ELITE <= float(home_era_val) < MVB_SP_ERA_STRONG
+            ):
+                extra_flags.append(
+                    f"MV-B score -1: home SP strong "
+                    f"(ERA WMA {float(home_era_val):.2f})"
+                )
+            if away_era_val is not None and float(away_era_val) < MVB_SP_ERA_STRONG:
+                extra_flags.append(
+                    f"MV-B score -1: away SP strong "
+                    f"(ERA WMA {float(away_era_val):.2f})"
+                )
         if os.getenv("DEBUG_SCORE_GAME") == "1":
             signal = sig.signal_id
             print(f"[DEBUG SCORING] game={game_pk} applying signal={signal}")
@@ -1559,6 +1635,14 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
             "Staking independently (backtest 2021-2025: N=185, 64.9% win, +2.6% ROI). "
             "Score boosted when home SP also struggling (+17.4% ROI sub-group) "
             "or OPS differential narrow (+27.8% ROI sub-group)."
+        )
+    elif wind_total_ok and any(
+        s.signal_id == "MV-B" and s.fires for s in fired_best
+    ):
+        stake_basis = (
+            "MV-B — Wind OUT at wind-sensitive venue. Starter quality gate "
+            "applied: suppressed if home ERA WMA < 2.50, penalized if < 3.50. "
+            "(added 2026-05-20)"
         )
 
     pick_is_actionable = _compute_pick_is_actionable(
