@@ -6,6 +6,9 @@ Reads from mlb_stats.db and outputs the formatted betting brief.
 
 CHANGE LOG (latest first)
 ──────────────────────────
+2026-05-20  Prior report: staked pick tags (``| TOP PICK`` / ``| ADDITIONAL #N (staked)``) from
+            ``bet_snapshots`` + ``bet_ledger`` + primary ``brief_picks`` — shared by
+            ``make_prior_staked_pick_suffixer`` (``.txt`` full slate + ``build_docx_brief`` prior layout).
 2026-05-16  Matchup lines show season W-L from ``standings`` (snapshot_date < slate date).
 2026-05-15  Output: .txt brief is default; ``--docx`` also saves Word. Email attaches .txt by
             default; with ``--docx``, email attaches .docx instead (``--no-email`` to skip).
@@ -260,7 +263,7 @@ import os
 import sqlite3
 import sys
 import textwrap
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -5366,6 +5369,141 @@ def movement_line(game: dict, movement: dict) -> str:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+def _ledger_market_to_snap_label(mt: str | None) -> str:
+    x = (mt or "").strip().lower()
+    if x == "moneyline":
+        return "ML"
+    if x == "total":
+        return "TOTAL"
+    if x in ("spread", "runline"):
+        return "RL"
+    return ""
+
+
+def _brief_market_to_snap_label(mt: str | None) -> str:
+    x = (mt or "").strip().upper()
+    if x in ("ML", "MONEYLINE"):
+        return "ML"
+    if x in ("TOTAL", "O/U", "OU"):
+        return "TOTAL"
+    if x in ("RL", "RUNLINE", "SPREAD"):
+        return "RL"
+    return ""
+
+
+def make_prior_staked_pick_suffixer(
+    conn: sqlite3.Connection, game_date: str,
+) -> Callable[[int, str], str]:
+    """
+    Return ``suffix(game_pk, snap_market) -> str`` producing ``''`` or
+    ``'  |  TOP PICK'`` / ``'  |  ADDITIONAL #N (staked)'`` for prior-day outputs.
+
+    Membership: when ``bet_snapshots`` has rows for this date, require a staked
+    snapshot (``eval_status == BET`` or legacy ``odds_taken`` with empty status);
+    otherwise fall back to non-avoid ``bet_ledger`` rows. If neither exists,
+    no membership filter ( rare / offline DB ).
+    """
+    staked_snap_keys: set[tuple[int, str]] = set()
+    try:
+        cur = conn.execute(
+            """
+            SELECT game_pk, market_type, eval_status, odds_taken
+            FROM bet_snapshots
+            WHERE game_date = ?
+            """,
+            (game_date,),
+        )
+        for r in cur.fetchall():
+            st = str(r["eval_status"] or "").strip()
+            if st == "BET" or (not st and r["odds_taken"] is not None):
+                mt = (r["market_type"] or "").strip().upper()
+                if mt:
+                    staked_snap_keys.add((int(r["game_pk"]), mt))
+    except Exception:
+        pass
+
+    bet_rows: list[dict] = []
+    try:
+        bet_rows = [
+            dict(r)
+            for r in conn.execute(
+                """
+                SELECT game_pk, market_type, signal_at_time
+                FROM bet_ledger
+                WHERE game_date = ?
+                """,
+                (game_date,),
+            ).fetchall()
+        ]
+    except Exception:
+        pass
+
+    ledger_staked_keys: set[tuple[int, str]] = set()
+    for r in bet_rows:
+        if (r.get("signal_at_time") or "").lower() == "avoid":
+            continue
+        sm = _ledger_market_to_snap_label(r.get("market_type"))
+        if sm:
+            ledger_staked_keys.add((int(r["game_pk"]), sm))
+
+    if staked_snap_keys:
+        membership_keys = staked_snap_keys
+    else:
+        membership_keys = ledger_staked_keys
+
+    brief_rank_map: dict[tuple[int, str], int] = {}
+    try:
+        for p in load_brief_picks(conn, game_date, "primary"):
+            pr = int(p.get("pick_rank") or 0)
+            if pr <= 0:
+                continue
+            sm = _brief_market_to_snap_label(p.get("market"))
+            if not sm:
+                continue
+            brief_rank_map[(int(p["game_pk"]), sm)] = pr
+    except Exception:
+        pass
+
+    prior_staked_pick_tag: dict[tuple[int, str], str] = {}
+    for r in bet_rows:
+        if (r.get("signal_at_time") or "").lower() == "avoid":
+            continue
+        sm = _ledger_market_to_snap_label(r.get("market_type"))
+        if not sm:
+            continue
+        gpk = int(r["game_pk"])
+        sig = (r.get("signal_at_time") or "").lower()
+        rk = brief_rank_map.get((gpk, sm))
+        if sig == "top":
+            prior_staked_pick_tag[(gpk, sm)] = "TOP PICK"
+        elif sig == "next":
+            if rk and rk > 1:
+                prior_staked_pick_tag[(gpk, sm)] = f"ADDITIONAL #{rk} (staked)"
+            else:
+                prior_staked_pick_tag[(gpk, sm)] = "ADDITIONAL (staked)"
+        elif rk == 1:
+            prior_staked_pick_tag[(gpk, sm)] = "TOP PICK"
+        elif rk and rk > 1:
+            prior_staked_pick_tag[(gpk, sm)] = f"ADDITIONAL #{rk} (staked)"
+
+    def suffix(game_pk: int, snap_market: str) -> str:
+        key = (int(game_pk), (snap_market or "").strip().upper())
+        if membership_keys and key not in membership_keys:
+            return ""
+        label = prior_staked_pick_tag.get(key)
+        if not label:
+            rk = brief_rank_map.get(key)
+            if rk == 1:
+                label = "TOP PICK"
+            elif rk and rk > 1:
+                label = f"ADDITIONAL #{rk} (staked)"
+        if not label:
+            return ""
+        return f"  |  {label}"
+
+    return suffix
+
+
 def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
                             verbose: bool, now: datetime.datetime | None = None,
                             *, debug_wind: bool = False) -> str:
@@ -5376,7 +5514,8 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
       · Final score, runs, winner, conditions
       · Closing odds and O/U outcome
       · Which model signals fired and whether they won
-      · Full slate per-game bet outcomes (or NO SIGNAL)
+      · Full slate per-game bet outcomes (or NO SIGNAL); staked rows tagged TOP PICK vs
+        ADDITIONAL #N when ``bet_ledger`` / ``brief_picks`` permit
       · Day-level P&L summary
     """
     lines = []
@@ -5711,6 +5850,8 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
         m = (r.get("market_type") or "unknown").strip() or "unknown"
         by_market.setdefault(m, []).append(r)
 
+    _prior_actionable_suffix = make_prior_staked_pick_suffixer(conn, game_date)
+
     # ════════════════════════════════════════════════════════════════════
     # FULL SLATE — per-game, per-bet grading
     # ════════════════════════════════════════════════════════════════════
@@ -5719,6 +5860,8 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
         "\n  For each game: prints a moneyline (ML) line and a totals (O/U) line.\n"
         "  If a model signal fired for that market, it is shown with P&L.\n"
         "  If not, SIGNAL shows 'No Signal' and P&L is N/A.\n"
+        "  Staked (actionable) bets append TOP PICK vs ADDITIONAL #N (staked) from "
+        "bet_ledger + primary brief_picks when available.\n"
     )
 
     def _clean_result(res: str) -> str:
@@ -5825,6 +5968,7 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
             lines.append(
                 f"  {prefix}  {bet_txt:<12} | SIGNAL: {ml_sig:<22} | "
                 f"RESULT: {_clean_result(res):<10} | P&L: {pnl_disp}"
+                f"{_prior_actionable_suffix(g['game_pk'], 'ML')}"
             )
         else:
             winner = e.get("winner") or ""
@@ -5893,6 +6037,7 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
                 lines.append(
                     f"  {prefix}  {bet_txt:<12} | SIGNAL: {tot_sig:<22} | "
                     f"RESULT: {_clean_result(res):<10} | P&L: {pnl_disp}"
+                    f"{_prior_actionable_suffix(g['game_pk'], 'TOTAL')}"
                 )
                 # Add a closing-line counterfactual to explain when a "good early" bet
                 # would look "bad late" due to line movement.
@@ -5966,6 +6111,7 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
             lines.append(
                 f"  {prefix}  {bet_txt:<12} | SIGNAL: {rl_sig:<22} | "
                 f"RESULT: {_clean_result(res):<10} | P&L: {pnl_str(float(pnl_v))}"
+                f"{_prior_actionable_suffix(g['game_pk'], 'RL')}"
             )
         elif hrl is not None and arl is not None and hs is not None and as_ is not None:
             # No signal: print the side that covered at the closing line.
@@ -7693,6 +7839,15 @@ def build_docx_brief(
             return sorted(picks, key=lambda x: x.get("priority", 99))[0]
 
         _add_heading(doc, f"Full Slate  ({len(evaluated)} games)", level=2)
+        _add_note(
+            doc,
+            "Staked ML and totals rows include TOP PICK vs ADDITIONAL #N (staked) when "
+            "bet_snapshots + bet_ledger / primary brief_picks support it (same rules as the .txt prior report).",
+            italic=True,
+            color_hex="475569",
+        )
+        doc.add_paragraph()
+        _prior_pick_suffix = make_prior_staked_pick_suffixer(conn, game_date)
         for e in evaluated:
             g = e["game"]
             _add_matchup_block(doc, g, streaks, starters, e["sigs"], show_picks=False)
@@ -7714,6 +7869,7 @@ def build_docx_brief(
                     f"RESULT: {_clean_result(ml_pick.get('result'))}  | "
                     f"P&L: {('+' if float(ml_pick.get('pnl') or 0.0) > 0 else '')}{float(ml_pick.get('pnl') or 0.0):.2f}u"
                 )
+                txt += _prior_pick_suffix(int(g.get('game_pk') or 0), "ML")
             else:
                 txt = f"BET LINE: {e.get('winner','')} ML  | SIGNAL: No Signal  | RESULT: WIN  | P&L: N/A"
             _add_note(doc, txt, italic=False, color_hex="333333")
@@ -7739,6 +7895,7 @@ def build_docx_brief(
                         f"RESULT: {_clean_result(tot_pick.get('result'))}  | "
                         f"P&L: {('+' if float(tot_pick.get('pnl') or 0.0) > 0 else '')}{float(tot_pick.get('pnl') or 0.0):.2f}u"
                     )
+                    txt += _prior_pick_suffix(int(g.get('game_pk') or 0), "TOTAL")
                 else:
                     txt = f"BET LINE: {outcome_bet}  | SIGNAL: No Signal  | RESULT: {outcome_res}  | P&L: N/A"
             else:
