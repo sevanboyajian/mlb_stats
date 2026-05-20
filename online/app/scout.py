@@ -39,6 +39,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from core.db.connection import connect as db_connect, get_db_path
+from core.odds import usage_tracker
 
 # ─────────────────────────────────────────────────────────────
 #  PAGE CONFIG  (must be first Streamlit call)
@@ -2058,18 +2059,70 @@ def view_operations():
             """, unsafe_allow_html=True)
 
             # ── Quota monitor ─────────────────────────────
+            usage = usage_tracker.get_usage_summary()
+            periods = usage.get("periods") or {}
             quota_df = query("""
-                SELECT api_quota_remaining
+                SELECT api_quota_remaining, api_requests_used, pulled_at_utc
                 FROM   odds_ingest_log
                 ORDER  BY pulled_at_utc DESC LIMIT 1
             """)
-            if not quota_df.empty:
+            quota_val = usage.get("quota_remaining")
+            used_val = usage.get("quota_used_cumulative")
+            if quota_val is None and not quota_df.empty:
+                quota_val = int(quota_df["api_quota_remaining"].iloc[0])
+            if quota_val is not None:
+                quota_color = "#ef4444" if quota_val < 500 else "#e8a020" if quota_val < 2000 else "#10b981"
+                used_str = f"{used_val:,} used · " if used_val is not None else ""
+                limit = usage.get("effective_limit")
+                limit_str = ""
+                if limit and used_val is not None:
+                    pct = usage.get("pct_used")
+                    limit_str = f" · {used_val:,}/{limit:,} ({pct}%)" if pct is not None else f" · limit {limit:,}"
+                st.markdown(
+                    f'<div style="background:#14171f;border:1px solid {quota_color}33;'
+                    f'border-radius:4px;padding:10px 14px;margin-bottom:12px;'
+                    f'font-family:IBM Plex Mono,monospace;font-size:11px;">'
+                    f'<span style="color:#64748b;text-transform:uppercase;letter-spacing:1px;">Odds API Quota</span>'
+                    f'&nbsp;&nbsp;<span style="color:{quota_color};font-size:15px;font-weight:700;">'
+                    f'{quota_val:,}</span>&nbsp;remaining'
+                    f'&nbsp;&nbsp;<span style="color:#475569;">{used_str}billing-period tally{limit_str}</span></div>',
+                    unsafe_allow_html=True
+                )
+            elif not quota_df.empty:
                 quota_val = int(quota_df["api_quota_remaining"].iloc[0])
                 quota_color = "#ef4444" if quota_val < 500 else "#e8a020" if quota_val < 2000 else "#10b981"
                 st.markdown(
-                    f'<div style="background:#14171f;border:1px solid {quota_color}33;'                    f'border-radius:4px;padding:10px 14px;margin-bottom:12px;'                    f'font-family:IBM Plex Mono,monospace;font-size:11px;">'                    f'<span style="color:#64748b;text-transform:uppercase;letter-spacing:1px;">API Quota Remaining</span>'                    f'&nbsp;&nbsp;<span style="color:{quota_color};font-size:15px;font-weight:700;">{quota_val:,}</span>'                    f'&nbsp;&nbsp;<span style="color:#475569;">requests — check reset date at the-odds-api.com</span></div>',
+                    f'<div style="background:#14171f;border:1px solid {quota_color}33;'
+                    f'border-radius:4px;padding:10px 14px;margin-bottom:12px;'
+                    f'font-family:IBM Plex Mono,monospace;font-size:11px;">'
+                    f'<span style="color:#64748b;text-transform:uppercase;letter-spacing:1px;">API Quota Remaining</span>'
+                    f'&nbsp;&nbsp;<span style="color:{quota_color};font-size:15px;font-weight:700;">{quota_val:,}</span>'
+                    f'&nbsp;&nbsp;<span style="color:#475569;">requests — check reset date at the-odds-api.com</span></div>',
                     unsafe_allow_html=True
                 )
+
+            if periods:
+                p1, p2, p3, p4 = st.columns(4)
+                stat_cards = [
+                    (p1, periods.get("today", {}), "Today (ET)"),
+                    (p2, periods.get("month", {}), periods.get("month", {}).get("label", "This month")),
+                    (p3, periods.get("ytd", {}), periods.get("ytd", {}).get("label", "YTD")),
+                    (p4, periods.get("all_time", {}), "All time"),
+                ]
+                for col, pdata, title in stat_cards:
+                    calls = int(pdata.get("calls", 0))
+                    cost = int(pdata.get("cost", 0))
+                    with col:
+                        st.markdown(
+                            f'<div style="background:#0f1219;border:1px solid #1e293b;'
+                            f'border-radius:4px;padding:8px 10px;font-family:IBM Plex Mono,monospace;">'
+                            f'<div style="color:#64748b;font-size:10px;text-transform:uppercase;'
+                            f'letter-spacing:1px;margin-bottom:4px;">{title}</div>'
+                            f'<div style="color:#e2e8f0;font-size:14px;font-weight:700;">{calls:,} calls</div>'
+                            f'<div style="color:#94a3b8;font-size:10px;">{cost:,} cost units</div>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
 
             c1, c2, c3 = st.columns([1, 1, 1])
             with c1:

@@ -12,6 +12,8 @@ secrets.toml
 
 outputs/
 archive/
+logs/odds_api_calls.jsonl
+logs/odds_api_usage.json
 # Local scratch / notes (never commit tokens or passwords)
 Scratch file.txt
 Scratch*.txt

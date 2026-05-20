@@ -56,6 +56,7 @@ if _REPO_ROOT not in sys.path:
 
 import requests
 from core.db.connection import connect as db_connect, get_db_path
+from core.odds import usage_tracker
 
 # ── Optional .env support ─────────────────────────────────────────────────────
 try:
@@ -189,13 +190,15 @@ def get_api_key() -> str:
     return key
 
 
-def api_get(url: str, params: dict, verbose: bool = False) -> Optional[dict]:
+def api_get(url: str, params: dict, verbose: bool = False,
+            caller: str = "api_get") -> Optional[dict]:
     """GET from The Odds API.  Returns (data, headers) or (None, {})."""
     if verbose:
         safe_params = {k: v for k, v in params.items() if k != "apiKey"}
         log.debug("GET %s params=%s", url, safe_params)
     try:
         resp = requests.get(url, params=params, timeout=30)
+        usage_tracker.record_call(url, resp.status_code, resp.headers, caller=caller)
         if resp.status_code == 401:
             log.error("API key invalid or expired (401).")
             return None, {}
@@ -214,6 +217,7 @@ def api_get(url: str, params: dict, verbose: bool = False) -> Optional[dict]:
         return resp.json(), resp.headers
     except requests.RequestException as e:
         log.error("Request failed: %s", e)
+        usage_tracker.record_call(url, None, {}, caller=caller)
         return None, {}
 
 
@@ -224,9 +228,11 @@ def quota_from_headers(headers: dict) -> dict:
     x-requests-last:      cost of THIS specific API call
     x-requests-remaining: quota remaining after this call
     """
+    q = usage_tracker.quota_from_headers(headers)
     return {
-        "requests_used":      int(headers.get("x-requests-last",      0)),  # per-call cost
-        "requests_remaining": int(headers.get("x-requests-remaining", 0)),
+        "requests_used":             q["requests_last"],  # per-call cost
+        "requests_remaining":        q["requests_remaining"],
+        "requests_used_cumulative":  q["requests_used_cumulative"],
     }
 
 
@@ -1558,6 +1564,7 @@ def main():
     # ── Check mode ────────────────────────────────────────────────────────
     if args.check:
         show_odds_counts(con)
+        usage_tracker.log_usage_summary(log)
         con.close()
         return
 

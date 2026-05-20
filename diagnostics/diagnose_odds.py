@@ -12,12 +12,9 @@ Run:
 # 2026-04-13 22:15 ET  DB from get_db_path(); repo root on sys.path for core.* imports.
 # 2026-04-13 16:24 ET  Refactor: route sqlite3.connect() calls through core.db.connection.connect().
 
-import json
 import os
 import sqlite3
 import sys
-import urllib.parse
-import urllib.request
 from datetime import date, timedelta, datetime, timezone
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -92,7 +89,9 @@ def resolve(name):
             return abbr
     return None
 
-# ── Pull from Odds API (standard library; no requests dependency) ─────────────
+# ── Pull from Odds API (via shared client + usage tracker) ───────────────────
+from batch.ingestion import load_odds as _lo
+
 params = {
     "apiKey": API_KEY,
     "bookmakers": "draftkings",
@@ -100,16 +99,14 @@ params = {
     "oddsFormat": "american",
     "dateFormat": "iso",
 }
-url = "https://api.the-odds-api.com/v4/sports/baseball_mlb/odds?" + urllib.parse.urlencode(params)
-try:
-    req = urllib.request.Request(url, headers={"User-Agent": "mlb_stats/diagnose_odds"})
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        body = resp.read().decode("utf-8", errors="replace")
-        events = json.loads(body) if body else []
-except Exception as e:
-    print(f"\nERROR: Could not fetch Odds API events: {e}")
+url = "https://api.the-odds-api.com/v4/sports/baseball_mlb/odds"
+events, _headers = _lo.api_get(url, params, caller="diagnose_odds")
+if events is None:
+    print("\nERROR: Could not fetch Odds API events.")
     con.close()
     sys.exit(2)
+if not isinstance(events, list):
+    events = []
 
 print(f"\nOdds API events ({len(events)} total) — today/tomorrow only:")
 print(f"  {'MATCHUP':<35} {'CT (UTC)':<25} {'ABBR':<12} {'RESULT'}")
