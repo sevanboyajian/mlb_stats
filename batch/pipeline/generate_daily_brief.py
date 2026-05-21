@@ -254,7 +254,8 @@ SIGNALS APPLIED (in priority order)
 
 HOME TEAM INDICATOR
 -------------------
-Every matchup is shown as:  AWAY TEAM  vs  HOME TEAM (h)
+Every matchup is shown as:  AWAY (W-L) Wn  vs  HOME (W-L) Wn (h)
+  Example: COL (19-31) L2  vs  AZ (25-23) W4 (h)
 """
 
 import argparse
@@ -5093,6 +5094,25 @@ def signal_summary_for_doc(sigs: dict) -> str:
     return ", ".join(sigs.get("signals") or []) or ""
 
 
+def _streak_label(streak: int) -> str:
+    if streak > 0:
+        return f"W{streak}"
+    if streak < 0:
+        return f"L{abs(streak)}"
+    return ""
+
+
+def _streak_suffix(streaks: dict | None, team_id) -> str:
+    if not streaks or team_id is None:
+        return ""
+    try:
+        streak = int(streaks.get(int(team_id), 0))
+    except (TypeError, ValueError):
+        return ""
+    label = _streak_label(streak)
+    return f" {label}" if label else ""
+
+
 def _wl_suffix(game: dict, side: str) -> str:
     """``(W-L)`` for away or home when ``away_wl`` / ``home_wl`` is on the game dict."""
     wl = game.get(f"{side}_wl")
@@ -5105,13 +5125,15 @@ def _wl_suffix(game: dict, side: str) -> str:
     return f" ({w}-{l})"
 
 
-def matchup_line(game: dict) -> str:
-    """Return formatted matchup string with season W-L, (h) home indicator, and ET start."""
+def matchup_line(game: dict, streaks: dict | None = None) -> str:
+    """Return formatted matchup with season W-L, streak, (h), venue, and ET start."""
     away = game.get("away_abbr", "AWAY")
     home = game.get("home_abbr", "HOME")
     venue = game.get("venue_name") or ""
     away_rec = _wl_suffix(game, "away")
     home_rec = _wl_suffix(game, "home")
+    away_streak = _streak_suffix(streaks, game.get("away_team_id"))
+    home_streak = _streak_suffix(streaks, game.get("home_team_id"))
 
     # Convert game_start_utc → Eastern Time for display
     start_str = ""
@@ -5129,7 +5151,10 @@ def matchup_line(game: dict) -> str:
         except (ValueError, AttributeError):
             pass
 
-    return f"{away}{away_rec}  vs  {home}{home_rec} (h)    [{venue}]{start_str}"
+    return (
+        f"{away}{away_rec}{away_streak}  vs  "
+        f"{home}{home_rec}{home_streak} (h)    [{venue}]{start_str}"
+    )
 
 
 def weather_line(game: dict, *, wind_signal_hints: bool = True) -> str:
@@ -5317,26 +5342,13 @@ def starter_line(game: dict, starters: dict) -> str:
 
 
 def streak_line(game: dict, streaks: dict) -> str:
-    """Return home/away streak line."""
+    """Return streak-signal flags only (S1 threshold). Counts appear on ``matchup_line``."""
     home_id = game.get("home_team_id")
-    away_id = game.get("away_team_id")
-    home_s  = streaks.get(home_id, 0)
-    away_s  = streaks.get(away_id, 0)
-
-    def label(s):
-        if s > 0:
-            return f"W{s}"
-        if s < 0:
-            return f"L{abs(s)}"
-        return "—"
-
+    home_s = int(streaks.get(home_id, 0))
     h = game.get("home_abbr", "HOME")
-    a = game.get("away_abbr", "AWAY")
-    flags = []
     if abs(home_s) >= STREAK_THRESHOLD:
-        flags.append(f"⚑ {h} (h) streak signal")
-    return (f"Streak: {a} {label(away_s)}  |  {h} (h) {label(home_s)}"
-            + (f"  {'  '.join(flags)}" if flags else ""))
+        return f"⚑ {h} (h) streak signal"
+    return ""
 
 
 def movement_line(game: dict, movement: dict) -> str:
@@ -5617,6 +5629,12 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
         lines.append(QUICK_REFERENCE_SIGNAL_TIMING)
         lines.append(CAVEAT)
         return "\n".join(lines)
+
+    enrich_games_with_season_records(conn, games, game_date, verbose=verbose)
+    team_ids = list(
+        {int(g["home_team_id"]) for g in games} | {int(g["away_team_id"]) for g in games}
+    )
+    streaks = load_streaks(conn, game_date, team_ids, verbose)
 
     # Backfill snapshots from existing ledger rows if needed (older days before snapshots existed).
     try:
@@ -5918,7 +5936,7 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
         # These variables are used by the actionable grading blocks below.
         hs = g.get("home_score")
         as_ = g.get("away_score")
-        lines.append(f"\n  {matchup_line(g)}")
+        lines.append(f"\n  {matchup_line(g, streaks)}")
         lines.append(f"  {weather_line(g)}")
         if g.get("home_score") is not None:
             lines.append(game_score_line(e))
@@ -6268,7 +6286,7 @@ def build_morning_brief(games, streaks, starters, game_date,
     when known, and Vegas lines (ML, total, runline). No signal evaluation,
     no picks, no streak monitor, no avoids, no signal_state persistence.
     """
-    _ = (streaks, session, verbose, debug_wind)  # API compatibility; unused (slate-only).
+    _ = (session, verbose, debug_wind)  # API compatibility; unused (slate-only).
     lines = []
     BW = FORWARD_BRIEF_BAR_WIDTH
     if now is None:
@@ -6315,7 +6333,7 @@ def build_morning_brief(games, streaks, starters, game_date,
             except Exception:
                 fdg = None
 
-        lines.append(f"\n  {matchup_line(game)}")
+        lines.append(f"\n  {matchup_line(game, streaks)}")
         lines.append(f"  {weather_line(game, wind_signal_hints=False)}")
         lines.append(f"  {starter_line(game, starters)}")
         if fdg is not None:
@@ -6824,10 +6842,11 @@ def build_primary_brief(games, streaks, starters, game_date,
         g   = top["game"]
         p   = sorted(top["sigs"]["picks"], key=lambda x: x["priority"])[0]
 
-        lines.append(f"\n  {matchup_line(g)}")
+        lines.append(f"\n  {matchup_line(g, streaks)}")
         lines.append(f"  {weather_line(g)}")
         lines.append(f"  {top['starter']}")
-        lines.append(f"  {top['streak']}")
+        if top["streak"]:
+            lines.append(f"  {top['streak']}")
         # Movement alert — compare vs earliest prior session pick today
         alert = movement_alert(conn, game_date, session,
                                g["game_pk"], g.get("total_line"), g.get("home_ml"))
@@ -6951,10 +6970,11 @@ def build_primary_brief(games, streaks, starters, game_date,
         g = entry["game"]
         sigs = entry["sigs"]
         best = sorted(sigs["picks"], key=lambda x: x["priority"])[0]
-        lines.append(f"\n  #{card_num}  [STAKED BET]  {matchup_line(g)}")
+        lines.append(f"\n  #{card_num}  [STAKED BET]  {matchup_line(g, streaks)}")
         lines.append(f"       {weather_line(g)}")
         lines.append(f"       {entry['starter']}")
-        lines.append(f"       {entry['streak']}")
+        if entry["streak"]:
+            lines.append(f"       {entry['streak']}")
         alert = movement_alert(
             conn, game_date, session,
             g["game_pk"], g.get("total_line"), g.get("home_ml"),
@@ -7058,7 +7078,7 @@ def build_primary_brief(games, streaks, starters, game_date,
         for gk, fire in s6_fires.items():
             g = game_lookup.get(gk)
             if g:
-                lines.append(f"  {matchup_line(g)}")
+                lines.append(f"  {matchup_line(g, streaks)}")
                 lines.append(f"  {odds_summary_line(g)}")
             lines.append("  SIGNAL:  Hot pitcher fade (monitoring)")
             lines.append(f"  BET: {fire['bet_side'].upper()} ML  "
@@ -7107,7 +7127,7 @@ def build_primary_brief(games, streaks, starters, game_date,
             lines.append("")
         for entry in no_signal:
             g = entry["game"]
-            lines.append(f"  {matchup_line(g)}  |  {weather_line(g)}")
+            lines.append(f"  {matchup_line(g, streaks)}  |  {weather_line(g)}")
             tag = _no_signal_slate_tag_line(
                 entry,
                 additional_pk_to_card,
@@ -7200,10 +7220,12 @@ def build_closing_brief(games, streaks, starters, movement, game_date,
         )
         closing_picks_logged += len(list(sigs.get("picks") or []))
         g    = game
-        lines.append(f"\n  {matchup_line(g)}")
+        lines.append(f"\n  {matchup_line(g, streaks)}")
         lines.append(f"  {weather_line(g)}")
         lines.append(f"  {starter_line(g, starters)}")
-        lines.append(f"  {streak_line(g, streaks)}")
+        streak_txt = streak_line(g, streaks)
+        if streak_txt:
+            lines.append(f"  {streak_txt}")
         lines.append(f"  {odds_summary_line(g)}")
 
         # Line movement
@@ -7398,7 +7420,7 @@ def _add_matchup_block(doc, game: dict, streaks: dict, starters: dict,
     venue = game.get("venue_name") or ""
     t     = _game_start_et(game)          # ET start time — always included
     start_suffix = f"  {t}" if t else ""
-    matchup_txt = matchup_line(game)
+    matchup_txt = matchup_line(game, streaks)
 
     p   = doc.add_paragraph()
     run = p.add_run(matchup_txt)
@@ -7414,7 +7436,9 @@ def _add_matchup_block(doc, game: dict, streaks: dict, starters: dict,
         odds_summary_line(game),
     ]
     if include_streak:
-        details.append(streak_line(game, streaks))
+        streak_txt = streak_line(game, streaks)
+        if streak_txt:
+            details.append(streak_txt)
     details.append(starter_line(game, starters))
     for detail in details:
         p   = doc.add_paragraph()
