@@ -289,3 +289,17 @@
 [job] start_et=2026-05-20 19:55:25 ET (claimed)
 [job] end_et=2026-05-20 19:55:40 ET status=complete rc=0
 [run_pipeline] sleep-until-due: next pending at 2026-05-20 20:08 ET (~780s)
+
+[job] id=2014 type=odds_pull job_date_et=2026-05-20 game_group_id=8 scheduled_time=2026-05-20 20:08 ET
+[job] command='python batch/ingestion/load_odds.py --pregame --markets game --date 2026-05-20'
+[job] context: group_id=8 window=[2026-05-20 20:03 ET -> 2026-05-20 20:13 ET]
+[job] start_et=2026-05-20 20:08:40 ET (claimed)
+[job] end_et=2026-05-20 20:08:40 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-20 20:10 ET (~120s)
+
+[job] id=2037 type=group_brief job_date_et=2026-05-20 game_group_id=7 scheduled_time=2026-05-20 20:10 ET
+[job] command='python batch/pipeline/generate_daily_brief.py --session primary --date 2026-05-20 --as-of "2026-05-20 20:10" --game-group-id 7'
+[job] context: group_id=7 window=[2026-05-20 20:10 ET -> 2026-05-20 20:12 ET]
+[job] start_et=2026-05-20 20:10:40 ET (claimed)
+[job] end_et=2026-05-20 20:10:43 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-20 20:12 ET (~120s)
