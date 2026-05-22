@@ -2636,10 +2636,12 @@ def _ledger_latest_from_signal_rows(
     now_et: datetime.datetime,
     *,
     pregame_window_only: bool,
+    first_fire: bool = False,
 ) -> dict[tuple[int, str, str], tuple[datetime.datetime, sqlite3.Row]]:
     """
     Latest signal_state row per (game_pk, market_type, signal_type).
     When pregame_window_only=True, only rows inside [start−30m, start) apply.
+    When first_fire=True, keep the earliest recorded_at per key (prior backfill).
     """
     latest: dict[tuple[int, str, str], tuple[datetime.datetime, sqlite3.Row]] = {}
     for r in sig_rows:
@@ -2664,7 +2666,11 @@ def _ledger_latest_from_signal_rows(
 
         key = (int(gpk), str(mt), st)
         prev = latest.get(key)
-        if prev is None or rec_dt > prev[0]:
+        if prev is None:
+            latest[key] = (rec_dt, r)
+        elif first_fire and rec_dt < prev[0]:
+            latest[key] = (rec_dt, r)
+        elif not first_fire and rec_dt > prev[0]:
             latest[key] = (rec_dt, r)
     return latest
 
@@ -2702,6 +2708,123 @@ def _ledger_signal_row_is_actionable(conn: sqlite3.Connection, game_date: str, r
     if sg is None:
         return False
     return bool(getattr(sg, "pick_is_actionable", False))
+
+
+def _snapshot_is_staked_bet(
+    conn: sqlite3.Connection,
+    game_date: str,
+    game_pk: int,
+    ledger_market_type: str,
+) -> bool:
+    snap_mt = _ledger_market_to_snapshot_type(ledger_market_type)
+    if not snap_mt:
+        return False
+    try:
+        row = conn.execute(
+            """
+            SELECT 1 FROM bet_snapshots
+            WHERE game_date = ? AND game_pk = ? AND market_type = ?
+              AND upper(trim(coalesce(eval_status, ''))) = 'BET'
+            LIMIT 1
+            """,
+            (game_date, int(game_pk), snap_mt),
+        ).fetchone()
+        return row is not None
+    except Exception:
+        return False
+
+
+def _insert_bet_ledger_from_snapshots(
+    conn: sqlite3.Connection,
+    game_date: str,
+) -> int:
+    """
+    Materialize staked bet_ledger rows from first-fire bet_snapshots.
+
+    Used by the prior report when signal_state re-scoring no longer passes
+    pick_is_actionable but an archived BET snapshot exists.
+    """
+    snap_to_ledger = {"ML": "moneyline", "TOTAL": "total", "RL": "spread"}
+    inserted = 0
+    try:
+        ensure_bet_ledger(conn)
+    except Exception:
+        return 0
+
+    try:
+        rows = conn.execute(
+            """
+            SELECT game_pk, market_type, bet, odds_taken, placed_at
+            FROM bet_snapshots
+            WHERE game_date = ?
+              AND upper(trim(coalesce(eval_status, ''))) = 'BET'
+            """,
+            (game_date,),
+        ).fetchall()
+    except Exception:
+        return 0
+
+    already_staked: set[tuple[int, str]] = set()
+    try:
+        for rr in conn.execute(
+            "SELECT game_pk, market_type FROM bet_ledger WHERE game_date=? AND stake_units>0",
+            (game_date,),
+        ):
+            already_staked.add((int(rr[0]), str(rr[1] or "")))
+    except Exception as e:
+        import logging
+
+        logging.warning("[bet_ledger] already_staked load failed: %s", e)
+
+    for r in rows:
+        snap_mt = str(r["market_type"] or "").strip().upper()
+        ledger_mt = snap_to_ledger.get(snap_mt)
+        if not ledger_mt:
+            continue
+        gpk = int(r["game_pk"])
+        if (gpk, ledger_mt) in already_staked:
+            continue
+        placed_at = str(r["placed_at"] or "")
+        tlb = _ledger_total_line_at_bet(ledger_mt, str(r["bet"] or ""))
+        ledger_mv = model_version_for_brief_pick_date(game_date)
+        try:
+            cur = conn.execute(
+                """
+                INSERT OR IGNORE INTO bet_ledger
+                    (game_date, game_pk, market_type, bet, odds_taken, stake_units,
+                     signal_at_time, session, placed_at, total_line_at_bet, late_signal,
+                     model_version, result, pnl_units)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    game_date,
+                    gpk,
+                    ledger_mt,
+                    r["bet"],
+                    r["odds_taken"],
+                    1.0,
+                    "top",
+                    "primary",
+                    placed_at,
+                    tlb,
+                    0,
+                    ledger_mv,
+                    None,
+                    None,
+                ),
+            )
+            if getattr(cur, "rowcount", 0) == 1:
+                inserted += 1
+            already_staked.add((gpk, ledger_mt))
+        except sqlite3.OperationalError:
+            continue
+
+    if inserted:
+        try:
+            conn.commit()
+        except Exception:
+            pass
+    return inserted
 
 
 def _insert_bet_ledger_from_latest(
@@ -2821,13 +2944,16 @@ def _insert_bet_ledger_from_latest(
         sig_type = (r["signal_type"] or "").strip()
         if sig_type not in ("top", "next", "avoid"):
             continue
+        mt = str(r["market_type"] or "")
         if sig_type in ("top", "next"):
             ck = (int(r["game_pk"]), str(r["session"] or ""), str(r["recorded_at"] or ""))
             if ck not in actionable_cache:
                 actionable_cache[ck] = _ledger_signal_row_is_actionable(conn, game_date, r)
             if not actionable_cache[ck]:
-                continue
-        mt = str(r["market_type"] or "")
+                if not _snapshot_is_staked_bet(
+                    conn, game_date, int(r["game_pk"]), mt,
+                ):
+                    continue
         stake = 0.0 if sig_type == "avoid" else 1.0
         if sig_type == "avoid":
             odds_val = None
@@ -3067,12 +3193,13 @@ def backfill_bet_ledger_from_signal_state(conn: sqlite3.Connection, game_date: s
             continue
 
     latest = _ledger_latest_from_signal_rows(
-        sig_rows, start_by_pk, now_et, pregame_window_only=False,
+        sig_rows, start_by_pk, now_et, pregame_window_only=False, first_fire=True,
     )
     if not latest:
-        return 0
+        return _insert_bet_ledger_from_snapshots(conn, game_date)
 
     inserted = _insert_bet_ledger_from_latest(conn, game_date, latest)
+    inserted += _insert_bet_ledger_from_snapshots(conn, game_date)
     if inserted:
         try:
             conn.commit()
@@ -5958,8 +6085,12 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
     try:
         if PERSIST_WRITES:
             backfill_bet_ledger_from_signal_state(conn, game_date, now=now)
-    except Exception:
-        pass
+    except Exception as e:
+        import logging
+
+        logging.warning(
+            "[prior report] backfill_bet_ledger_from_signal_state failed: %s", e,
+        )
     _prior_report_ledger_hygiene(conn, game_date)
 
     try:
