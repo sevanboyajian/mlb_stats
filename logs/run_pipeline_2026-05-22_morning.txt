@@ -1,0 +1,62 @@
+[run_pipeline] force-unlock: runner_lock not present (nothing to clear)
+[run_pipeline] db=C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\data\mlb_stats.db
+[run_pipeline] mode=loop poll_seconds=60 ghost=False stale_minutes=30 timeout_minutes=30 sleep_until_due=True scope_job_date_et='2026-05-22' exit_when_no_pending=True
+[run_pipeline] sleep-until-due: next pending at 2026-05-22 06:00 ET (~2400s)
+
+[job] id=2084 type=stats_pull job_date_et=2026-05-22 game_group_id=0 scheduled_time=2026-05-22 06:00 ET
+[job] command='python batch/ingestion/load_mlb_stats.py'
+[job] start_et=2026-05-22 06:00:12 ET (claimed)
+[job] end_et=2026-05-22 06:00:23 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-22 06:05 ET (~300s)
+
+[job] id=2085 type=load_today job_date_et=2026-05-22 game_group_id=0 scheduled_time=2026-05-22 06:05 ET
+[job] command='python batch/ingestion/load_today.py --date 2026-05-22'
+[job] start_et=2026-05-22 06:05:23 ET (claimed)
+[job] end_et=2026-05-22 06:05:26 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-22 06:07 ET (~120s)
+
+[job] id=2086 type=load_weather job_date_et=2026-05-22 game_group_id=0 scheduled_time=2026-05-22 06:07 ET
+[job] command='python batch/ingestion/load_weather.py --date 2026-05-22'
+[job] start_et=2026-05-22 06:07:26 ET (claimed)
+[job] end_et=2026-05-22 06:07:54 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-22 06:08 ET (~60s)
+
+[job] id=2087 type=odds_pull job_date_et=2026-05-22 game_group_id=0 scheduled_time=2026-05-22 06:08 ET
+[job] command='python batch/ingestion/load_odds.py --pregame --markets game --date 2026-05-22'
+[job] start_et=2026-05-22 06:08:54 ET (claimed)
+[job] end_et=2026-05-22 06:08:55 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-22 06:09 ET (~60s)
+
+[job] id=2088 type=build_team_wma job_date_et=2026-05-22 game_group_id=0 scheduled_time=2026-05-22 06:09 ET
+[job] command='python -m batch.pipeline.build_team_wma --seasons 2025 2026'
+[job] start_et=2026-05-22 06:09:55 ET (claimed)
+[job] end_et=2026-05-22 06:09:55 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-22 06:10 ET (~60s)
+
+[job] id=2090 type=day_setup job_date_et=2026-05-22 game_group_id=0 scheduled_time=2026-05-22 06:10 ET
+[job] command='python batch/jobs/schedule_pipeline_day.py --groups-only --date-et 2026-05-22'
+[job] start_et=2026-05-22 06:10:55 ET (claimed)
+[job] end_et=2026-05-22 06:10:56 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-22 06:11 ET (~60s)
+
+[job] id=2089 type=build_pitcher_wma job_date_et=2026-05-22 game_group_id=0 scheduled_time=2026-05-22 06:11 ET
+[job] command='python -m batch.pipeline.build_pitcher_wma --seasons 2025 2026'
+[job] start_et=2026-05-22 06:11:56 ET (claimed)
+[job] end_et=2026-05-22 06:11:56 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-22 06:15 ET (~240s)
+
+[job] id=2091 type=prior_report job_date_et=2026-05-22 game_group_id=0 scheduled_time=2026-05-22 06:15 ET
+[job] command='python batch/pipeline/generate_daily_brief.py --session prior --date 2026-05-22 --as-of "2026-05-22 06:15"'
+[job] start_et=2026-05-22 06:15:56 ET (claimed)
+[job] end_et=2026-05-22 06:15:59 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-22 06:20 ET (~300s)
+
+[job] id=2092 type=early_peek job_date_et=2026-05-22 game_group_id=0 scheduled_time=2026-05-22 06:20 ET
+[job] command='python batch/pipeline/generate_daily_brief.py --session morning --date 2026-05-22 --as-of "2026-05-22 06:20"'
+[job] start_et=2026-05-22 06:20:59 ET (claimed)
+[job] end_et=2026-05-22 06:21:03 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-22 06:22 ET (~60s)
+
+[job] id=2093 type=email_runlog_morning job_date_et=2026-05-22 game_group_id=0 scheduled_time=2026-05-22 06:22 ET
+[job] command='python batch/jobs/email_run_log.py --date 2026-05-22 --kind morning'
+[job] start_et=2026-05-22 06:22:03 ET (claimed)
