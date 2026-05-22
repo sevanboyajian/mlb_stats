@@ -274,6 +274,8 @@ if _REPO_ROOT not in sys.path:
 
 from core.db.connection import connect as db_connect, get_db_path
 from batch.pipeline.edge_utils import EDGE_CLEAR, EDGE_MIN
+from batch.pipeline.grade_ledger import grade_bet_ledger, run_daily_grading
+from core.grading.parsing import strip_avoid_bet_label
 
 # brief_picks lineage: v2 model live on this slate date (inclusive). Edge gates live in edge_utils.
 MODEL_V2_START_DATE = "2026-04-28"
@@ -388,46 +390,8 @@ def _first_fire_odds_taken(
     return None
 
 
-def _sync_bet_ledger_odds_from_snapshots(
-    conn: sqlite3.Connection,
-    game_date: str,
-) -> int:
-    """Align bet_ledger.odds_taken with first-fire bet_snapshots before grading."""
-    import logging
-
-    updated = 0
-    try:
-        rows = conn.execute(
-            """
-            SELECT id, game_pk, market_type, odds_taken
-            FROM bet_ledger
-            WHERE game_date = ?
-              AND stake_units > 0
-              AND lower(trim(coalesce(signal_at_time, ''))) != 'avoid'
-            """,
-            (game_date,),
-        ).fetchall()
-        for r in rows:
-            snap_odds = _first_fire_odds_taken(
-                conn, game_date, int(r["game_pk"]), str(r["market_type"] or ""),
-            )
-            if snap_odds is None:
-                continue
-            cur = r["odds_taken"]
-            if cur is not None and int(cur) == snap_odds:
-                continue
-            conn.execute(
-                "UPDATE bet_ledger SET odds_taken = ? WHERE id = ?",
-                (snap_odds, int(r["id"])),
-            )
-            updated += 1
-    except Exception as e:
-        logging.warning("[bet_ledger] odds sync from snapshots failed: %s", e)
-    return updated
-
-
 def _prior_report_ledger_hygiene(conn: sqlite3.Connection, game_date: str) -> None:
-    """Backfill diagnostics, snapshot odds sync, grade, and duplicate detection."""
+    """Backfill diagnostics, grade via grading agent, and duplicate detection."""
     import logging
 
     try:
@@ -445,36 +409,34 @@ def _prior_report_ledger_hygiene(conn: sqlite3.Connection, game_date: str) -> No
     except Exception as e:
         logging.warning("[prior report] bet_ledger row count check failed: %s", e)
 
-    _sync_bet_ledger_odds_from_snapshots(conn, game_date)
-
     try:
-        grade_bet_ledger(conn, game_date=game_date)
-    except Exception as e:
-        logging.warning("[prior report] grade_bet_ledger failed: %s", e)
-        return
-
-    try:
-        ungraded = conn.execute(
-            """
-            SELECT COUNT(*) FROM bet_ledger bl
-            JOIN games g ON g.game_pk = bl.game_pk
-            WHERE bl.game_date = ?
-              AND g.status = 'Final'
-              AND (bl.result IS NULL OR TRIM(bl.result) = '')
-              AND lower(trim(coalesce(bl.signal_at_time,''))) != 'avoid'
-            """,
-            (game_date,),
-        ).fetchone()[0]
-        if ungraded > 0:
-            logging.warning(
-                "[prior report] %s bet_ledger row(s) for %s still ungraded after "
-                "grade_bet_ledger(). Check odds_taken and game status.",
-                ungraded,
+        logging.info(
+            "[prior_report] run_daily_grading trigger=prior_report for %s — "
+            "scheduled grade_daily job should have run at 06:12 ET",
+            game_date,
+        )
+        summary = run_daily_grading(conn, game_date, trigger="prior_report")
+        if summary.get("rows_graded") == 0 and not summary.get("error_message"):
+            logging.info(
+                "[prior_report] run_daily_grading for %s: rows_graded=0 "
+                "(already graded by scheduled job)",
                 game_date,
             )
-            grade_bet_ledger(conn, game_date=game_date)
+        if summary.get("ungraded_after"):
+            logging.warning(
+                "[prior report] %s bet_ledger row(s) for %s still ungraded after "
+                "run_daily_grading(). Check odds_taken and game status.",
+                summary["ungraded_after"],
+                game_date,
+            )
+        if summary.get("error_message"):
+            logging.warning(
+                "[prior report] run_daily_grading failed: %s",
+                summary["error_message"],
+            )
     except Exception as e:
-        logging.warning("[prior report] ungraded-row check failed: %s", e)
+        logging.warning("[prior report] run_daily_grading failed: %s", e)
+        return
 
     try:
         dupes = conn.execute(
@@ -3208,17 +3170,6 @@ def backfill_bet_ledger_from_signal_state(conn: sqlite3.Connection, game_date: s
     return inserted
 
 
-def strip_avoid_bet_label(bet_text: str) -> str:
-    """Strip leading 'Avoid:' / 'Avoid ' so ML/total parsers can grade counterfactuals."""
-    s = (bet_text or "").strip()
-    su = s.upper()
-    if su.startswith("AVOID "):
-        return s[6:].strip()
-    if su.startswith("AVOID:"):
-        return s[6:].strip()
-    return s
-
-
 def avoid_entry_bet_fields(entry: dict) -> tuple[str, str, float | None]:
     """Return (market, bet_label, total_line) for an AVOID entry (brief / prior display)."""
     g = (entry.get("game") or {})
@@ -3350,412 +3301,6 @@ def prior_avoid_outcome_lines(entry: dict) -> tuple[str, str, str] | None:
         ver = "  Verdict on the call: ✓ Good avoid — you dodged a losing bet."
 
     return (bet_line, cf, ver)
-
-
-def grade_bet_ledger(conn: sqlite3.Connection, game_date: str | None = None) -> int:
-    """
-    Grade bets in bet_ledger for games that are Final.
-
-    - Joins bet_ledger -> games on game_pk
-    - Only processes games where games.status = 'Final'
-    - Top/next rows: result in ('win','loss','push'), pnl_units at stake 1
-    - Avoid rows (signal_at_time='avoid'): result good_avoid / bad_avoid / push_avoid —
-      counterfactual for the skipped bet; pnl_units 0 (informational only)
-
-    Market rules:
-      moneyline:
-        bet team wins -> win else loss
-      total:
-        compare total line vs actual runs
-      run line:
-        compare spread vs final score
-    """
-    if conn is None:
-        return 0
-
-    def _pnl_units_from_odds(odds: int | None, won: bool, push: bool) -> float:
-        if push:
-            return 0.0
-        if not won:
-            return -1.0
-        if odds is None:
-            # Missing odds -> assume even money
-            return 1.0
-        return (odds / 100.0) if odds > 0 else (100.0 / abs(odds))
-
-    def _parse_total_bet(bet_text: str) -> tuple[str | None, float | None]:
-        s = (bet_text or "").strip().upper()
-        if not s:
-            return None, None
-        side = "over" if s.startswith("OVER") else ("under" if s.startswith("UNDER") else None)
-        if side is None:
-            return None, None
-        # e.g. "OVER 8.5"
-        try:
-            num = float(s.split()[1])
-            return side, num
-        except Exception:
-            return side, None
-
-    def _parse_runline_bet(bet_text: str) -> tuple[str | None, float | None]:
-        # e.g. "NYY -1.5" or "STL +1.5"
-        s = (bet_text or "").strip().upper()
-        if not s:
-            return None, None
-        parts = s.split()
-        if len(parts) < 2:
-            return None, None
-        team = parts[0]
-        try:
-            line = float(parts[1])
-        except Exception:
-            return team, None
-        return team, line
-
-    def _parse_ml_team(bet_text: str) -> str | None:
-        # e.g. "CHC ML" or "BAL ML"
-        s = (bet_text or "").strip().upper()
-        if not s:
-            return None
-        parts = s.split()
-        if not parts:
-            return None
-        return parts[0]
-
-    where_date = ""
-    params: tuple = ()
-    if game_date:
-        where_date = "AND bl.game_date = ?"
-        params = (game_date,)
-
-    def _coalesce_float(*vals: object) -> float | None:
-        for v in vals:
-            if v is None:
-                continue
-            try:
-                return float(v)
-            except (TypeError, ValueError):
-                continue
-        return None
-
-    def _total_line_for_totals_grading(row: sqlite3.Row) -> float | None:
-        """Ledger / brief picks line first; last pre-start snapshot last (never is_closing_line)."""
-        return _coalesce_float(
-            row["ledger_total_line_at_bet"],
-            row["bp_total_line_at_bet"],
-            row["bp_total_line"],
-            row["pre_start_total_line"],
-        )
-
-    # Only grade ungraded bets (result is NULL or empty) for Final games.
-    # Totals: prefer bet_ledger.total_line_at_bet, then brief_picks total_line_at_bet / total_line,
-    # then last game_odds snapshot at or before first pitch (not v_closing_game_odds / is_closing_line).
-    rows = conn.execute(
-        f"""
-        SELECT
-            bl.id,
-            bl.game_pk,
-            g.game_date_et AS game_date_et,
-            bl.market_type,
-            bl.bet,
-            bl.odds_taken,
-            bl.signal_at_time,
-            g.home_team_id,
-            g.away_team_id,
-            g.home_score,
-            g.away_score,
-            th.abbreviation AS home_abbr,
-            ta.abbreviation AS away_abbr,
-            bl.total_line_at_bet AS ledger_total_line_at_bet,
-            bp.total_line_at_bet AS bp_total_line_at_bet,
-            bp.total_line AS bp_total_line,
-            (
-                SELECT go.total_line
-                FROM game_odds go
-                WHERE go.game_pk = bl.game_pk
-                  AND go.market_type = 'total'
-                  AND g.game_start_utc IS NOT NULL
-                  AND TRIM(CAST(g.game_start_utc AS TEXT)) != ''
-                  AND go.captured_at_utc <= g.game_start_utc
-                ORDER BY go.captured_at_utc DESC,
-                    CASE lower(go.bookmaker)
-                        WHEN 'draftkings' THEN 1
-                        WHEN 'fanduel' THEN 2
-                        WHEN 'betmgm' THEN 3
-                        WHEN 'betonlineag' THEN 4
-                        WHEN 'sbro' THEN 5
-                        WHEN 'oddswarehouse' THEN 6
-                        ELSE 7
-                    END ASC
-                LIMIT 1
-            ) AS pre_start_total_line
-        FROM bet_ledger bl
-        JOIN games g ON g.game_pk = bl.game_pk
-        JOIN teams th ON th.team_id = g.home_team_id
-        JOIN teams ta ON ta.team_id = g.away_team_id
-        LEFT JOIN brief_picks bp
-            ON bp.game_date = bl.game_date
-           AND bp.game_pk = bl.game_pk
-           AND bp.market = 'TOTAL'
-        WHERE g.status = 'Final'
-          AND (bl.result IS NULL OR TRIM(bl.result) = '')
-          {where_date}
-        """,
-        params,
-    ).fetchall()
-
-    if not rows:
-        return 0
-
-    # ── Calibration log (CSV append-only) ────────────────────────────────
-    # For each graded staked bet, append: date, game_pk, bet_type, score, model_p, implied_p, edge, result.
-    # Uses score_game via evaluate_signals() on the same slate date (Final games included).
-    import csv
-    from pathlib import Path
-
-    from batch.pipeline.edge_utils import american_to_implied_prob, score_to_model_prob
-
-    cal_path = Path(_REPO_ROOT) / "data" / "calibration_log.csv"
-    cal_path.parent.mkdir(parents=True, exist_ok=True)
-    _wrote_header = cal_path.exists() is False
-
-    # Cache per game_pk so we only score each game once during grading.
-    _scored_cache: dict[int, object] = {}
-
-    def _get_scored_for_game_pk(gpk: int, gd: str) -> object | None:
-        if gpk in _scored_cache:
-            return _scored_cache[gpk]
-        try:
-            as_of = _now_et()  # non-None → load_games includes Final rows
-            games = load_games(conn, gd, verbose=False, as_of_dt=as_of)
-            gmap = {int(g["game_pk"]): g for g in games if g.get("game_pk") is not None}
-            game = gmap.get(int(gpk))
-            if not game:
-                _scored_cache[gpk] = None
-                return None
-            team_ids = list({game["home_team_id"], game["away_team_id"]})
-            streaks = load_streaks(conn, gd, team_ids, verbose=False)
-            starters = load_starters(conn, gd, verbose=False)
-            sigs = evaluate_signals(conn, game, streaks, "primary", starters)
-            sg = sigs.get("_scored_game")
-            _scored_cache[gpk] = sg
-            return sg
-        except Exception:
-            _scored_cache[gpk] = None
-            return None
-
-    def _append_cal_row(*, gd: str, gpk: int, bet_type: str, market_type: str, odds_taken: int | None, result_str: str) -> None:
-        nonlocal _wrote_header
-        sg = _get_scored_for_game_pk(gpk, gd)
-        if sg is None:
-            return
-        # Market-specific calibration: do NOT mix ML/TOTAL/RL in one dataset.
-        try:
-            me = getattr(sg, "market_evals", {}) or {}
-            mt = str(market_type or "").strip().upper()
-            mm = me.get(mt) or {}
-            score = int(mm.get("score") or 0)
-            model_p = float(mm.get("model_p") or score_to_model_prob(score))
-            implied_p = float(mm.get("implied_p")) if mm.get("implied_p") is not None else american_to_implied_prob(int(odds_taken) if odds_taken is not None else None)
-            edge = float(mm.get("edge")) if mm.get("edge") is not None else ((model_p - implied_p) if implied_p is not None else None)
-        except Exception:
-            score = 0
-            model_p = float(score_to_model_prob(score))
-            implied_p = american_to_implied_prob(int(odds_taken) if odds_taken is not None else None)
-            edge = (model_p - implied_p) if implied_p is not None else None
-        res_u = (result_str or "").strip().lower()
-        if res_u == "win":
-            res_val = 1
-        elif res_u == "loss":
-            res_val = 0
-        else:
-            # ignore pushes/avoids/no-result for calibration
-            return
-        with cal_path.open("a", newline="", encoding="utf-8") as fh:
-            w = csv.writer(fh)
-            if _wrote_header:
-                w.writerow(["date", "game_pk", "market_type", "bet_type", "score", "model_p", "implied_p", "edge", "result"])
-                _wrote_header = False
-            w.writerow(
-                [
-                    gd,
-                    int(gpk),
-                    str(market_type or "").strip().upper(),
-                    bet_type,
-                    int(score),
-                    f"{model_p:.3f}",
-                    (f"{implied_p:.3f}" if implied_p is not None else "NA"),
-                    (f"{edge:.3f}" if edge is not None else "NA"),
-                    int(res_val),
-                ]
-            )
-
-    updated = 0
-    for r in rows:
-        market = (r["market_type"] or "").strip().lower()
-        bet_text = r["bet"] or ""
-        hs = r["home_score"]
-        as_ = r["away_score"]
-        if hs is None or as_ is None:
-            continue
-
-        res = None
-        pnl = None
-        sig_at = (r["signal_at_time"] or "").strip().lower()
-
-        if sig_at == "avoid":
-            equiv = strip_avoid_bet_label(bet_text)
-            home_abbr = (r["home_abbr"] or "").upper()
-            away_abbr = (r["away_abbr"] or "").upper()
-            runs = hs + as_
-            hypo: str | None = None
-
-            if market == "moneyline":
-                team = _parse_ml_team(equiv)
-                if not team:
-                    continue
-                if team == home_abbr:
-                    won = hs > as_
-                elif team == away_abbr:
-                    won = as_ > hs
-                else:
-                    continue
-                hypo = "win" if won else "loss"
-            elif market == "total":
-                side, parsed_line = _parse_total_bet(equiv)
-                if side is None:
-                    continue
-                line = _total_line_for_totals_grading(r) or parsed_line
-                if line is None:
-                    continue
-                if runs == line:
-                    hypo = "push"
-                else:
-                    won = (side == "over" and runs > line) or (side == "under" and runs < line)
-                    hypo = "win" if won else "loss"
-            elif market in ("spread", "runline"):
-                team, line = _parse_runline_bet(equiv)
-                if team is None or line is None:
-                    continue
-                if team == home_abbr:
-                    adj = hs + line
-                    opp = as_
-                elif team == away_abbr:
-                    adj = as_ + line
-                    opp = hs
-                else:
-                    continue
-                if adj == opp:
-                    hypo = "push"
-                else:
-                    won = adj > opp
-                    hypo = "win" if won else "loss"
-            else:
-                continue
-
-            if hypo == "push":
-                res = "push_avoid"
-            elif hypo == "win":
-                res = "bad_avoid"
-            else:
-                res = "good_avoid"
-            pnl = 0.0
-
-            conn.execute(
-                "UPDATE bet_ledger SET result = ?, pnl_units = ? WHERE id = ?",
-                (res, float(round(pnl, 4)), r["id"]),
-            )
-            updated += 1
-            continue
-
-        if market == "moneyline":
-            team = _parse_ml_team(bet_text)
-            if not team:
-                continue
-            home_abbr = (r["home_abbr"] or "").upper()
-            away_abbr = (r["away_abbr"] or "").upper()
-            if team == home_abbr:
-                won = hs > as_
-            elif team == away_abbr:
-                won = as_ > hs
-            else:
-                # Unknown team token
-                continue
-            res = "win" if won else "loss"
-            pnl = _pnl_units_from_odds(r["odds_taken"], won=won, push=False)
-
-        elif market == "total":
-            side, parsed_line = _parse_total_bet(bet_text)
-            if side is None:
-                continue
-            # Grade vs line at bet time — not v_closing / is_closing_line (Prompt 2).
-            line = _total_line_for_totals_grading(r) or parsed_line
-            if line is None:
-                continue
-            runs = hs + as_
-            if runs == line:
-                res = "push"
-                pnl = _pnl_units_from_odds(r["odds_taken"], won=False, push=True)
-            else:
-                won = (side == "over" and runs > line) or (side == "under" and runs < line)
-                res = "win" if won else "loss"
-                pnl = _pnl_units_from_odds(r["odds_taken"], won=won, push=False)
-
-        elif market in ("spread", "runline"):
-            team, line = _parse_runline_bet(bet_text)
-            if team is None or line is None:
-                continue
-            home_abbr = (r["home_abbr"] or "").upper()
-            away_abbr = (r["away_abbr"] or "").upper()
-            if team == home_abbr:
-                adj = hs + line
-                opp = as_
-            elif team == away_abbr:
-                adj = as_ + line
-                opp = hs
-            else:
-                continue
-            if adj == opp:
-                res = "push"
-                pnl = _pnl_units_from_odds(r["odds_taken"], won=False, push=True)
-            else:
-                won = adj > opp
-                res = "win" if won else "loss"
-                pnl = _pnl_units_from_odds(r["odds_taken"], won=won, push=False)
-        else:
-            continue
-
-        if res is None or pnl is None:
-            continue
-
-        conn.execute(
-            "UPDATE bet_ledger SET result = ?, pnl_units = ? WHERE id = ?",
-            (res, float(round(pnl, 4)), r["id"]),
-        )
-        updated += 1
-        try:
-            # Append calibration row for staked bets only.
-            if (
-                float(r.get("stake_units") or 0.0) > 0
-                and (r["odds_taken"] is not None)
-                and (market in ("moneyline", "spread", "runline", "total"))
-            ):
-                mt_u = (r.get("market_type") or "").strip().lower()
-                mlabel = "ML" if mt_u == "moneyline" else ("TOTAL" if mt_u == "total" else ("RL" if mt_u in ("spread", "runline") else str(r.get("market_type") or "").upper()))
-                _append_cal_row(
-                    gd=str(r.get("game_date_et") or game_date or ""),
-                    gpk=int(r["game_pk"]),
-                    bet_type=str(r["market_type"] or ""),
-                    market_type=mlabel,
-                    odds_taken=int(r["odds_taken"]) if r["odds_taken"] is not None else None,
-                    result_str=str(res),
-                )
-        except Exception:
-            pass
-
-    if updated:
-        conn.commit()
-    return updated
 
 
 def _brief_pick_suppression_reason(scored: object | None, pick: dict) -> str:

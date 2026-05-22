@@ -8,6 +8,10 @@ Polls pipeline_jobs and runs due jobs (single-threaded) in scheduled_time order.
 
 CHANGE LOG (latest first)
 ────────────────────────
+2026-05-20  ``grade_daily`` emails grading report after run; ``weekly_signal_report`` on
+            Mondays (06:18 ET) after ``grade_daily``. Step 2: signal rollups + alerts.
+2026-05-20  ``grade_daily`` global job (06:12 ET): grades prior slate bet_ledger via
+            batch/jobs/grade_daily.py; ``prior_report`` depends on ``grade_daily``.
 2026-04-22  Auditing: log ``pipeline_job_runs`` INSERT failures (were silent); warn if the runs
             table is unreadable; if CREATE fails but the table exists, reuse it. CRITICAL line
             when a successful subprocess did not get a run row. Log ``[job] start_et`` only after a
@@ -521,6 +525,23 @@ def _next_calendar_date_et(job_date_et: str) -> str:
     return (d + dt.timedelta(days=1)).isoformat()
 
 
+def _prior_calendar_date_et(job_date_et: str) -> str:
+    """Return YYYY-MM-DD one calendar day before job_date_et (prior slate to grade)."""
+    d = dt.date.fromisoformat(str(job_date_et).strip())
+    return (d - dt.timedelta(days=1)).isoformat()
+
+
+def _default_yesterday_date_et() -> str:
+    """Prior calendar day in America/New_York (fallback: local today - 1)."""
+    try:
+        from zoneinfo import ZoneInfo
+
+        et = ZoneInfo("America/New_York")
+        return (dt.datetime.now(tz=et).date() - dt.timedelta(days=1)).isoformat()
+    except Exception:
+        return (dt.date.today() - dt.timedelta(days=1)).isoformat()
+
+
 def _default_tomorrow_date_et() -> str:
     """
     Next calendar day in America/New_York (fallback: local today + 1).
@@ -763,6 +784,17 @@ def _build_command(job: dict) -> str:
             if job_date
             else "python batch/jobs/schedule_pipeline_day.py --groups-only"
         ),
+        "grade_daily": (
+            "python batch/jobs/grade_daily.py "
+            f"--date {_prior_calendar_date_et(job_date)} --trigger scheduled_job"
+            if job_date
+            else f"python batch/jobs/grade_daily.py --date {_default_yesterday_date_et()} --trigger scheduled_job"
+        ),
+        "weekly_signal_report": (
+            f"python batch/jobs/grade_weekly.py --date {_prior_calendar_date_et(job_date)}"
+            if job_date
+            else f"python batch/jobs/grade_weekly.py --date {_default_yesterday_date_et()}"
+        ),
         "prior_report": f"python batch/pipeline/generate_daily_brief.py --session prior --date {job_date}" if job_date else "python batch/pipeline/generate_daily_brief.py --session prior",
         # ``morning`` = Today's Slate only (no model signals); job_type name is ``early_peek``.
         "early_peek": f"python batch/pipeline/generate_daily_brief.py --session morning --date {job_date}" if job_date else "python batch/pipeline/generate_daily_brief.py --session morning",
@@ -866,7 +898,9 @@ def _dependency_rules() -> dict[str, list[str]]:
         "odds_check": ["load_today", "odds_pull"],
         "weather": ["load_today"],
         # odds pulls must complete before brief generation; morning load_weather fills wind + starters
-        "prior_report": ["load_weather", "odds_pull", "build_team_wma", "build_pitcher_wma"],
+        "grade_daily": ["stats_pull", "load_today"],
+        "weekly_signal_report": ["grade_daily"],
+        "prior_report": ["load_weather", "odds_pull", "build_team_wma", "build_pitcher_wma", "grade_daily"],
         "early_peek": ["load_weather", "odds_pull", "build_team_wma", "build_pitcher_wma"],
         "group_brief": ["load_today", "odds_pull", "load_weather"],
         "bet_ledger_sync": ["load_today"],

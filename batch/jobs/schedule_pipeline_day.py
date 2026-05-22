@@ -9,6 +9,9 @@ Console output is intentionally verbose so you can see exactly what it is doing.
 
 CHANGE LOG (latest first)
 ────────────────────────
+2026-05-20  Step 2 grading agent: signal performance + email in ``grade_daily``; Monday
+            ``weekly_signal_report`` at 06:18 ET (after ``grade_daily``).
+2026-05-20  Global ``grade_daily`` at 06:12 ET (grades prior slate before ``prior_report`` at 06:15).
 2026-04-26  Global ``build_team_wma`` (06:02 ET) after ``stats_pull``; ``run_pipeline`` wires deps so
             ``early_peek`` / ``prior_report`` wait on ``build_team_wma`` (``group_brief`` does not — groups-only slates).
 2026-04-20  Word brief email delivery moved to ``generate_daily_brief.py`` via ``delivery.email_sender``
@@ -376,7 +379,7 @@ def _normalize_and_dedupe_globals(con: sqlite3.Connection, *, job_date_et: str) 
             WHERE game_group_id IS NULL
               AND scheduled_time_et IS NOT NULL
               AND substr(scheduled_time_et, 1, 10) = ?
-              AND job_type IN ('stats_pull','build_team_wma','build_pitcher_wma','load_today','load_weather','day_setup','early_peek','prior_report')
+              AND job_type IN ('stats_pull','build_team_wma','build_pitcher_wma','load_today','load_weather','day_setup','grade_daily','weekly_signal_report','early_peek','prior_report')
             """,
             (job_date_et,),
         )
@@ -426,6 +429,22 @@ def _insert_global_daily_setup_jobs(con: sqlite3.Connection, *, job_date_et: str
     g_ins += _insert_global_job(con, job_date_et=job_date_et, job_type="build_team_wma", scheduled_time_et=f"{job_date_et} 06:09 ET")
     g_ins += _insert_global_job(con, job_date_et=job_date_et, job_type="build_pitcher_wma", scheduled_time_et=f"{job_date_et} 06:11 ET")
     g_ins += _insert_global_job(con, job_date_et=job_date_et, job_type="day_setup", scheduled_time_et=f"{job_date_et} 06:10 ET")
+    g_ins += _insert_global_job(
+        con,
+        job_date_et=job_date_et,
+        job_type="grade_daily",
+        scheduled_time_et=f"{job_date_et} 06:12 ET",
+    )
+    try:
+        if dt.date.fromisoformat(job_date_et).weekday() == 0:
+            g_ins += _insert_global_job(
+                con,
+                job_date_et=job_date_et,
+                job_type="weekly_signal_report",
+                scheduled_time_et=f"{job_date_et} 06:18 ET",
+            )
+    except ValueError:
+        pass
     g_ins += _insert_global_job(con, job_date_et=job_date_et, job_type="prior_report", scheduled_time_et=f"{job_date_et} 06:15 ET")
     g_ins += _insert_global_job(con, job_date_et=job_date_et, job_type="early_peek", scheduled_time_et=f"{job_date_et} 06:20 ET")
     # Email the runner log after group-0 morning globals complete.

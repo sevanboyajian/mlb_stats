@@ -28,7 +28,7 @@
 --    5. Backtesting   : model_predictions, backtest_results
 --    6. Operations    : ingest_log, odds_ingest_log, signal_state,
 --                      shadow_filter_b_watch, bet_ledger, bet_snapshots,
---                      game_signal_log, brief_log, daily_pnl, brief_picks
+--                      game_signal_log, brief_log, daily_pnl, brief_picks, grading_log
 --    7. Pipeline      : pipeline_jobs, pipeline_job_runs, runner_lock
 -- ============================================================
 -- # CHANGE LOG (latest first)
@@ -940,6 +940,58 @@ CREATE TABLE IF NOT EXISTS brief_log (
     picks_count     INTEGER,
     output_file     TEXT,
     game_group_id   INTEGER
+);
+
+
+-- ------------------------------------------------------------
+-- grading_log
+-- One row per daily grading run (batch/pipeline/grade_ledger.py).
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS grading_log (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_date       TEXT    NOT NULL,
+    graded_at       TEXT    NOT NULL,
+    trigger         TEXT    NOT NULL,
+    ledger_rows     INTEGER,
+    rows_attempted  INTEGER,
+    rows_graded     INTEGER,
+    odds_synced     INTEGER,
+    wins            INTEGER,
+    losses          INTEGER,
+    pushes          INTEGER,
+    avoid_good      INTEGER,
+    avoid_bad       INTEGER,
+    avoid_push      INTEGER,
+    pnl_units       REAL,
+    ungraded_after  INTEGER,
+    error_message   TEXT,
+    alert_count     INTEGER NOT NULL DEFAULT 0,
+    alerts_json     TEXT,
+    v2_roi_pct      REAL
+);
+
+CREATE INDEX IF NOT EXISTS idx_grading_log_game_date
+    ON grading_log (game_date);
+
+
+-- ------------------------------------------------------------
+-- grading_log_rows
+-- Per bet_ledger row graded in a grading_log run.
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS grading_log_rows (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    grading_log_id  INTEGER NOT NULL,
+    bet_ledger_id   INTEGER NOT NULL,
+    game_pk         INTEGER,
+    market_type     TEXT,
+    bet             TEXT,
+    odds_taken      INTEGER,
+    home_score      INTEGER,
+    away_score      INTEGER,
+    total_line_used REAL,
+    result          TEXT,
+    pnl_units       REAL,
+    grade_status    TEXT    NOT NULL DEFAULT 'graded'
 );
 
 
