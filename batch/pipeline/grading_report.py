@@ -190,14 +190,141 @@ def collect_alert_messages(signal_performance: dict[str, dict[str, Any]]) -> lis
 
 
 def _status_icon(stats: dict[str, Any], group: str) -> str:
+    n = int(stats.get("bets", 0))
+    threshold = ALERT_THRESHOLDS.get(group, (8, 0.0, ""))[0]
+    roi_pct = float(stats.get("roi_pct", 0.0))
+    if n < threshold:
+        return "—"
     if stats.get("alert"):
         return "❌"
-    min_n = ALERT_THRESHOLDS.get(group, (999, 0.0, ""))[0]
-    if stats.get("bets", 0) < min_n:
+    if roi_pct >= 0:
         return "✅"
-    if stats.get("roi_pct", 0.0) < 0:
-        return "⚠"
-    return "✅"
+    return "⚠"
+
+
+def _week_bet_ledger_summary(
+    conn: sqlite3.Connection,
+    week_start: str,
+    as_of_date: str,
+) -> dict[str, Any]:
+    """Staked graded bets in ``[week_start, as_of_date]`` from bet_ledger (complete source)."""
+    _ensure_row_factory(conn)
+    row = conn.execute(
+        """
+        SELECT
+            COUNT(*) AS bets,
+            SUM(CASE WHEN lower(trim(coalesce(bl.result,''))) = 'win' THEN 1 ELSE 0 END) AS wins,
+            SUM(CASE WHEN lower(trim(coalesce(bl.result,''))) = 'loss' THEN 1 ELSE 0 END) AS losses,
+            SUM(CASE WHEN lower(trim(coalesce(bl.result,''))) = 'push' THEN 1 ELSE 0 END) AS pushes,
+            ROUND(COALESCE(SUM(bl.pnl_units), 0), 4) AS pnl_units
+        FROM bet_ledger bl
+        JOIN games g ON g.game_pk = bl.game_pk
+        WHERE g.game_date_et BETWEEN ? AND ?
+          AND g.game_type = 'R'
+          AND bl.stake_units > 0
+          AND lower(trim(coalesce(bl.signal_at_time,''))) != 'avoid'
+          AND lower(trim(coalesce(bl.result,''))) IN ('win', 'loss', 'push')
+        """,
+        (week_start, as_of_date),
+    ).fetchone()
+    bets = int(row["bets"] or 0)
+    pnl = float(row["pnl_units"] or 0.0)
+    return {
+        "bets": bets,
+        "wins": int(row["wins"] or 0),
+        "losses": int(row["losses"] or 0),
+        "pushes": int(row["pushes"] or 0),
+        "pnl_units": pnl,
+        "roi_pct": (100.0 * pnl / bets) if bets else 0.0,
+    }
+
+
+def _week_slate_days(conn: sqlite3.Connection, week_start: str, as_of_date: str) -> int:
+    _ensure_row_factory(conn)
+    row = conn.execute(
+        """
+        SELECT COUNT(DISTINCT g.game_date_et) AS days
+        FROM bet_ledger bl
+        JOIN games g ON g.game_pk = bl.game_pk
+        WHERE g.game_date_et BETWEEN ? AND ?
+          AND g.game_type = 'R'
+          AND bl.stake_units > 0
+        """,
+        (week_start, as_of_date),
+    ).fetchone()
+    return int(row["days"] or 0)
+
+
+def _alert_category_key(alert: str) -> str:
+    """Stable key for deduplicating alert messages that differ only by rolling stats."""
+    s = (alert or "").strip().lower()
+    if "owm underperforming" in s or s.startswith("owm"):
+        return "OWM"
+    if "mv-b alert" in s or s.startswith("mv-b"):
+        return "MV-B"
+    if "mv-f alert" in s or s.startswith("mv-f"):
+        return "MV-F"
+    if "lhp alert" in s or s.startswith("lhp"):
+        return "LHP"
+    if "streak signal alert" in s or s.startswith("streak"):
+        return "STREAK"
+    if "non-owm composite" in s:
+        return "NON_OWM"
+    return s
+
+
+def _collect_weekly_alerts_from_grading_log(
+    conn: sqlite3.Connection,
+    week_start: str,
+    as_of_date: str,
+) -> list[str]:
+    _ensure_row_factory(conn)
+    rows = conn.execute(
+        """
+        SELECT alerts_json
+        FROM grading_log
+        WHERE game_date >= ? AND game_date <= ?
+        ORDER BY game_date ASC, id ASC
+        """,
+        (week_start, as_of_date),
+    ).fetchall()
+    latest_by_category: dict[str, str] = {}
+    for r in rows:
+        try:
+            arr = json.loads(r["alerts_json"] or "[]")
+            if not isinstance(arr, list):
+                continue
+            for alert in arr:
+                msg = str(alert)
+                latest_by_category[_alert_category_key(msg)] = msg
+        except Exception:
+            pass
+    ordered: list[str] = []
+    for group in SIGNAL_GROUP_ORDER:
+        msg = latest_by_category.get(group)
+        if msg:
+            ordered.append(msg)
+    for key, msg in latest_by_category.items():
+        if key not in SIGNAL_GROUP_ORDER and msg not in ordered:
+            ordered.append(msg)
+    return ordered
+
+
+def _active_alerts_for_week(
+    conn: sqlite3.Connection,
+    as_of_date: str,
+    *,
+    week_start: str,
+) -> list[str]:
+    """
+    Alerts for the weekly report: current rolling alerts at ``as_of_date``,
+    falling back to deduped grading_log history for the window.
+    """
+    signal_performance = compute_rolling_signal_performance(conn, as_of_date)
+    active = collect_alert_messages(signal_performance)
+    if active:
+        return active
+    return _collect_weekly_alerts_from_grading_log(conn, week_start, as_of_date)
 
 
 def _season_stats(conn: sqlite3.Connection, game_date: str) -> dict[str, Any]:
@@ -420,38 +547,15 @@ def build_weekly_signal_report(
     as_of_date: str,
 ) -> str:
     """
-    Trailing 7-day summary from grading_log plus current signal rollups.
+    Trailing 7-day summary: week W-L from bet_ledger, alerts from grading_log.
     """
     _ensure_row_factory(conn)
     end_d = date.fromisoformat(as_of_date)
-    start_d = end_d - timedelta(days=6)
-    start_s = start_d.isoformat()
+    start_s = (end_d - timedelta(days=6)).isoformat()
 
-    rows = conn.execute(
-        """
-        SELECT game_date, wins, losses, pushes, pnl_units, alert_count, alerts_json, v2_roi_pct
-        FROM grading_log
-        WHERE game_date >= ? AND game_date <= ?
-        ORDER BY game_date ASC
-        """,
-        (start_s, as_of_date),
-    ).fetchall()
-
-    week_wins = sum(int(r["wins"] or 0) for r in rows)
-    week_losses = sum(int(r["losses"] or 0) for r in rows)
-    week_pushes = sum(int(r["pushes"] or 0) for r in rows)
-    week_pnl = sum(float(r["pnl_units"] or 0.0) for r in rows)
-    week_bets = week_wins + week_losses + week_pushes
-    week_roi = (100.0 * week_pnl / week_bets) if week_bets else 0.0
-
-    week_alerts: list[str] = []
-    for r in rows:
-        try:
-            arr = json.loads(r["alerts_json"] or "[]")
-            if isinstance(arr, list):
-                week_alerts.extend(str(x) for x in arr)
-        except Exception:
-            pass
+    week = _week_bet_ledger_summary(conn, start_s, as_of_date)
+    slate_days = _week_slate_days(conn, start_s, as_of_date)
+    week_alerts = _active_alerts_for_week(conn, as_of_date, week_start=start_s)
 
     signal_performance = compute_rolling_signal_performance(conn, as_of_date)
     season = _season_stats(conn, as_of_date)
@@ -479,9 +583,9 @@ def build_weekly_signal_report(
         bar,
         "",
         f"WEEK ({start_s} → {as_of_date})",
-        f"  Bets graded days: {len(rows)}",
-        f"  Record: {week_wins}W-{week_losses}L-{week_pushes}P",
-        f"  P&L (flat 1u): {week_pnl:+.4f}u  ROI: {week_roi:+.1f}%",
+        f"  Slate days in window: {slate_days}",
+        f"  Record: {week['wins']}W-{week['losses']}L-{week['pushes']}P",
+        f"  P&L (flat 1u): {week['pnl_units']:+.4f}u  ROI: {week['roi_pct']:+.1f}%",
         "",
         "V2 SEASON TREND",
         f"  Current v2 ROI: {v2_roi_today:+.1f}%",
@@ -509,10 +613,6 @@ def build_weekly_signal_report(
             lines.append(f"  · {a}")
     else:
         lines.append("  None recorded in grading_log this week")
-
-    non_owm = signal_performance.get("NON_OWM") or {}
-    if non_owm.get("alert"):
-        lines.extend(["", "COMPOSITE", f"  · {non_owm['alert']}"])
 
     lines.extend(["", bar, "  EDUCATIONAL USE ONLY — NOT FINANCIAL ADVICE", bar])
     return "\n".join(lines)
