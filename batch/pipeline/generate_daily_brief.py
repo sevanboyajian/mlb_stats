@@ -2658,12 +2658,14 @@ def _ledger_signal_row_is_actionable(conn: sqlite3.Connection, game_date: str, r
         return False
     try:
         streaks = load_streaks(conn, game_date, team_ids, verbose=False)
-        starters = load_starters(conn, game_date, verbose=False)
+        starters, starter_flags = load_starters(conn, game_date, verbose=False)
     except Exception:
         return False
     sess = str(r["session"] or "primary").strip() or "primary"
     try:
-        sigs = evaluate_signals(conn, game, streaks, sess, starters)
+        sigs = evaluate_signals(
+            conn, game, streaks, sess, starters, starter_flags=starter_flags,
+        )
     except Exception:
         return False
     sg = sigs.get("_scored_game")
@@ -2840,8 +2842,10 @@ def _insert_bet_ledger_from_latest(
                 return
             team_ids = list({game["home_team_id"], game["away_team_id"]})
             streaks = load_streaks(conn, game_date, team_ids, verbose=False)
-            starters = load_starters(conn, game_date, verbose=False)
-            sigs = evaluate_signals(conn, game, streaks, "primary", starters)
+            starters, starter_flags = load_starters(conn, game_date, verbose=False)
+            sigs = evaluate_signals(
+                conn, game, streaks, "primary", starters, starter_flags=starter_flags,
+            )
             sg = sigs.get("_scored_game")
             if sg is None:
                 return
@@ -4291,13 +4295,38 @@ def enrich_games_with_season_records(
     return games
 
 
-def load_starters(conn: sqlite3.Connection, game_date: str, verbose: bool) -> dict:
+def load_starters(
+    conn: sqlite3.Connection, game_date: str, verbose: bool
+) -> tuple[dict, dict[str, str]]:
     """
     Load probable starting pitchers for today's games.
-    Returns dict of {game_pk: {home_starter, away_starter}} where available.
+
+    Returns ``(starters, starter_flags)`` where ``starters`` is
+    ``{game_pk: {team_id: starter_dict}}`` and ``starter_flags`` is
+    ``{game_pk: 'ok' | 'missing_home' | 'missing_away' | 'missing_both'}``.
     Falls back gracefully if the table/column doesn't exist yet.
     """
-    starters = {}
+    # STARTER SWAP RECOVERY:
+    # If a starter swap occurs after the morning probable pitcher pull,
+    # game_probable_pitchers will have stale data. Manual recovery:
+    #
+    #   INSERT OR REPLACE INTO game_probable_pitchers
+    #       (game_pk, team_id, player_id)
+    #   VALUES (
+    #       <game_pk>,
+    #       <team_id>,
+    #       (SELECT player_id FROM players WHERE full_name = '<Name>')
+    #   );
+    #
+    # Then re-run the brief session to pick up the corrected starter.
+    # The starter_flags mechanism will log 'missing_away' / 'missing_home'
+    # warnings to help identify which games need manual correction.
+    import logging
+
+    if conn.row_factory is not sqlite3.Row:
+        conn.row_factory = sqlite3.Row
+
+    starters: dict = {}
     try:
         cur = conn.execute(
             """
@@ -4332,11 +4361,53 @@ def load_starters(conn: sqlite3.Connection, game_date: str, verbose: bool) -> di
             }
         if verbose:
             print(f"\n  [verbose] Starters loaded for {len(starters)} games")
+
+        # Swap / missing data: only one probable pitcher on record for this game.
+        for gpk, team_map in starters.items():
+            if len(team_map) < 2:
+                logging.warning(
+                    "[load_starters] game_pk=%s has only %d starter(s) — "
+                    "possible swap or missing probable pitcher data. "
+                    "Signals requiring both starters may be suppressed.",
+                    gpk,
+                    len(team_map),
+                )
     except sqlite3.OperationalError as e:
         # Table not yet populated — non-fatal
         if verbose:
             print(f"\n  [verbose] game_probable_pitchers not available: {e}")
-    return starters
+
+    starter_flags: dict[str, str] = {}
+    try:
+        game_rows = conn.execute(
+            """
+            SELECT game_pk, home_team_id, away_team_id
+            FROM games
+            WHERE game_date_et = ?
+              AND game_type = 'R'
+            """,
+            (game_date,),
+        ).fetchall()
+        for gr in game_rows:
+            gpk = int(gr["game_pk"])
+            hid = int(gr["home_team_id"])
+            aid = int(gr["away_team_id"])
+            team_map = starters.get(gpk, {})
+            has_home = hid in team_map
+            has_away = aid in team_map
+            if has_home and has_away:
+                starter_flags[gpk] = "ok"
+            elif has_home:
+                starter_flags[gpk] = "missing_away"
+            elif has_away:
+                starter_flags[gpk] = "missing_home"
+            else:
+                starter_flags[gpk] = "missing_both"
+    except Exception as e:
+        logging.warning("[load_starters] starter_flags build failed: %s", e)
+        starter_flags = {}
+
+    return starters, starter_flags
 
 
 def load_line_movement(conn: sqlite3.Connection, game_date: str, verbose: bool) -> dict:
@@ -4376,7 +4447,26 @@ def load_line_movement(conn: sqlite3.Connection, game_date: str, verbose: bool) 
 # Signal evaluation
 # ═══════════════════════════════════════════════════════════════════════════
 
-def enrich_game_with_starters(game: dict, starters: dict) -> None:
+def _starter_swap_data_flag_message(game: dict, starter_flags: dict) -> str | None:
+    try:
+        gpk = int(game.get("game_pk", 0))
+    except (TypeError, ValueError):
+        return None
+    flag = starter_flags.get(gpk, "ok")
+    if flag == "ok":
+        return None
+    missing_side = flag.replace("missing_", "").replace("_", " ")
+    return (
+        f"⚠ {missing_side} starter unavailable — "
+        f"possible swap; signals requiring starter data suppressed"
+    )
+
+
+def enrich_game_with_starters(
+    game: dict,
+    starters: dict,
+    starter_flags: dict | None = None,
+) -> None:
     """
     Inject away starter handedness, ERA, name, and home team rolling OPS
     into the game dict. Used by ``enrich_game()`` before dressing; may also be
@@ -4397,14 +4487,26 @@ def enrich_game_with_starters(game: dict, starters: dict) -> None:
     game["home_rolling_ops"]   = home_s.get("rolling_ops")
     game["home_ops_window"]    = home_s.get("ops_window") or 0
 
+    msg = _starter_swap_data_flag_message(game, starter_flags or {})
+    if msg:
+        flags = list(game.get("data_flags") or [])
+        if msg not in flags:
+            flags.append(msg)
+        game["data_flags"] = flags
 
-def enrich_game(conn: sqlite3.Connection, game: dict, starters: dict):
+
+def enrich_game(
+    conn: sqlite3.Connection,
+    game: dict,
+    starters: dict,
+    starter_flags: dict | None = None,
+):
     """
     Starter-enrich the brief row dict and dress it for scoring.
 
     Returns ``FullyDressedGame`` (see ``batch.pipeline.score_game.dress_game_for_brief``).
     """
-    enrich_game_with_starters(game, starters)
+    enrich_game_with_starters(game, starters, starter_flags)
     from batch.pipeline.score_game import dress_game_for_brief
 
     return dress_game_for_brief(conn, game)
@@ -4417,6 +4519,7 @@ def evaluate_signals(
     session: str,
     starters: dict | None = None,
     *,
+    starter_flags: dict | None = None,
     verbose: bool = False,
     debug_wind: bool = False,
 ) -> dict:
@@ -4442,6 +4545,7 @@ def evaluate_signals(
         raise TypeError("evaluate_signals requires a sqlite3.Connection (conn)")
 
     starters = starters if starters is not None else {}
+    starter_flags = starter_flags if starter_flags is not None else {}
 
     hid = int(game["home_team_id"])
     aid = int(game["away_team_id"])
@@ -4452,7 +4556,7 @@ def evaluate_signals(
     fdg = None
     dress_exc: BaseException | None = None
     try:
-        fdg = enrich_game(conn, game, starters)
+        fdg = enrich_game(conn, game, starters, starter_flags)
         from dataclasses import replace as _dc_replace
 
         fdg = _dc_replace(
@@ -4483,6 +4587,12 @@ def evaluate_signals(
                 signals = [getattr(s, "signal_id", str(s)) for s in pre]
                 print(f"[DEBUG BEFORE SCORE] game={game_pk} signals={signals}")
             scored = score_game(fdg, home_streak, game_month)
+            starter_msg = _starter_swap_data_flag_message(game, starter_flags)
+            if starter_msg and scored is not None:
+                flags = list(getattr(scored, "data_flags", None) or [])
+                if starter_msg not in flags:
+                    flags.append(starter_msg)
+                    scored.data_flags = flags
         except Exception as e:
             score_exc = e
             scored = None
@@ -6475,7 +6585,8 @@ def build_primary_brief(games, streaks, starters, game_date,
                         conn=None, session=None, now: datetime.datetime | None = None,
                         verbose: bool = False,
                         debug_wind: bool = False,
-                        game_group_id: int | None = None) -> tuple[str, list]:
+                        game_group_id: int | None = None,
+                        starter_flags: dict | None = None) -> tuple[str, list]:
     if s6_fires is None:
         s6_fires = {}
     BW = FORWARD_BRIEF_BAR_WIDTH
@@ -6517,6 +6628,7 @@ def build_primary_brief(games, streaks, starters, game_date,
     for game in games:
         sigs = evaluate_signals(
             conn, game, streaks, sess_key, starters,
+            starter_flags=starter_flags or {},
             verbose=verbose, debug_wind=debug_wind,
         )
         if os.getenv("DEBUG_SCORE_GAME") == "1":
@@ -7004,7 +7116,8 @@ def build_closing_brief(games, streaks, starters, movement, game_date,
                         now: datetime.datetime | None = None,
                         verbose: bool = False,
                         debug_wind: bool = False,
-                        game_group_id: int | None = None) -> tuple[str, int]:
+                        game_group_id: int | None = None,
+                        starter_flags: dict | None = None) -> tuple[str, int]:
     lines = []
     BW = FORWARD_BRIEF_BAR_WIDTH
     if now is None:
@@ -7048,6 +7161,7 @@ def build_closing_brief(games, streaks, starters, movement, game_date,
             continue
         sigs = evaluate_signals(
             conn, game, streaks, "closing", starters,
+            starter_flags=starter_flags or {},
             verbose=verbose, debug_wind=debug_wind,
         )
         closing_picks_logged += len(list(sigs.get("picks") or []))
@@ -7436,6 +7550,7 @@ def build_docx_brief(
     movement: dict = None,
     verbose: bool = False,
     debug_wind: bool = False,
+    starter_flags: dict | None = None,
 ) -> "Document":
     """
     Build a Word Document for any session type.
@@ -7499,6 +7614,7 @@ def build_docx_brief(
     for game in games:
         sigs = evaluate_signals(
             conn, game, streaks, session, starters,
+            starter_flags=starter_flags or {},
             verbose=verbose, debug_wind=debug_wind,
         )
         entries.append({"game": game, "sigs": sigs})
@@ -7578,6 +7694,7 @@ def build_docx_brief(
         for g in games:
             sigs = evaluate_signals(
                 conn, g, streaks, "primary", starters,
+                starter_flags=starter_flags or {},
                 verbose=verbose, debug_wind=debug_wind,
             )
             hs   = g.get("home_score"); as_ = g.get("away_score")
@@ -8460,7 +8577,7 @@ def main():
 
     team_ids = list({g["home_team_id"] for g in games} | {g["away_team_id"] for g in games})
     streaks  = load_streaks(conn, today, team_ids, args.verbose)
-    starters = load_starters(conn, today, args.verbose)
+    starters, starter_flags = load_starters(conn, today, args.verbose)
     movement = load_line_movement(conn, today, args.verbose) if session == "closing" else {}
 
     # ── S6 pitcher streak check (monitoring signal) ───────────────────────
@@ -8515,6 +8632,7 @@ def main():
             conn=conn, session=session, now=now,
             verbose=args.verbose, debug_wind=args.debug_wind,
             game_group_id=_ggid,
+            starter_flags=starter_flags,
         )
     else:
         brief_text, closing_pick_row_count = build_closing_brief(
@@ -8522,6 +8640,7 @@ def main():
             conn=conn, session=session, now=now,
             verbose=args.verbose, debug_wind=args.debug_wind,
             game_group_id=_ggid,
+            starter_flags=starter_flags,
         )
 
     # ── Output ───────────────────────────────────────────────────────────

@@ -385,7 +385,7 @@ def grade_bet_ledger(
                 return None
             team_ids = list({game["home_team_id"], game["away_team_id"]})
             streaks = load_streaks(conn, gd, team_ids, verbose=False)
-            starters = load_starters(conn, gd, verbose=False)
+            starters, _ = load_starters(conn, gd, verbose=False)
             sigs = evaluate_signals(conn, game, streaks, "primary", starters)
             sg = sigs.get("_scored_game")
             scored_cache[gpk] = sg
