@@ -352,6 +352,154 @@ def _ledger_total_line_at_bet(market_type: str, bet_text: str | None) -> float |
         return None
 
 
+def _ledger_market_to_snapshot_type(market_type: str) -> str | None:
+    mt_u = (market_type or "").strip().lower()
+    if mt_u == "moneyline":
+        return "ML"
+    if mt_u == "total":
+        return "TOTAL"
+    if mt_u in ("spread", "runline"):
+        return "RL"
+    return None
+
+
+def _first_fire_odds_taken(
+    conn: sqlite3.Connection,
+    game_date: str,
+    game_pk: int,
+    ledger_market_type: str,
+) -> int | None:
+    snap_mt = _ledger_market_to_snapshot_type(ledger_market_type)
+    if not snap_mt:
+        return None
+    try:
+        row = conn.execute(
+            """
+            SELECT odds_taken FROM bet_snapshots
+            WHERE game_date = ? AND game_pk = ? AND market_type = ?
+            LIMIT 1
+            """,
+            (game_date, int(game_pk), snap_mt),
+        ).fetchone()
+        if row is not None and row[0] is not None:
+            return int(row[0])
+    except Exception:
+        pass
+    return None
+
+
+def _sync_bet_ledger_odds_from_snapshots(
+    conn: sqlite3.Connection,
+    game_date: str,
+) -> int:
+    """Align bet_ledger.odds_taken with first-fire bet_snapshots before grading."""
+    import logging
+
+    updated = 0
+    try:
+        rows = conn.execute(
+            """
+            SELECT id, game_pk, market_type, odds_taken
+            FROM bet_ledger
+            WHERE game_date = ?
+              AND stake_units > 0
+              AND lower(trim(coalesce(signal_at_time, ''))) != 'avoid'
+            """,
+            (game_date,),
+        ).fetchall()
+        for r in rows:
+            snap_odds = _first_fire_odds_taken(
+                conn, game_date, int(r["game_pk"]), str(r["market_type"] or ""),
+            )
+            if snap_odds is None:
+                continue
+            cur = r["odds_taken"]
+            if cur is not None and int(cur) == snap_odds:
+                continue
+            conn.execute(
+                "UPDATE bet_ledger SET odds_taken = ? WHERE id = ?",
+                (snap_odds, int(r["id"])),
+            )
+            updated += 1
+    except Exception as e:
+        logging.warning("[bet_ledger] odds sync from snapshots failed: %s", e)
+    return updated
+
+
+def _prior_report_ledger_hygiene(conn: sqlite3.Connection, game_date: str) -> None:
+    """Backfill diagnostics, snapshot odds sync, grade, and duplicate detection."""
+    import logging
+
+    try:
+        ledger_rows = conn.execute(
+            "SELECT COUNT(*) FROM bet_ledger WHERE game_date = ?",
+            (game_date,),
+        ).fetchone()[0]
+        if ledger_rows == 0:
+            logging.warning(
+                "[prior report] bet_ledger has 0 rows for %s. "
+                "generate_bets_from_signal_state or _insert_bet_ledger_from_latest "
+                "may not have run.",
+                game_date,
+            )
+    except Exception as e:
+        logging.warning("[prior report] bet_ledger row count check failed: %s", e)
+
+    _sync_bet_ledger_odds_from_snapshots(conn, game_date)
+
+    try:
+        grade_bet_ledger(conn, game_date=game_date)
+    except Exception as e:
+        logging.warning("[prior report] grade_bet_ledger failed: %s", e)
+        return
+
+    try:
+        ungraded = conn.execute(
+            """
+            SELECT COUNT(*) FROM bet_ledger bl
+            JOIN games g ON g.game_pk = bl.game_pk
+            WHERE bl.game_date = ?
+              AND g.status = 'Final'
+              AND (bl.result IS NULL OR TRIM(bl.result) = '')
+              AND lower(trim(coalesce(bl.signal_at_time,''))) != 'avoid'
+            """,
+            (game_date,),
+        ).fetchone()[0]
+        if ungraded > 0:
+            logging.warning(
+                "[prior report] %s bet_ledger row(s) for %s still ungraded after "
+                "grade_bet_ledger(). Check odds_taken and game status.",
+                ungraded,
+                game_date,
+            )
+            grade_bet_ledger(conn, game_date=game_date)
+    except Exception as e:
+        logging.warning("[prior report] ungraded-row check failed: %s", e)
+
+    try:
+        dupes = conn.execute(
+            """
+            SELECT game_pk, market_type, COUNT(*) AS cnt
+            FROM bet_ledger
+            WHERE game_date = ?
+              AND stake_units > 0
+              AND lower(trim(coalesce(signal_at_time,''))) != 'avoid'
+            GROUP BY game_pk, market_type
+            HAVING COUNT(*) > 1
+            """,
+            (game_date,),
+        ).fetchall()
+        for d in dupes:
+            logging.warning(
+                "[bet_ledger] Duplicate staked rows: game_pk=%s market=%s count=%s",
+                d[0],
+                d[1],
+                d[2],
+            )
+    except Exception as e:
+        logging.warning("[prior report] duplicate ledger check failed: %s", e)
+
+
 def _game_started_or_in_progress_for_closing(game: dict, now: datetime.datetime) -> bool:
     """
     True if first pitch time is known and ``now`` is at or after start (UTC).
@@ -2664,9 +2812,10 @@ def _insert_bet_ledger_from_latest(
                 already_staked.add((int(rr[0]), str(rr[1] or "")))
             except Exception:
                 continue
-    except Exception:
-        # Best-effort; fall back to unique index behavior only.
-        pass
+    except Exception as e:
+        import logging
+
+        logging.warning("[bet_ledger] already_staked load failed: %s", e)
     actionable_cache: dict[tuple, bool] = {}
     for (_gpk, _mt, _st), (_dt, r) in latest.items():
         sig_type = (r["signal_type"] or "").strip()
@@ -2680,7 +2829,17 @@ def _insert_bet_ledger_from_latest(
                 continue
         mt = str(r["market_type"] or "")
         stake = 0.0 if sig_type == "avoid" else 1.0
-        odds_val = None if sig_type == "avoid" else r["odds"]
+        if sig_type == "avoid":
+            odds_val = None
+        else:
+            snap_odds = _first_fire_odds_taken(
+                conn, game_date, int(r["game_pk"]), mt,
+            )
+            if snap_odds is not None:
+                odds_val = snap_odds
+            else:
+                # bet_snapshots not yet written — fall back to signal_state odds.
+                odds_val = r["odds"]
         rec_dt = _parse_recorded_at_et_ledger(r["recorded_at"])
         g_stub: dict = {"game_start_utc": None}
         try:
@@ -5801,10 +5960,7 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
             backfill_bet_ledger_from_signal_state(conn, game_date, now=now)
     except Exception:
         pass
-    try:
-        grade_bet_ledger(conn, game_date=game_date)
-    except Exception:
-        pass
+    _prior_report_ledger_hygiene(conn, game_date)
 
     try:
         bet_rows = conn.execute("""
