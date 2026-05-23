@@ -28,8 +28,10 @@ if str(_REPO_ROOT) not in sys.path:
 try:
     from dotenv import load_dotenv
 
+    # Match generate_daily_brief.py: repo-root .env wins over config/.env so SMTP
+    # credentials stay in sync with brief/grading emails.
     load_dotenv(_REPO_ROOT / "config" / ".env", override=False)
-    load_dotenv(_REPO_ROOT / ".env", override=False)
+    load_dotenv(_REPO_ROOT / ".env", override=True)
     load_dotenv(override=False)
 except ImportError:
     pass

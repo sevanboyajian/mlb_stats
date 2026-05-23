@@ -1,0 +1,3 @@
+date,game_pk,market_type,bet_type,score,model_p,implied_p,edge,result
+2026-05-22,824842,ML,moneyline,10,0.720,0.567,0.120,1
+2026-05-22,825082,ML,moneyline,10,0.710,0.697,0.013,0
