@@ -232,3 +232,17 @@
 [job] start_et=2026-05-24 17:37:11 ET (claimed)
 [job] end_et=2026-05-24 17:37:11 ET status=complete rc=0
 [run_pipeline] sleep-until-due: next pending at 2026-05-24 17:50 ET (~780s)
+
+[job] id=2187 type=odds_pull job_date_et=2026-05-24 game_group_id=6 scheduled_time=2026-05-24 17:50 ET
+[job] command='python batch/ingestion/load_odds.py --pregame --markets game --date 2026-05-24'
+[job] context: group_id=6 window=[2026-05-24 17:45 ET -> 2026-05-24 17:55 ET]
+[job] start_et=2026-05-24 17:50:11 ET (claimed)
+[job] end_et=2026-05-24 17:50:12 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-24 17:55 ET (~300s)
+
+[job] id=2193 type=odds_check job_date_et=2026-05-24 game_group_id=6 scheduled_time=2026-05-24 17:55 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-05-24'
+[job] context: group_id=6 window=[2026-05-24 17:45 ET -> 2026-05-24 18:00 ET]
+[job] start_et=2026-05-24 17:55:12 ET (claimed)
+[job] end_et=2026-05-24 17:55:12 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-24 18:35 ET (~2400s)
