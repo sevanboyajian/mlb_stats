@@ -22,6 +22,8 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, brier_score_loss, log_loss
 from sklearn.preprocessing import StandardScaler
@@ -53,16 +55,46 @@ FEATURES = [
     "a_rolling_k_pct",
     "h_rolling_bb_pct",
     "a_rolling_bb_pct",
+    "sp_data_missing",
 ]
 
 SP_COLS = [
     "hsp_era_wma",
     "hsp_k_per_9_wma",
     "hsp_whip_wma",
+    "hsp_starts_in_window",
     "asp_era_wma",
     "asp_k_per_9_wma",
     "asp_whip_wma",
+    "asp_starts_in_window",
 ]
+
+MODELS = {
+    "LogReg_C10": {
+        "slug": "logreg",
+        "estimator": LogisticRegression(
+            C=10.0,
+            class_weight="balanced",
+            max_iter=1000,
+            solver="lbfgs",
+        ),
+    },
+    "GradBoost": {
+        "slug": "gradboost",
+        "estimator": CalibratedClassifierCV(
+            GradientBoostingClassifier(
+                n_estimators=300,
+                max_depth=3,
+                learning_rate=0.05,
+                subsample=0.8,
+                min_samples_leaf=20,
+                random_state=42,
+            ),
+            method="isotonic",
+            cv=5,
+        ),
+    },
+}
 
 
 def build_feature_query(seasons: list[int]) -> str:
@@ -195,6 +227,12 @@ def load_games(con: sqlite3.Connection, seasons: list[int]) -> pd.DataFrame:
     return pd.read_sql_query(sql, con, params=seasons)
 
 
+def compute_sp_data_missing(df: pd.DataFrame) -> pd.Series:
+    h_missing = df["hsp_starts_in_window"].isna() | (df["hsp_starts_in_window"] == 0)
+    a_missing = df["asp_starts_in_window"].isna() | (df["asp_starts_in_window"] == 0)
+    return (h_missing | a_missing).astype(int)
+
+
 def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
 
@@ -211,71 +249,112 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def drop_sp_nulls(df: pd.DataFrame) -> pd.DataFrame:
-    mask = df[SP_COLS].notna().all(axis=1)
-    dropped = (~mask).sum()
-    if dropped:
-        print(f"[outcome_model] Dropped {dropped} rows with missing SP features")
-    return df.loc[mask].copy()
-
-
 FILL_DEFAULTS: dict[str, float] = {
     "elevation_ft": 0.0,
     "park_factor_runs": 100.0,
 }
 
 
-def impute_train_medians(train: pd.DataFrame, test: pd.DataFrame, columns: list[str]) -> tuple[pd.DataFrame, pd.DataFrame]:
-    medians = train[columns].median(numeric_only=True)
+def impute_train_medians(
+    train: pd.DataFrame,
+    test: pd.DataFrame,
+    columns: list[str],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    impute_cols = [c for c in columns if c != "sp_data_missing"]
+    medians = train[impute_cols].median(numeric_only=True)
     train_filled = train.copy()
     test_filled = test.copy()
-    for col in columns:
+    for col in impute_cols:
         fill_val = medians[col] if col in medians.index and pd.notna(medians[col]) else FILL_DEFAULTS.get(col, 0.0)
         train_filled[col] = train_filled[col].fillna(fill_val)
         test_filled[col] = test_filled[col].fillna(fill_val)
     return train_filled, test_filled
 
 
-def calibration_lines(y_true: np.ndarray, y_prob: np.ndarray) -> list[str]:
+def winner_confidence(home_prob: np.ndarray) -> np.ndarray:
+    return np.maximum(home_prob, 1.0 - home_prob)
+
+
+def predicted_correct(home_prob: np.ndarray, y_true: np.ndarray) -> np.ndarray:
+    pred_home = home_prob >= 0.5
+    return (pred_home & (y_true == 1)) | (~pred_home & (y_true == 0))
+
+
+def calibration_lines(confidence: np.ndarray, correct: np.ndarray) -> list[str]:
     buckets = [
         ("50-55%", 0.50, 0.55),
         ("55-60%", 0.55, 0.60),
         ("60-65%", 0.60, 0.65),
         ("65-70%", 0.65, 0.70),
-        ("70%+  ", 0.70, 1.01),
+        ("70-75%", 0.70, 0.75),
+        ("75%+  ", 0.75, 1.01),
     ]
     lines: list[str] = []
     for label, lo, hi in buckets:
         if hi > 1.0:
-            mask = y_prob >= lo
+            mask = confidence >= lo
         else:
-            mask = (y_prob >= lo) & (y_prob < hi)
+            mask = (confidence >= lo) & (confidence < hi)
         n = int(mask.sum())
         if n == 0:
-            actual = float("nan")
             lines.append(f"  Bucket {label}:  N={n:4d}  Actual win rate:   n/a")
         else:
-            actual = float(y_true[mask].mean()) * 100.0
+            actual = float(correct[mask].mean()) * 100.0
             lines.append(f"  Bucket {label}:  N={n:4d}  Actual win rate: {actual:5.1f}%")
     return lines
 
 
-def format_top_predictions(test_df: pd.DataFrame, probs: np.ndarray, n: int = 20) -> list[str]:
-    tmp = test_df.copy()
-    tmp["home_win_prob"] = probs
-    tmp["confidence"] = np.abs(tmp["home_win_prob"] - 0.5)
-    tmp = tmp.sort_values(["confidence", "game_date_et"], ascending=[False, True]).head(n)
-
-    lines = [
-        f"  {'date':<10} {'home':<4} {'away':<4} {'pred_prob':>9}  actual",
+def prob_distribution_lines(confidence: np.ndarray) -> list[str]:
+    return [
+        f"  Median: {np.median(confidence):.3f}",
+        f"  p75:    {np.percentile(confidence, 75):.3f}",
+        f"  p90:    {np.percentile(confidence, 90):.3f}",
+        f"  p95:    {np.percentile(confidence, 95):.3f}",
+        f"  Max:    {np.max(confidence):.3f}",
     ]
-    for _, row in tmp.iterrows():
-        actual = "WIN" if int(row["home_win"]) == 1 else "LOSS"
+
+
+def high_confidence_lines(
+    confidence: np.ndarray,
+    correct: np.ndarray,
+    test_df: pd.DataFrame,
+    n_total: int,
+) -> list[str]:
+    col_laa = test_df["home_team"].isin(["COL", "LAA"]) | test_df["away_team"].isin(["COL", "LAA"])
+    lines: list[str] = []
+    for threshold in (0.60, 0.65, 0.68):
+        mask = confidence >= threshold
+        n = int(mask.sum())
+        pct = (n / n_total * 100.0) if n_total else 0.0
+        acc = float(correct[mask].mean()) * 100.0 if n else float("nan")
         lines.append(
-            f"  {str(row['game_date_et']):<10} {row['home_team']:<4} {row['away_team']:<4} "
-            f"{row['home_win_prob']:9.2f}  {actual}"
+            f"  >={threshold * 100:.0f}% confidence: N={n:4d} ({pct:4.1f}% of games)  "
+            f"Accuracy: {acc:5.1f}%"
         )
+
+    mask65_excl = (confidence >= 0.65) & ~col_laa.to_numpy()
+    n_excl = int(mask65_excl.sum())
+    acc_excl = float(correct[mask65_excl].mean()) * 100.0 if n_excl else float("nan")
+    lines.append(f"  >=65% excl COL/LAA: N={n_excl:4d}  Accuracy: {acc_excl:5.1f}%")
     return lines
+
+
+def feature_importance_lines(model_name: str, model, features: list[str]) -> list[str]:
+    if model_name == "LogReg_C10":
+        pairs = sorted(
+            zip(features, model.coef_[0]),
+            key=lambda x: abs(x[1]),
+            reverse=True,
+        )
+        return [f"  {name + ':':<18} {coef:+.3f}" for name, coef in pairs]
+
+    base = model.calibrated_classifiers_[0].estimator
+    pairs = sorted(
+        zip(features, base.feature_importances_),
+        key=lambda x: abs(x[1]),
+        reverse=True,
+    )
+    return [f"  {name + ':':<18} {imp:.3f}" for name, imp in pairs]
 
 
 def build_predictions_csv(test_df: pd.DataFrame, probs: np.ndarray) -> pd.DataFrame:
@@ -297,62 +376,31 @@ def build_predictions_csv(test_df: pd.DataFrame, probs: np.ndarray) -> pd.DataFr
             "predicted_winner": predicted_winner,
             "actual_winner": actual_winner,
             "correct": correct.astype(int),
+            "sp_data_missing": test_df["sp_data_missing"].astype(int).values,
         }
     )
 
 
-def run_backtest(
-    df: pd.DataFrame,
-    train_season: int = TRAIN_SEASON,
-    test_seasons: list[int] | None = None,
-) -> tuple[str, pd.DataFrame]:
-    if test_seasons is None:
-        test_seasons = TEST_SEASONS
-
-    df = engineer_features(df)
-    df = drop_sp_nulls(df)
-
-    train = df[df["season"] == train_season].copy()
-    test = df[df["season"].isin(test_seasons)].copy()
-
-    if train.empty:
-        raise ValueError(f"No training games for season {train_season}")
-    if test.empty:
-        raise ValueError(f"No test games for seasons {test_seasons}")
-
-    train, test = impute_train_medians(train, test, FEATURES)
-
-    x_train = train[FEATURES].astype(float).values
-    y_train = train["home_win"].astype(int).values
-    x_test = test[FEATURES].astype(float).values
-    y_test = test["home_win"].astype(int).values
-
-    scaler = StandardScaler()
-    x_train_scaled = scaler.fit_transform(x_train)
-    x_test_scaled = scaler.transform(x_test)
-
-    model = LogisticRegression(
-        class_weight="balanced",
-        C=1.0,
-        max_iter=1000,
-        solver="lbfgs",
-    )
-    model.fit(x_train_scaled, y_train)
-
-    probs = model.predict_proba(x_test_scaled)[:, 1]
+def format_model_report(
+    model_name: str,
+    *,
+    train: pd.DataFrame,
+    test: pd.DataFrame,
+    train_season: int,
+    test_seasons: list[int],
+    y_test: np.ndarray,
+    probs: np.ndarray,
+    model,
+    baseline_acc: float,
+) -> list[str]:
     preds = (probs >= 0.5).astype(int)
+    confidence = winner_confidence(probs)
+    correct = predicted_correct(probs, y_test)
 
-    baseline_acc = float(y_test.mean()) * 100.0
-    model_acc = accuracy_score(y_test, preds) * 100.0
-    brier = brier_score_loss(y_test, probs)
-    ll = log_loss(y_test, probs)
-
-    coef_pairs = sorted(
-        zip(FEATURES, model.coef_[0]),
-        key=lambda x: abs(x[1]),
-        reverse=True,
-    )
-    coef_lines = [f"  {name + ':':<18} {coef:+.3f}" for name, coef in coef_pairs]
+    train_complete = int((train["sp_data_missing"] == 0).sum())
+    train_imputed = int((train["sp_data_missing"] == 1).sum())
+    test_complete = int((test["sp_data_missing"] == 0).sum())
+    test_imputed = int((test["sp_data_missing"] == 1).sum())
 
     season_lines: list[str] = []
     for season in sorted(test["season"].unique()):
@@ -363,36 +411,113 @@ def run_backtest(
         label = f"{season} YTD" if season == max(test_seasons) else str(season)
         season_lines.append(f"  {label + ':':<10} N={mask.sum():4d}  Accuracy: {acc:5.1f}%")
 
-    lines = [
-        "OUTCOME PREDICTION MODEL — BACKTEST REPORT",
-        "==========================================",
-        f"Train: {train_season}  |  N={len(train)} games",
-        f"Test:  {'+'.join(str(s) for s in test_seasons)}  |  N={len(test)} games",
+    return [
+        "══════════════════════════════════════════════",
+        f"MODEL: {model_name}",
+        "══════════════════════════════════════════════",
+        f"Train: {train_season}  |  N={len(train)} games "
+        f"({train_complete} with complete SP, {train_imputed} imputed)",
+        f"Test:  {'+'.join(str(s) for s in test_seasons)}  |  N={len(test)} games "
+        f"({test_complete} with complete SP, {test_imputed} imputed)",
         "",
         "BASELINE (always predict home win):",
-        f"  Accuracy: {baseline_acc:5.1f}%  (historical home win rate)",
+        f"  Accuracy: {baseline_acc:5.1f}%",
         "",
         "MODEL PERFORMANCE (test set):",
-        f"  Accuracy:    {model_acc:5.1f}%",
-        f"  Brier Score: {brier:.3f}  (lower = better; 0.25 = no skill)",
-        f"  Log Loss:    {ll:.3f}",
+        f"  Accuracy:    {accuracy_score(y_test, preds) * 100.0:5.1f}%",
+        f"  Brier Score: {brier_score_loss(y_test, probs):.3f}",
+        f"  Log Loss:    {log_loss(y_test, probs):.3f}",
         "",
-        "CALIBRATION (does 60% confidence mean 60% win rate?):",
-        *calibration_lines(y_test, probs),
+        "PROBABILITY DISTRIBUTION (predicted winner confidence):",
+        *prob_distribution_lines(confidence),
+        "",
+        "CALIBRATION:",
+        *calibration_lines(confidence, correct),
+        "",
+        "HIGH-CONFIDENCE SUBSETS:",
+        *high_confidence_lines(confidence, correct, test, len(test)),
         "",
         "FEATURE COEFFICIENTS (sorted by absolute value):",
-        *coef_lines,
-        "",
-        "TOP 20 HIGHEST-CONFIDENCE TEST PREDICTIONS:",
-        *format_top_predictions(test, probs),
+        *feature_importance_lines(model_name, model, FEATURES),
         "",
         "SEASON SPLITS:",
         *season_lines,
+        "",
     ]
 
-    report = "\n".join(lines)
-    predictions = build_predictions_csv(test, probs)
-    return report, predictions
+
+def run_backtest(
+    df: pd.DataFrame,
+    train_season: int = TRAIN_SEASON,
+    test_seasons: list[int] | None = None,
+) -> tuple[str, dict[str, pd.DataFrame]]:
+    if test_seasons is None:
+        test_seasons = TEST_SEASONS
+
+    df = df.copy()
+    df["sp_data_missing"] = compute_sp_data_missing(df)
+    imputed_count = int(df["sp_data_missing"].sum())
+    complete_count = int(len(df) - imputed_count)
+    print(
+        f"[outcome_model] SP data: {complete_count} complete, "
+        f"{imputed_count} imputed (not dropped)"
+    )
+
+    df = engineer_features(df)
+
+    train = df[df["season"] == train_season].copy()
+    test = df[df["season"].isin(test_seasons)].copy()
+
+    if train.empty:
+        raise ValueError(f"No training games for season {train_season}")
+    if test.empty:
+        raise ValueError(f"No test games for seasons {test_seasons}")
+
+    impute_cols = list(set(FEATURES + SP_COLS))
+    train, test = impute_train_medians(train, test, impute_cols)
+
+    x_train = train[FEATURES].astype(float).values
+    y_train = train["home_win"].astype(int).values
+    x_test = test[FEATURES].astype(float).values
+    y_test = test["home_win"].astype(int).values
+
+    scaler = StandardScaler()
+    x_train_scaled = scaler.fit_transform(x_train)
+    x_test_scaled = scaler.transform(x_test)
+
+    baseline_acc = float(y_test.mean()) * 100.0
+
+    report_sections: list[str] = [
+        "OUTCOME PREDICTION MODEL — BACKTEST REPORT",
+        "==========================================",
+        "",
+    ]
+    predictions_by_slug: dict[str, pd.DataFrame] = {}
+
+    for model_name, spec in MODELS.items():
+        print(f"[outcome_model] Fitting {model_name}…")
+        model = spec["estimator"]
+        model.fit(x_train_scaled, y_train)
+        if model_name == "LogReg_C10":
+            print(f"[outcome_model] LogReg C={model.C}")
+
+        probs = model.predict_proba(x_test_scaled)[:, 1]
+        report_sections.extend(
+            format_model_report(
+                model_name,
+                train=train,
+                test=test,
+                train_season=train_season,
+                test_seasons=test_seasons,
+                y_test=y_test,
+                probs=probs,
+                model=model,
+                baseline_acc=baseline_acc,
+            )
+        )
+        predictions_by_slug[spec["slug"]] = build_predictions_csv(test, probs)
+
+    return "\n".join(report_sections), predictions_by_slug
 
 
 def parse_args() -> argparse.Namespace:
@@ -434,7 +559,6 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     report_path = output_dir / "outcome_model_backtest.txt"
-    csv_path = output_dir / "outcome_model_predictions.csv"
 
     con = db_connect(args.db)
     con.row_factory = sqlite3.Row
@@ -449,15 +573,24 @@ def main() -> int:
         print("[outcome_model] ERROR: no games returned — check seasons and joins")
         return 1
 
-    report, predictions = run_backtest(df, train_season=train_season, test_seasons=test_seasons)
+    report, predictions_by_slug = run_backtest(
+        df,
+        train_season=train_season,
+        test_seasons=test_seasons,
+    )
 
     report_path.write_text(report + "\n", encoding="utf-8")
-    predictions.to_csv(csv_path, index=False)
+    csv_paths: dict[str, Path] = {}
+    for slug, pred_df in predictions_by_slug.items():
+        csv_path = output_dir / f"outcome_model_predictions_{slug}.csv"
+        pred_df.to_csv(csv_path, index=False)
+        csv_paths[slug] = csv_path
 
-    print(report)
-    print()
+    sys.stdout.buffer.write((report + "\n\n").encode("utf-8", errors="replace"))
+    sys.stdout.buffer.flush()
     print(f"[outcome_model] Report saved to {report_path}")
-    print(f"[outcome_model] Predictions saved to {csv_path}")
+    for slug, path in csv_paths.items():
+        print(f"[outcome_model] Predictions saved to {path}")
     return 0
 
 
