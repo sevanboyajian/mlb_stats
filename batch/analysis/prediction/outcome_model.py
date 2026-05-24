@@ -11,21 +11,26 @@ USAGE:
   python batch/analysis/prediction/outcome_model.py --db data/mlb_stats.db
   python batch/analysis/prediction/outcome_model.py --seasons 2024 2025 2026
   python batch/analysis/prediction/outcome_model.py --output-dir outputs/reports
+  python batch/analysis/prediction/outcome_model.py --min-games 20
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import sqlite3
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
+import joblib
 import numpy as np
 import pandas as pd
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, brier_score_loss, log_loss
+from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
@@ -41,12 +46,9 @@ TEST_SEASONS = [2025, 2026]
 
 FEATURES = [
     "ops_diff",
-    "run_diff_diff",
-    "sp_era_diff",
     "sp_whip_diff",
     "sp_k9_diff",
-    "win_pct_diff",
-    "pythag_diff",
+    "sp_era_diff",
     "home_split_ops",
     "park_factor_runs",
     "elevation_ft",
@@ -56,6 +58,9 @@ FEATURES = [
     "h_rolling_bb_pct",
     "a_rolling_bb_pct",
     "sp_data_missing",
+    "pythag_diff",
+    "win_pct_diff",
+    "min_games_played",
 ]
 
 SP_COLS = [
@@ -96,6 +101,8 @@ MODELS = {
     },
 }
 
+_GAME_DATE_EXPR = "COALESCE(NULLIF(TRIM(g.game_date_et), ''), g.game_date)"
+
 
 def build_feature_query(seasons: list[int]) -> str:
     placeholders = ",".join("?" * len(seasons))
@@ -110,6 +117,28 @@ SELECT
     CASE WHEN g.home_score > g.away_score THEN 1 ELSE 0 END AS home_win,
     th.abbreviation AS home_team,
     ta.abbreviation AS away_team,
+
+    (SELECT COUNT(*)
+     FROM games gp
+     WHERE gp.season = g.season
+       AND gp.game_type = 'R'
+       AND gp.status = 'Final'
+       AND gp.home_score IS NOT NULL
+       AND gp.away_score IS NOT NULL
+       AND COALESCE(NULLIF(TRIM(gp.game_date_et), ''), gp.game_date) < {_GAME_DATE_EXPR}
+       AND (gp.home_team_id = g.home_team_id OR gp.away_team_id = g.home_team_id)
+    ) AS h_season_games_played,
+
+    (SELECT COUNT(*)
+     FROM games gp
+     WHERE gp.season = g.season
+       AND gp.game_type = 'R'
+       AND gp.status = 'Final'
+       AND gp.home_score IS NOT NULL
+       AND gp.away_score IS NOT NULL
+       AND COALESCE(NULLIF(TRIM(gp.game_date_et), ''), gp.game_date) < {_GAME_DATE_EXPR}
+       AND (gp.home_team_id = g.away_team_id OR gp.away_team_id = g.away_team_id)
+    ) AS a_season_games_played,
 
     h.rolling_ops              AS h_rolling_ops,
     h.rolling_runs_scored_pg   AS h_rolling_runs_scored_pg,
@@ -198,7 +227,7 @@ LEFT JOIN standings hs
      FROM standings s
      WHERE s.team_id = g.home_team_id
        AND s.season = g.season
-       AND s.snapshot_date <= date(COALESCE(NULLIF(TRIM(g.game_date_et), ''), g.game_date), '-1 day')
+       AND s.snapshot_date <= date({_GAME_DATE_EXPR}, '-1 day')
  )
 LEFT JOIN standings ast
   ON ast.team_id = g.away_team_id
@@ -208,7 +237,7 @@ LEFT JOIN standings ast
      FROM standings s
      WHERE s.team_id = g.away_team_id
        AND s.season = g.season
-       AND s.snapshot_date <= date(COALESCE(NULLIF(TRIM(g.game_date_et), ''), g.game_date), '-1 day')
+       AND s.snapshot_date <= date({_GAME_DATE_EXPR}, '-1 day')
  )
 
 LEFT JOIN venues v ON v.venue_id = g.venue_id
@@ -227,6 +256,31 @@ def load_games(con: sqlite3.Connection, seasons: list[int]) -> pd.DataFrame:
     return pd.read_sql_query(sql, con, params=seasons)
 
 
+def apply_early_season_filter(df: pd.DataFrame, min_games: int) -> tuple[pd.DataFrame, dict[str, int]]:
+    stats = {
+        "loaded_n": len(df),
+        "dropped_n": 0,
+        "retained_n": len(df),
+    }
+    if min_games <= 0:
+        return df.copy(), stats
+
+    pre_filter_n = len(df)
+    filtered = df[
+        (df["h_season_games_played"] >= min_games)
+        & (df["a_season_games_played"] >= min_games)
+    ].copy()
+    post_filter_n = len(filtered)
+    stats["dropped_n"] = pre_filter_n - post_filter_n
+    stats["retained_n"] = post_filter_n
+
+    print(
+        f"[outcome_model] Early-season filter (min {min_games} GP): "
+        f"dropped {stats['dropped_n']} games, {post_filter_n} remaining"
+    )
+    return filtered, stats
+
+
 def compute_sp_data_missing(df: pd.DataFrame) -> pd.Series:
     h_missing = df["hsp_starts_in_window"].isna() | (df["hsp_starts_in_window"] == 0)
     a_missing = df["asp_starts_in_window"].isna() | (df["asp_starts_in_window"] == 0)
@@ -237,7 +291,6 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
 
     out["ops_diff"] = out["h_rolling_ops"] - out["a_rolling_ops"]
-    out["run_diff_diff"] = out["h_rolling_run_diff_pg"] - out["a_rolling_run_diff_pg"]
     out["sp_era_diff"] = out["asp_era_wma"] - out["hsp_era_wma"]
     out["sp_whip_diff"] = out["asp_whip_wma"] - out["hsp_whip_wma"]
     out["sp_k9_diff"] = out["hsp_k_per_9_wma"] - out["asp_k_per_9_wma"]
@@ -245,6 +298,7 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     out["pythag_diff"] = out["h_pythag_win_pct"] - out["a_pythag_win_pct"]
     out["home_split_ops"] = out["h_rolling_ops_home"] - out["a_rolling_ops_road"]
     out["home_field"] = 1
+    out["min_games_played"] = out[["h_season_games_played", "a_season_games_played"]].min(axis=1)
 
     return out
 
@@ -260,7 +314,7 @@ def impute_train_medians(
     test: pd.DataFrame,
     columns: list[str],
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    impute_cols = [c for c in columns if c != "sp_data_missing"]
+    impute_cols = [c for c in columns if c not in {"sp_data_missing", "min_games_played"}]
     medians = train[impute_cols].median(numeric_only=True)
     train_filled = train.copy()
     test_filled = test.copy()
@@ -339,6 +393,22 @@ def high_confidence_lines(
     return lines
 
 
+def monthly_accuracy_lines(test: pd.DataFrame, y_test: np.ndarray, preds: np.ndarray) -> list[str]:
+    tmp = test.copy()
+    tmp["month"] = tmp["game_date_et"].astype(str).str.slice(0, 7)
+    tmp["y"] = y_test
+    tmp["pred"] = preds
+
+    lines = [
+        "  MONTHLY ACCURACY (test set, post-filter):",
+        "    Month       N    Accuracy",
+    ]
+    for month, group in tmp.groupby("month", sort=True):
+        acc = accuracy_score(group["y"], group["pred"]) * 100.0
+        lines.append(f"    {month:<9} {len(group):4d}     {acc:5.1f}%")
+    return lines
+
+
 def feature_importance_lines(model_name: str, model, features: list[str]) -> list[str]:
     if model_name == "LogReg_C10":
         pairs = sorted(
@@ -377,8 +447,34 @@ def build_predictions_csv(test_df: pd.DataFrame, probs: np.ndarray) -> pd.DataFr
             "actual_winner": actual_winner,
             "correct": correct.astype(int),
             "sp_data_missing": test_df["sp_data_missing"].astype(int).values,
+            "h_season_games_played": test_df["h_season_games_played"].astype(int).values,
+            "a_season_games_played": test_df["a_season_games_played"].astype(int).values,
+            "min_games_played": test_df["min_games_played"].astype(int).values,
         }
     )
+
+
+def filter_summary_lines(
+    filter_stats: dict[str, int],
+    min_games: int,
+    train_n: int,
+    test_n: int,
+) -> list[str]:
+    loaded = filter_stats["loaded_n"]
+    dropped = filter_stats["dropped_n"]
+    retained = filter_stats["retained_n"]
+    pct = (dropped / loaded * 100.0) if loaded else 0.0
+    return [
+        "EARLY-SEASON FILTER",
+        "══════════════════════════════════════════════════════",
+        f"Min games played threshold: {min_games} (per team)" if min_games > 0 else "Min games played threshold: disabled",
+        f"Total games loaded:         {loaded}",
+        f"Games dropped (early szn):  {dropped} ({pct:.1f}%)",
+        f"Games retained:             {retained}",
+        f"Train (2024, filtered):     {train_n} games",
+        f"Test  (2025+, filtered):    {test_n} games",
+        "",
+    ]
 
 
 def format_model_report(
@@ -442,17 +538,46 @@ def format_model_report(
         "",
         "SEASON SPLITS:",
         *season_lines,
+        *monthly_accuracy_lines(test, y_test, preds),
         "",
     ]
 
 
+def save_model_artifacts(
+    *,
+    output_dir: Path,
+    scaler: StandardScaler,
+    fitted_models: dict[str, object],
+    meta: dict,
+) -> Path:
+    model_dir = (output_dir / ".." / "models").resolve()
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    for slug, model in fitted_models.items():
+        pipeline = Pipeline([
+            ("scaler", scaler),
+            ("model", model),
+        ])
+        joblib.dump(pipeline, model_dir / f"outcome_model_{slug}.joblib")
+
+    meta_path = model_dir / "outcome_model_meta.json"
+    meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    print(f"[outcome_model] Models saved to {model_dir}")
+    return model_dir
+
+
 def run_backtest(
     df: pd.DataFrame,
+    *,
     train_season: int = TRAIN_SEASON,
     test_seasons: list[int] | None = None,
-) -> tuple[str, dict[str, pd.DataFrame]]:
+    min_games: int = 20,
+    filter_stats: dict[str, int] | None = None,
+) -> tuple[str, dict[str, pd.DataFrame], dict]:
     if test_seasons is None:
         test_seasons = TEST_SEASONS
+    if filter_stats is None:
+        filter_stats = {"loaded_n": len(df), "dropped_n": 0, "retained_n": len(df)}
 
     df = df.copy()
     df["sp_data_missing"] = compute_sp_data_missing(df)
@@ -491,17 +616,37 @@ def run_backtest(
         "OUTCOME PREDICTION MODEL — BACKTEST REPORT",
         "==========================================",
         "",
+        *filter_summary_lines(filter_stats, min_games, len(train), len(test)),
     ]
     predictions_by_slug: dict[str, pd.DataFrame] = {}
+    fitted_models: dict[str, object] = {}
+    metrics: dict[str, float | int] = {}
 
     for model_name, spec in MODELS.items():
         print(f"[outcome_model] Fitting {model_name}…")
         model = spec["estimator"]
         model.fit(x_train_scaled, y_train)
+        fitted_models[spec["slug"]] = model
         if model_name == "LogReg_C10":
             print(f"[outcome_model] LogReg C={model.C}")
 
+        train_probs = model.predict_proba(x_train_scaled)[:, 1]
         probs = model.predict_proba(x_test_scaled)[:, 1]
+        preds = (probs >= 0.5).astype(int)
+
+        slug = spec["slug"]
+        metrics[f"{slug}_train_accuracy"] = float(accuracy_score(y_train, (train_probs >= 0.5).astype(int)))
+        metrics[f"{slug}_test_accuracy"] = float(accuracy_score(y_test, preds))
+
+        if slug == "logreg":
+            conf = winner_confidence(probs)
+            correct = predicted_correct(probs, y_test)
+            ge65 = conf >= 0.65
+            metrics["logreg_ge65_n"] = int(ge65.sum())
+            metrics["logreg_ge65_accuracy"] = (
+                float(correct[ge65].mean()) if ge65.any() else float("nan")
+            )
+
         report_sections.extend(
             format_model_report(
                 model_name,
@@ -515,9 +660,28 @@ def run_backtest(
                 baseline_acc=baseline_acc,
             )
         )
-        predictions_by_slug[spec["slug"]] = build_predictions_csv(test, probs)
+        predictions_by_slug[slug] = build_predictions_csv(test, probs)
 
-    return "\n".join(report_sections), predictions_by_slug
+    artifact_meta = {
+        "trained_on_season": train_season,
+        "min_games_filter": min_games,
+        "feature_list": FEATURES,
+        "train_n": len(train),
+        "train_accuracy": metrics.get("logreg_train_accuracy"),
+        "test_seasons": test_seasons,
+        "test_n": len(test),
+        "logreg_test_accuracy": metrics.get("logreg_test_accuracy"),
+        "gradboost_test_accuracy": metrics.get("gradboost_test_accuracy"),
+        "logreg_ge65_accuracy": metrics.get("logreg_ge65_accuracy"),
+        "logreg_ge65_n": metrics.get("logreg_ge65_n"),
+        "saved_at_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+    }
+
+    return "\n".join(report_sections), predictions_by_slug, {
+        "scaler": scaler,
+        "fitted_models": fitted_models,
+        "meta": artifact_meta,
+    }
 
 
 def parse_args() -> argparse.Namespace:
@@ -540,6 +704,12 @@ def parse_args() -> argparse.Namespace:
         "--output-dir",
         default="outputs/reports",
         help="Directory for report and predictions CSV",
+    )
+    parser.add_argument(
+        "--min-games",
+        type=int,
+        default=20,
+        help="Minimum games played by each team to include a game (default: 20). Use 0 to disable.",
     )
     return parser.parse_args()
 
@@ -573,10 +743,21 @@ def main() -> int:
         print("[outcome_model] ERROR: no games returned — check seasons and joins")
         return 1
 
-    report, predictions_by_slug = run_backtest(
+    df, filter_stats = apply_early_season_filter(df, args.min_games)
+
+    report, predictions_by_slug, artifacts = run_backtest(
         df,
         train_season=train_season,
         test_seasons=test_seasons,
+        min_games=args.min_games,
+        filter_stats=filter_stats,
+    )
+
+    save_model_artifacts(
+        output_dir=output_dir,
+        scaler=artifacts["scaler"],
+        fitted_models=artifacts["fitted_models"],
+        meta=artifacts["meta"],
     )
 
     report_path.write_text(report + "\n", encoding="utf-8")
