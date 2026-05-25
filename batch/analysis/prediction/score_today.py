@@ -73,6 +73,18 @@ def winner_confidence(home_prob: float) -> float:
     return max(float(home_prob), 1.0 - float(home_prob))
 
 
+def passes_odds_tier(odds: float | None) -> bool:
+    """Rule 3 — odds tier filter (backtest: -150/-199 and -300+ outperform)."""
+    if odds is None or pd.isna(odds):
+        return False
+    odds = float(odds)
+    if -199 <= odds <= -150:
+        return True
+    if odds <= -300:
+        return True
+    return False
+
+
 def load_artifacts(models_dir: Path) -> tuple[object, dict]:
     meta_path = models_dir / "outcome_model_meta.json"
     pipeline_path = models_dir / "outcome_model_logreg.joblib"
@@ -161,7 +173,9 @@ SELECT
 
     v.park_factor_runs,
     v.park_factor_hr,
-    v.elevation_ft
+    v.elevation_ft,
+
+    g.wind_direction
 
 FROM games g
 JOIN teams th ON th.team_id = g.home_team_id
@@ -275,12 +289,13 @@ def load_today_games(con: sqlite3.Connection, score_date: str) -> pd.DataFrame:
 
 
 def load_current_odds(con: sqlite3.Connection, game_pks: list[int]) -> pd.DataFrame:
+    """Latest closing ML, total, and run line odds per game."""
     if not game_pks:
         return pd.DataFrame()
 
     placeholders = ",".join("?" * len(game_pks))
     sql = f"""
-    WITH ranked AS (
+    WITH moneylines AS (
         SELECT
             go.game_pk,
             go.home_ml,
@@ -289,25 +304,94 @@ def load_current_odds(con: sqlite3.Connection, game_pks: list[int]) -> pd.DataFr
             go.bookmaker,
             ROW_NUMBER() OVER (
                 PARTITION BY go.game_pk
-                ORDER BY go.captured_at_utc DESC, go.id DESC
+                ORDER BY go.is_closing_line DESC,
+                         go.captured_at_utc DESC,
+                         go.id DESC
             ) AS rn
         FROM game_odds go
         WHERE go.game_pk IN ({placeholders})
           AND go.market_type = 'moneyline'
           AND go.home_ml IS NOT NULL
           AND go.away_ml IS NOT NULL
+    ),
+    totals AS (
+        SELECT
+            go.game_pk,
+            go.total_line,
+            go.over_odds,
+            go.under_odds,
+            ROW_NUMBER() OVER (
+                PARTITION BY go.game_pk
+                ORDER BY go.is_closing_line DESC,
+                         go.captured_at_utc DESC,
+                         go.id DESC
+            ) AS rn
+        FROM game_odds go
+        WHERE go.game_pk IN ({placeholders})
+          AND go.market_type = 'total'
+          AND go.total_line IS NOT NULL
+    ),
+    runlines AS (
+        SELECT
+            go.game_pk,
+            go.home_rl_line,
+            go.home_rl_odds,
+            go.away_rl_line,
+            go.away_rl_odds,
+            ROW_NUMBER() OVER (
+                PARTITION BY go.game_pk
+                ORDER BY go.is_closing_line DESC,
+                         go.captured_at_utc DESC,
+                         CASE WHEN go.home_rl_line = -1.5 THEN 0 ELSE 1 END,
+                         go.id DESC
+            ) AS rn
+        FROM game_odds go
+        WHERE go.game_pk IN ({placeholders})
+          AND go.market_type = 'runline'
+          AND go.home_rl_line IS NOT NULL
     )
-    SELECT game_pk, home_ml, away_ml, captured_at_utc, bookmaker
-    FROM ranked
-    WHERE rn = 1
+    SELECT
+        g.game_pk,
+        m.home_ml,
+        m.away_ml,
+        m.captured_at_utc,
+        m.bookmaker,
+        t.total_line,
+        t.over_odds,
+        t.under_odds,
+        r.home_rl_line,
+        r.home_rl_odds,
+        r.away_rl_line,
+        r.away_rl_odds
+    FROM (SELECT DISTINCT game_pk FROM game_odds WHERE game_pk IN ({placeholders})) g
+    LEFT JOIN moneylines m ON m.game_pk = g.game_pk AND m.rn = 1
+    LEFT JOIN totals t ON t.game_pk = g.game_pk AND t.rn = 1
+    LEFT JOIN runlines r ON r.game_pk = g.game_pk AND r.rn = 1
     """
-    return pd.read_sql_query(sql, con, params=game_pks)
+    return pd.read_sql_query(sql, con, params=game_pks * 4)
 
 
 def compute_sp_data_missing(df: pd.DataFrame) -> pd.Series:
     h_missing = df["hsp_starts_in_window"].isna() | (df["hsp_starts_in_window"] == 0)
     a_missing = df["asp_starts_in_window"].isna() | (df["asp_starts_in_window"] == 0)
     return (h_missing | a_missing).astype(int)
+
+
+def get_favorite_info(row: pd.Series) -> tuple[object, object, object, object]:
+    hml = row.get("home_ml")
+    aml = row.get("away_ml")
+    try:
+        hml = float(hml) if hml not in (None, "") else None
+        aml = float(aml) if aml not in (None, "") else None
+    except (TypeError, ValueError):
+        return None, None, None, None
+    if hml is None or aml is None:
+        return None, None, None, None
+    if hml < 0 and (aml >= 0 or hml <= aml):
+        return row["home_team"], hml, "home", row.get("home_rl_odds")
+    if aml < 0 and (hml >= 0 or aml < hml):
+        return row["away_team"], aml, "away", row.get("away_rl_odds")
+    return None, None, None, None
 
 
 def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -321,6 +405,52 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     out["home_split_ops"] = out["h_rolling_ops_home"] - out["a_rolling_ops_road"]
     out["home_field"] = 1
     out["min_games_played"] = out[["h_season_games_played", "a_season_games_played"]].min(axis=1)
+    return out
+
+
+def compute_ou_rl_signals(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+
+    out["combined_era"] = (
+        out["hsp_era_wma"].fillna(999)
+        + out["asp_era_wma"].fillna(999)
+    )
+    out["both_sp_known"] = (
+        out["hsp_era_wma"].notna()
+        & out["asp_era_wma"].notna()
+        & (out["hsp_starts_in_window"].fillna(0) > 0)
+        & (out["asp_starts_in_window"].fillna(0) > 0)
+    )
+
+    out["under_signal"] = (
+        out["both_sp_known"]
+        & (out["combined_era"] < 6.0)
+    )
+
+    if "wind_direction" in out.columns:
+        out["wind_in"] = out["wind_direction"].astype(str).str.lower().str.contains("in", na=False)
+    else:
+        out["wind_in"] = False
+
+    out["under_signal_strong"] = (
+        out["both_sp_known"]
+        & (out["combined_era"] < 5.0)
+        & out["wind_in"]
+    )
+
+    fav_cols = out.apply(
+        lambda r: pd.Series(
+            get_favorite_info(r),
+            index=["favorite_team", "favorite_ml", "favorite_side", "fav_rl_odds"],
+        ),
+        axis=1,
+    )
+    out = pd.concat([out, fav_cols], axis=1)
+
+    out["rl_signal"] = out["favorite_ml"].notna() & (
+        out["favorite_ml"].astype(float) <= -301
+    )
+
     return out
 
 
@@ -388,7 +518,6 @@ def apply_decision_rules(
     *,
     min_games: int,
     confidence_threshold: float,
-    min_edge: float,
 ) -> pd.DataFrame:
     out = df.copy()
     out["rule_min_games"] = (
@@ -396,12 +525,12 @@ def apply_decision_rules(
         & (out["a_season_games_played"] >= min_games)
     )
     out["rule_confidence"] = out["confidence"] >= confidence_threshold
-    out["rule_edge"] = out["edge"] > min_edge
+    out["rule_odds_tier"] = out["odds_used"].apply(passes_odds_tier)
     out["has_odds"] = out["home_ml"].notna() & out["away_ml"].notna()
     out["actionable"] = (
         out["rule_min_games"]
         & out["rule_confidence"]
-        & out["rule_edge"]
+        & out["rule_odds_tier"]
         & out["has_odds"]
     )
 
@@ -417,11 +546,20 @@ def apply_decision_rules(
             fails.append(f"conf<{confidence_threshold:.0%}")
         if not row["has_odds"]:
             fails.append("no_odds")
-        elif not row["rule_edge"]:
-            fails.append(f"edge<={min_edge:.0%}")
+        elif not row["rule_odds_tier"]:
+            fails.append("odds_tier")
         reasons.append(",".join(fails) if fails else "SKIP")
     out["skip_reason"] = reasons
     return out
+
+
+def _wind_label(row: pd.Series) -> str:
+    if row.get("wind_in"):
+        return "IN"
+    direction = row.get("wind_direction")
+    if pd.isna(direction) or direction is None:
+        return "unknown"
+    return str(direction)
 
 
 def build_report(
@@ -430,34 +568,40 @@ def build_report(
     score_date: str,
     min_games: int,
     confidence_threshold: float,
-    min_edge: float,
     trained_on_season: int,
 ) -> str:
     actionable = scored[scored["actionable"]].sort_values(
-        ["edge", "confidence"], ascending=[False, False]
+        ["confidence", "edge"], ascending=[False, False]
     )
     skipped = scored[~scored["actionable"]]
+    eligible = scored[scored["rule_min_games"]]
+    under_hits = scored[scored["under_signal"]]
+    rl_hits = scored[scored["rl_signal"]]
 
     lines = [
         f"SCORE TODAY — {score_date}",
         "═" * 54,
         f"Model trained on:           {trained_on_season}",
-        f"Decision rules:",
+        "Decision rules:",
         f"  1. Both teams >={min_games} GP this season",
         f"  2. Model confidence >={confidence_threshold:.0%}",
-        f"  3. Model edge > {min_edge:.0%} vs market (vig-removed)",
+        "  3. Odds tier: -150 to -199 OR -300 or worse",
+        "     (edge calc shown for context only — not a gate)",
         "",
         f"Slated games loaded:        {len(scored)}",
-        f"Actionable picks:           {len(actionable)}",
-        f"Skipped / no bet:           {len(skipped)}",
+        f"Eligible (>={min_games} GP):       {len(eligible)}",
+        f"── ML picks:                {len(actionable)}  "
+        f"(>={confidence_threshold:.0%} conf, fav, tier -150/-199 or -300+)",
+        f"── Under signals:           {len(under_hits)}  (combined SP ERA WMA < 6.0)",
+        f"── Run line signals:        {len(rl_hits)}  (ML favorite <= -301)",
         "",
     ]
 
     if actionable.empty:
-        lines.append("No actionable picks today.")
+        lines.append("No actionable ML picks today.")
     else:
         lines.extend([
-            "RANKED PICKS (edge descending):",
+            "ML PICKS (confidence descending):",
             f"  {'#':>2}  {'matchup':<13} {'pick':<4} {'odds':>5}  "
             f"{'model%':>6} {'mkt%':>6} {'edge':>6} {'conf':>6}  ev",
             "  " + "-" * 62,
@@ -465,7 +609,7 @@ def build_report(
         for i, (_, row) in enumerate(actionable.iterrows(), start=1):
             matchup = f"{row['away_team']}@{row['home_team']}"
             lines.append(
-                f"  {i:2d}  {matchup:<13} {row['predicted_winner']:<4} "
+                f"  {i:2d}  ✅ GO  {matchup:<13} {row['predicted_winner']:<4} "
                 f"{int(row['odds_used']):+5d}  "
                 f"{row['model_prob']*100:5.1f}% {row['market_prob']*100:5.1f}% "
                 f"{row['edge']*100:+5.1f}% {row['confidence']*100:5.1f}%  "
@@ -488,6 +632,77 @@ def build_report(
                 f"aGP={int(row['a_season_games_played'])}  "
                 f"[{row['skip_reason']}]"
             )
+
+    lines.extend([
+        "",
+        "── UNDER SIGNAL ──────────────────────────────────────────────",
+        "Both SP ERA WMA combined < 6.0  |  Backtest: 652 games  |",
+        "Under rate: 44.6%  |  ROI on Under: +14.8% at -110",
+        "Strong (combined <5.0 + wind in): Under rate 41.6%  |",
+        "ROI: +20.6%",
+        "──────────────────────────────────────────────────────────────",
+    ])
+    if under_hits.empty:
+        lines.extend([
+            "  No Under signal today.",
+            "  (Fires when combined SP ERA WMA < 6.0 — typically 1-2x per week)",
+        ])
+    else:
+        for _, row in under_hits.sort_values("combined_era").iterrows():
+            matchup = f"{row['away_team']}@{row['home_team']}"
+            sp_block = (
+                f"      Home SP: {row['home_team']} {row['hsp_era_wma']:.2f} ERA  |  "
+                f"Away SP: {row['away_team']} {row['asp_era_wma']:.2f} ERA\n"
+                f"      Combined ERA: {row['combined_era']:.2f}  |  "
+                f"Wind: {_wind_label(row)}"
+            )
+            if pd.isna(row.get("total_line")):
+                lines.append(f"  ⚠ SIGNAL — LINE NOT YET POSTED  [{matchup}]")
+                lines.append(sp_block)
+            elif row.get("under_signal_strong"):
+                under_odds = int(row["under_odds"]) if pd.notna(row.get("under_odds")) else "n/a"
+                lines.append(
+                    f"  ✅ GO — STRONG  [{matchup}]  →  UNDER {row['total_line']:.1f}\n"
+                    f"{sp_block}\n"
+                    f"      Under odds: {under_odds}  |  Line: {row['total_line']:.1f}"
+                )
+            else:
+                under_odds = int(row["under_odds"]) if pd.notna(row.get("under_odds")) else "n/a"
+                lines.append(
+                    f"  ✅ GO  [{matchup}]  →  UNDER {row['total_line']:.1f}\n"
+                    f"{sp_block}\n"
+                    f"      Under odds: {under_odds}  |  Line: {row['total_line']:.1f}"
+                )
+
+    lines.extend([
+        "",
+        "── RUN LINE SIGNAL ───────────────────────────────────────────",
+        "ML Favorite <= -301  |  Backtest: 57 games 2024-2025  |",
+        "Cover rate: 63.2%  |  ROI: +21.1% at avg RL odds -116",
+        "Note: 2026 YTD only 3 games — treat with caution",
+        "──────────────────────────────────────────────────────────────",
+    ])
+    if rl_hits.empty:
+        lines.extend([
+            "  No Run Line signal today.",
+            "  (Fires when ML favorite is -301 or worse)",
+        ])
+    else:
+        for _, row in rl_hits.sort_values("favorite_ml").iterrows():
+            matchup = f"{row['away_team']}@{row['home_team']}"
+            if pd.isna(row.get("fav_rl_odds")):
+                lines.append(
+                    f"  ✅ GO  [{matchup}]  →  {row['favorite_team']} -1.5\n"
+                    f"      Favorite ML: {int(row['favorite_ml']):+d}  |  "
+                    f"RL odds: n/a\n"
+                    f"      ⚠ RL odds not yet posted — check DraftKings before first pitch"
+                )
+            else:
+                lines.append(
+                    f"  ✅ GO  [{matchup}]  →  {row['favorite_team']} -1.5\n"
+                    f"      Favorite ML: {int(row['favorite_ml']):+d}  |  "
+                    f"RL odds: {int(row['fav_rl_odds']):+d}"
+                )
 
     return "\n".join(lines)
 
@@ -519,11 +734,30 @@ def build_output_csv(scored: pd.DataFrame) -> pd.DataFrame:
         "skip_reason",
         "bookmaker",
         "captured_at_utc",
+        "hsp_era_wma",
+        "asp_era_wma",
+        "combined_era",
+        "both_sp_known",
+        "under_signal",
+        "under_signal_strong",
+        "total_line",
+        "over_odds",
+        "under_odds",
+        "favorite_team",
+        "favorite_ml",
+        "favorite_side",
+        "fav_rl_odds",
+        "home_rl_odds",
+        "away_rl_odds",
+        "rl_signal",
     ]
     existing = [c for c in cols if c in scored.columns]
     out = scored[existing].copy()
     if "actionable" in out.columns:
         out["actionable"] = out["actionable"].astype(int)
+    for flag_col in ("under_signal", "under_signal_strong", "rl_signal", "both_sp_known"):
+        if flag_col in out.columns:
+            out[flag_col] = out[flag_col].astype(int)
     return out
 
 
@@ -557,7 +791,7 @@ def parse_args() -> argparse.Namespace:
         "--min-edge",
         type=float,
         default=0.0,
-        help="Minimum model-minus-market edge to qualify (default: 0.0)",
+        help="Deprecated — edge is display-only; not used as a decision gate.",
     )
     parser.add_argument(
         "--min-games",
@@ -608,11 +842,11 @@ def main() -> int:
 
     scored = score_games(merged, pipeline, features, medians)
     scored = attach_odds_metrics(scored)
+    scored = compute_ou_rl_signals(scored)
     scored = apply_decision_rules(
         scored,
         min_games=min_games,
         confidence_threshold=confidence_threshold,
-        min_edge=args.min_edge,
     )
 
     report = build_report(
@@ -620,7 +854,6 @@ def main() -> int:
         score_date=score_date,
         min_games=min_games,
         confidence_threshold=confidence_threshold,
-        min_edge=args.min_edge,
         trained_on_season=int(meta.get("trained_on_season", 0)),
     )
 
