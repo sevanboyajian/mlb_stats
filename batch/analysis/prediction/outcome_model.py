@@ -599,6 +599,12 @@ def run_backtest(
         raise ValueError(f"No test games for seasons {test_seasons}")
 
     impute_cols = list(set(FEATURES + SP_COLS))
+    raw_medians = train[impute_cols].median(numeric_only=True)
+    feature_medians = {
+        col: float(val)
+        for col, val in raw_medians.items()
+        if pd.notna(val)
+    }
     train, test = impute_train_medians(train, test, impute_cols)
 
     x_train = train[FEATURES].astype(float).values
@@ -665,7 +671,9 @@ def run_backtest(
     artifact_meta = {
         "trained_on_season": train_season,
         "min_games_filter": min_games,
+        "confidence_threshold": 0.65,
         "feature_list": FEATURES,
+        "feature_medians": feature_medians,
         "train_n": len(train),
         "train_accuracy": metrics.get("logreg_train_accuracy"),
         "test_seasons": test_seasons,
