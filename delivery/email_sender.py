@@ -21,6 +21,23 @@ from pathlib import Path
 from typing import Sequence
 
 
+def _attach_file(msg: MIMEMultipart, attach_p: Path) -> None:
+    data = attach_p.read_bytes()
+    part = MIMEApplication(data, _subtype="octet-stream")
+    suffix = attach_p.suffix.lower()
+    if suffix == ".docx":
+        ctype = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    elif suffix in (".txt", ".log"):
+        ctype = "text/plain; charset=utf-8"
+    elif suffix == ".csv":
+        ctype = "text/csv; charset=utf-8"
+    else:
+        ctype = "application/octet-stream"
+    part.add_header("Content-Type", ctype)
+    part.add_header("Content-Disposition", "attachment", filename=attach_p.name)
+    msg.attach(part)
+
+
 def _env(name: str, fallback: str = "") -> str:
     v = os.getenv(name)
     if v is not None and str(v).strip():
@@ -55,14 +72,14 @@ def send_report_email(
     body: str | None = None,
     body_html: str | None = None,
     attachment_path: str | Path | None = None,
+    extra_attachment_paths: Sequence[str | Path] | None = None,
 ) -> tuple[bool, str]:
     """
-    Send an email with optional plain and/or HTML body and optional attachment.
+    Send an email with optional plain and/or HTML body and optional attachment(s).
 
     ``report_path`` is attached when it points to an existing file. If
-    ``attachment_path`` is set, it is attached instead (or in addition is not
-    supported — prefer one attachment). If only ``attachment_path`` is set, it
-    is used as the attachment.
+    ``attachment_path`` is set, it is attached as well. ``extra_attachment_paths``
+    adds any additional existing files.
 
     Returns (success, human-readable message). Does not raise on SMTP errors.
     """
@@ -76,14 +93,29 @@ def send_report_email(
     if not user:
         return False, "SMTP_USER (or BRIEF_SMTP_USER) not set"
 
-    attach_p: Path | None = None
-    if attachment_path:
-        attach_p = Path(attachment_path)
-    elif report_path:
-        rp = Path(report_path)
-        if rp.is_file():
-            attach_p = rp
-    has_attach = attach_p is not None and attach_p.is_file()
+    attach_paths: list[Path] = []
+    seen_names: set[str] = set()
+
+    def _queue(path: str | Path | None) -> None:
+        if not path:
+            return
+        p = Path(path)
+        if not p.is_file():
+            return
+        key = p.name.lower()
+        if key in seen_names:
+            return
+        seen_names.add(key)
+        attach_paths.append(p)
+
+    _queue(attachment_path)
+    if report_path:
+        _queue(report_path)
+    if extra_attachment_paths:
+        for p in extra_attachment_paths:
+            _queue(p)
+
+    has_attach = bool(attach_paths)
 
     plain = (body or "").strip() or None
     html = (body_html or "").strip() or None
@@ -108,19 +140,8 @@ def send_report_email(
     msg["From"] = mail_from
     msg["To"] = ", ".join(to_list)
 
-    if has_attach and attach_p is not None:
-        data = attach_p.read_bytes()
-        part = MIMEApplication(data, _subtype="octet-stream")
-        suffix = attach_p.suffix.lower()
-        if suffix == ".docx":
-            ctype = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        elif suffix in (".txt", ".log"):
-            ctype = "text/plain; charset=utf-8"
-        else:
-            ctype = "application/octet-stream"
-        part.add_header("Content-Type", ctype)
-        part.add_header("Content-Disposition", "attachment", filename=attach_p.name)
-        msg.attach(part)
+    for attach_p in attach_paths:
+        _attach_file(msg, attach_p)
 
     try:
         if port == 465:
@@ -137,5 +158,5 @@ def send_report_email(
     except Exception as exc:
         return False, f"send failed: {exc!s}"
 
-    att = attach_p.name if has_attach else "no attachment"
+    att = ", ".join(p.name for p in attach_paths) if has_attach else "no attachment"
     return True, f"sent to {', '.join(to_list)} ({att})"
