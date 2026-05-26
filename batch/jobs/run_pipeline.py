@@ -8,6 +8,10 @@ Polls pipeline_jobs and runs due jobs (single-threaded) in scheduled_time order.
 
 CHANGE LOG (latest first)
 ────────────────────────
+2026-05-25  ``score_today`` post-run: score_today_log row (one per slate date), idempotent
+            prediction_engine_log.csv, email via SCORE_TODAY_EMAIL_TO / score_today subscription.
+2026-05-25  ``score_today`` global job (10:00 ET): runs batch/analysis/prediction/score_today.py;
+            appends prediction_engine_log.csv and emails report on success.
 2026-05-20  ``grade_daily`` emails grading report after run; ``weekly_signal_report`` on
             Mondays (06:18 ET) after ``grade_daily``. Step 2: signal rollups + alerts.
 2026-05-20  ``grade_daily`` global job (06:12 ET): grades prior slate bet_ledger via
@@ -105,6 +109,7 @@ Rules:
 from __future__ import annotations
 
 import argparse
+import csv
 import datetime as dt
 import os
 import sqlite3
@@ -126,6 +131,24 @@ from core.utils.base_dir import get_base_dir
 
 # Max automatic re-runs after a failed attempt (retry_count 0…N−1 re-queue; at N terminal fail).
 _MAX_FAILURE_RETRIES = 5
+
+PREDICTION_ENGINE_LOG_COLUMNS = [
+    "date",
+    "run_at_utc",
+    "signal_type",
+    "game",
+    "pick",
+    "odds",
+    "model_pct",
+    "market_pct",
+    "edge",
+    "confidence",
+    "combined_era",
+    "favorite_ml",
+    "fav_rl_odds",
+    "result",
+    "pl_units",
+]
 
 # Upstream rows in these statuses count as "resolved" for dependency checks so one stuck or
 # failed job does not block the entire slate. ``failed``/``timeout`` are terminal (not pending);
@@ -796,6 +819,11 @@ def _build_command(job: dict) -> str:
             else f"python batch/jobs/grade_weekly.py --date {_default_yesterday_date_et()}"
         ),
         "prior_report": f"python batch/pipeline/generate_daily_brief.py --session prior --date {job_date}" if job_date else "python batch/pipeline/generate_daily_brief.py --session prior",
+        "score_today": (
+            f"python batch/analysis/prediction/score_today.py --db data/mlb_stats.db --date {job_date}"
+            if job_date
+            else "python batch/analysis/prediction/score_today.py --db data/mlb_stats.db"
+        ),
         # ``morning`` = Today's Slate only (no model signals); job_type name is ``early_peek``.
         "early_peek": f"python batch/pipeline/generate_daily_brief.py --session morning --date {job_date}" if job_date else "python batch/pipeline/generate_daily_brief.py --session morning",
         # Group jobs (windows are informational; scripts should filter by unplayed games / session rules)
@@ -901,6 +929,7 @@ def _dependency_rules() -> dict[str, list[str]]:
         "grade_daily": ["stats_pull", "load_today"],
         "weekly_signal_report": ["grade_daily"],
         "prior_report": ["load_weather", "odds_pull", "build_team_wma", "build_pitcher_wma", "grade_daily"],
+        "score_today": ["load_weather", "odds_pull", "build_team_wma", "build_pitcher_wma"],
         "early_peek": ["load_weather", "odds_pull", "build_team_wma", "build_pitcher_wma"],
         "group_brief": ["load_today", "odds_pull", "load_weather"],
         "bet_ledger_sync": ["load_today"],
@@ -1886,6 +1915,341 @@ def _run_command(command: str) -> tuple[int, str, str]:
     return int(p.returncode), (p.stdout or ""), (p.stderr or "")
 
 
+def _csv_flag(val: object) -> bool:
+    if val in (True, 1):
+        return True
+    s = str(val or "").strip().lower()
+    return s in ("1", "true", "yes")
+
+
+def _csv_cell(val: object) -> str:
+    if val is None:
+        return ""
+    s = str(val).strip()
+    return "" if s.lower() in ("nan", "none") else s
+
+
+def _load_delivery_env() -> None:
+    """Load SMTP / recipient env from config/.env (same stack as grade_daily / briefs)."""
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    load_dotenv(_REPO_ROOT / "config" / ".env", override=False)
+    load_dotenv(_REPO_ROOT / ".env", override=False)
+    load_dotenv(override=False)
+
+
+def ensure_score_today_log(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS score_today_log (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            game_date_et        TEXT    NOT NULL UNIQUE,
+            generated_at_utc    TEXT    NOT NULL,
+            pipeline_job_id     INTEGER,
+            pipeline_run_id     INTEGER,
+            report_file         TEXT,
+            csv_file            TEXT,
+            games_scored        INTEGER,
+            ml_picks            INTEGER,
+            under_signals       INTEGER,
+            rl_signals          INTEGER,
+            engine_log_rows     INTEGER,
+            email_sent          INTEGER NOT NULL DEFAULT 0,
+            email_recipients    TEXT,
+            email_message       TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_score_today_log_game_date
+            ON score_today_log (game_date_et)
+        """
+    )
+
+
+def _resolve_score_today_recipients() -> list[str]:
+    _load_delivery_env()
+    explicit = (os.getenv("SCORE_TODAY_EMAIL_TO") or "").strip()
+    if explicit:
+        return [p.strip() for p in explicit.replace(";", ",").split(",") if p.strip()]
+    try:
+        from delivery.recipient_resolver import get_recipients
+
+        rec = get_recipients("score_today") or get_recipients("group_brief")
+        if rec:
+            return rec
+    except ImportError:
+        pass
+    fallback = (os.getenv("BRIEF_EMAIL_TO") or os.getenv("SMTP_TO") or "").strip()
+    if fallback:
+        return [p.strip() for p in fallback.replace(";", ",").split(",") if p.strip()]
+    return []
+
+
+def _parse_score_today_csv(score_csv: Path) -> dict[str, int]:
+    counts = {
+        "games_scored": 0,
+        "ml_picks": 0,
+        "under_signals": 0,
+        "rl_signals": 0,
+    }
+    if not score_csv.is_file():
+        return counts
+    with score_csv.open(newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            counts["games_scored"] += 1
+            if _csv_flag(row.get("actionable")):
+                counts["ml_picks"] += 1
+            if _csv_flag(row.get("under_signal")):
+                counts["under_signals"] += 1
+            if _csv_flag(row.get("rl_signal")):
+                counts["rl_signals"] += 1
+    return counts
+
+
+def _upsert_score_today_log(
+    conn: sqlite3.Connection,
+    *,
+    game_date_et: str,
+    generated_at_utc: str,
+    pipeline_job_id: int | None,
+    pipeline_run_id: int | None,
+    report_file: str,
+    csv_file: str,
+    counts: dict[str, int],
+    engine_log_rows: int,
+    email_sent: bool,
+    email_recipients: str,
+    email_message: str,
+) -> None:
+    ensure_score_today_log(conn)
+    conn.execute(
+        """
+        INSERT INTO score_today_log (
+            game_date_et, generated_at_utc, pipeline_job_id, pipeline_run_id,
+            report_file, csv_file, games_scored, ml_picks, under_signals, rl_signals,
+            engine_log_rows, email_sent, email_recipients, email_message
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(game_date_et) DO UPDATE SET
+            generated_at_utc = excluded.generated_at_utc,
+            pipeline_job_id = excluded.pipeline_job_id,
+            pipeline_run_id = excluded.pipeline_run_id,
+            report_file = excluded.report_file,
+            csv_file = excluded.csv_file,
+            games_scored = excluded.games_scored,
+            ml_picks = excluded.ml_picks,
+            under_signals = excluded.under_signals,
+            rl_signals = excluded.rl_signals,
+            engine_log_rows = excluded.engine_log_rows,
+            email_sent = excluded.email_sent,
+            email_recipients = excluded.email_recipients,
+            email_message = excluded.email_message
+        """,
+        (
+            game_date_et,
+            generated_at_utc,
+            pipeline_job_id,
+            pipeline_run_id,
+            report_file,
+            csv_file,
+            counts.get("games_scored", 0),
+            counts.get("ml_picks", 0),
+            counts.get("under_signals", 0),
+            counts.get("rl_signals", 0),
+            engine_log_rows,
+            1 if email_sent else 0,
+            email_recipients,
+            email_message,
+        ),
+    )
+
+
+def _append_prediction_engine_log(job_date_et: str) -> int:
+    """Replace same-day rows in prediction_engine_log.csv with fresh signal rows."""
+    reports_dir = _REPO_ROOT / "outputs" / "reports"
+    score_csv = reports_dir / f"score_today_{job_date_et}.csv"
+    if not score_csv.is_file():
+        print(f"[score_today] prediction_engine_log skipped — missing {score_csv}")
+        return 0
+
+    run_at_utc = _utc_now_iso_z()
+    rows_out: list[dict[str, str]] = []
+    with score_csv.open(newline="", encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            game = f"{row.get('away_team', '')}@{row.get('home_team', '')}"
+            base = {
+                "date": job_date_et,
+                "run_at_utc": run_at_utc,
+                "game": game,
+                "combined_era": _csv_cell(row.get("combined_era")),
+                "favorite_ml": _csv_cell(row.get("favorite_ml")),
+                "fav_rl_odds": _csv_cell(row.get("fav_rl_odds")),
+                "result": "",
+                "pl_units": "",
+            }
+
+            if _csv_flag(row.get("actionable")):
+                rows_out.append({
+                    **base,
+                    "signal_type": "ML",
+                    "pick": f"{row.get('predicted_winner', '')} ML",
+                    "odds": _csv_cell(row.get("odds_used")),
+                    "model_pct": _csv_cell(row.get("model_prob")),
+                    "market_pct": _csv_cell(row.get("market_prob")),
+                    "edge": _csv_cell(row.get("edge")),
+                    "confidence": _csv_cell(row.get("confidence")),
+                })
+
+            if _csv_flag(row.get("under_signal")):
+                total = row.get("total_line")
+                pick = f"UNDER {total}" if total not in (None, "") else "UNDER"
+                rows_out.append({
+                    **base,
+                    "signal_type": "UNDER",
+                    "pick": pick,
+                    "odds": _csv_cell(row.get("under_odds")),
+                    "model_pct": "",
+                    "market_pct": "",
+                    "edge": "",
+                    "confidence": "",
+                })
+
+            if _csv_flag(row.get("rl_signal")):
+                fav = row.get("favorite_team", "")
+                rows_out.append({
+                    **base,
+                    "signal_type": "RL",
+                    "pick": f"{fav} -1.5",
+                    "odds": _csv_cell(row.get("fav_rl_odds")),
+                    "model_pct": "",
+                    "market_pct": "",
+                    "edge": "",
+                    "confidence": "",
+                })
+
+    log_path = reports_dir / "prediction_engine_log.csv"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    kept: list[dict[str, str]] = []
+    if log_path.is_file() and log_path.stat().st_size > 0:
+        with log_path.open(newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                if (row.get("date") or "").strip() == job_date_et:
+                    continue
+                kept.append(
+                    {col: _csv_cell(row.get(col)) for col in PREDICTION_ENGINE_LOG_COLUMNS}
+                )
+
+    if not rows_out and not kept:
+        print("[score_today] prediction_engine_log: no signals fired — nothing written")
+        return 0
+
+    with log_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=PREDICTION_ENGINE_LOG_COLUMNS)
+        writer.writeheader()
+        writer.writerows(kept)
+        if rows_out:
+            writer.writerows(rows_out)
+
+    if rows_out:
+        print(
+            f"[score_today] prediction_engine_log wrote {len(rows_out)} row(s) "
+            f"for {job_date_et} -> {log_path}"
+        )
+    else:
+        print(
+            f"[score_today] prediction_engine_log cleared prior rows for {job_date_et} "
+            f"(no signals) -> {log_path}"
+        )
+    return len(rows_out)
+
+
+def _email_score_today_report(job_date_et: str) -> tuple[bool, str, str]:
+    """Email score_today txt body + csv attachment. Returns (ok, message, recipients_csv)."""
+    _load_delivery_env()
+    reports_dir = _REPO_ROOT / "outputs" / "reports"
+    txt_path = reports_dir / f"score_today_{job_date_et}.txt"
+    csv_path = reports_dir / f"score_today_{job_date_et}.csv"
+    if not txt_path.is_file():
+        msg = f"report missing: {txt_path}"
+        print(f"[score_today] Email skipped — {msg}")
+        return False, msg, ""
+
+    try:
+        from delivery.email_sender import send_report_email
+    except ImportError as exc:
+        msg = f"delivery not configured — {exc}"
+        print(f"[score_today] Email skipped — {msg}")
+        return False, msg, ""
+
+    recipients = _resolve_score_today_recipients()
+    if not recipients:
+        msg = "no recipients (SCORE_TODAY_EMAIL_TO / score_today / group_brief / BRIEF_EMAIL_TO)"
+        print(f"[score_today] Email skipped — {msg}")
+        return False, msg, ""
+
+    recipients_csv = ", ".join(recipients)
+    subject = f"MLB Scout — Score Today {job_date_et}"
+    body = txt_path.read_text(encoding="utf-8")
+    attach = csv_path if csv_path.is_file() else None
+    ok, msg = send_report_email(None, subject, recipients, body=body, attachment_path=attach)
+    if ok:
+        print(f"[score_today] Email sent: {msg}")
+    else:
+        print(f"[score_today] Email failed (non-fatal): {msg}")
+    return ok, msg, recipients_csv
+
+
+def _post_score_today_success(
+    *,
+    con: sqlite3.Connection,
+    job_date_et: str,
+    stdout: str,
+    job_id: int | None = None,
+    run_id: int | None = None,
+) -> None:
+    """Post-run hooks: DB audit row, prediction_engine_log.csv, email."""
+    date_et = job_date_et or dt.date.today().isoformat()
+    reports_dir = _REPO_ROOT / "outputs" / "reports"
+    txt_path = reports_dir / f"score_today_{date_et}.txt"
+    csv_path = reports_dir / f"score_today_{date_et}.csv"
+    print(f"[score_today] Completed — outputs saved to {txt_path}")
+    if stdout.strip():
+        tail = stdout.strip()
+        if len(tail) > 2000:
+            tail = tail[:2000] + "…"
+        print(f"[score_today] stdout (truncated):\n{tail}")
+
+    engine_rows = _append_prediction_engine_log(date_et)
+    email_ok, email_msg, email_to = _email_score_today_report(date_et)
+    counts = _parse_score_today_csv(csv_path)
+    generated_at = _utc_now_iso_z()
+
+    _upsert_score_today_log(
+        con,
+        game_date_et=date_et,
+        generated_at_utc=generated_at,
+        pipeline_job_id=job_id,
+        pipeline_run_id=run_id,
+        report_file=str(txt_path.relative_to(_REPO_ROOT)) if txt_path.is_file() else "",
+        csv_file=str(csv_path.relative_to(_REPO_ROOT)) if csv_path.is_file() else "",
+        counts=counts,
+        engine_log_rows=engine_rows,
+        email_sent=email_ok,
+        email_recipients=email_to,
+        email_message=email_msg,
+    )
+    con.commit()
+    print(
+        f"[score_today] Logged score_today_log game_date_et={date_et} "
+        f"ml={counts['ml_picks']} under={counts['under_signals']} rl={counts['rl_signals']} "
+        f"email_sent={int(email_ok)}"
+    )
+
+
 def run_loop(
     *,
     db_path: str,
@@ -2072,6 +2436,14 @@ def run_loop(
                         job_error_message="",
                         retry_count_value=0 if "retry_count" in cols else None,
                     )
+                    if job_type == "score_today":
+                        _post_score_today_success(
+                            con=con,
+                            job_date_et=jd_et,
+                            stdout=out,
+                            job_id=job_id,
+                            run_id=run_id,
+                        )
                 else:
                     # Capture stderr (preferred) for error_message; fall back to stdout.
                     raw_err = (err or "").strip()

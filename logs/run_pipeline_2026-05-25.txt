@@ -297,3 +297,74 @@
 [job] start_et=2026-05-25 20:25:39 ET (claimed)
 [job] end_et=2026-05-25 20:25:55 ET status=complete rc=0
 [run_pipeline] sleep-until-due: next pending at 2026-05-25 20:40 ET (~900s)
+[run_pipeline] runner lock already held; exiting safely.
+[run_pipeline] runner lock already held; exiting safely.
+[run_pipeline] runner lock already held; exiting safely.
+[run_pipeline] db=C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\data\mlb_stats.db
+[run_pipeline] mode=once poll_seconds=60 ghost=False stale_minutes=30 timeout_minutes=30 sleep_until_due=False scope_job_date_et=None exit_when_no_pending=False
+
+[job] id=2276 type=score_today job_date_et=2026-05-25 game_group_id=0 scheduled_time=2026-05-25 10:00 ET
+[job] command='python batch/analysis/prediction/score_today.py --db data/mlb_stats.db --date 2026-05-25'
+[job] start_et=2026-05-25 20:38:25 ET (claimed)
+[job] end_et=2026-05-25 20:38:27 ET status=complete rc=0
+[score_today] Completed — outputs saved to C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\outputs\reports\score_today_2026-05-25.txt
+[score_today] stdout (truncated):
+SCORE TODAY — 2026-05-25
+══════════════════════════════════════════════════════
+Model trained on:           2024
+Decision rules:
+  1. Both teams >=20 GP this season
+  2. Model confidence >=65%
+  3. Odds tier: -150 to -199 OR -300 or worse
+     (edge calc shown for context only — not a gate)
+
+Slated games loaded:        13
+Eligible (>=20 GP):       13
+── ML picks:                1  (>=65% conf, fav, tier -150/-199 or -300+)
+── Under signals:           1  (combined SP ERA WMA < 6.0)
+── Run line signals:        1  (ML favorite <= -301)
+
+ML PICKS (confidence descending):
+   #  matchup       pick  odds  model%   mkt%   edge   conf  ev
+  --------------------------------------------------------------
+   1  ✅ GO  COL@LAD       LAD   -325   70.2%  73.4%  -3.1%  70.2%  -0.082u
+
+SKIPPED GAMES:
+  CHC@PIT       conf=60.9%  edge=+7.2%   hGP=49 aGP=49  [conf<65%,odds_tier]
+  TB@BAL        conf=60.9%  edge=+9.8%   hGP=49 aGP=46  [conf<65%,odds_tier]
+  STL@MIL       conf=60.7%  edge=-6.3%   hGP=46 aGP=47  [conf<65%,odds_tier]
+  MIN@CWS       conf=51.5%  edge=+1.5%   hGP=47 aGP=48  [conf<65%,odds_tier]
+  NYY@KC        conf=65.7%  edge=+12.0%  hGP=48 aGP=48  [odds_tier]
+  CIN@NYM       conf=54.2%  edge=-1.4%   hGP=48 aGP=47  [conf<65%,odds_tier]
+  AZ@SF         conf=50.1%  edge=+4.7%   hGP=49 aGP=47  [conf<65%,odds_tier]
+  WSH@CLE       conf=59.1%  edge=-1.8%   hGP=51 aGP=50  [conf<65%]
+  PHI@SD        conf=53.0%  edge=+5.2%   hGP=47 aGP=49  [conf<65%,odds_tier]
+  HOU@TEX       conf=50.2%  edge=+2.4%   hGP=48 aGP=50  [conf<65%,odds_tier]
+  MIA@TOR       conf=51.7%  edge=-6.1%   hGP=49 aGP=49  [conf<65%]
+  SEA@ATH       conf=58.0%  edge=+7.0%   hGP=48 aGP=50  [conf<65%,odds_tier]
+
+── UNDER SIGNAL ──────────────────────────────────────────────
+Both SP ERA WMA combined < 6.0  |  Backtest: 652 games  |
+Under rate: 44.6%  |  ROI on Under: +14.8% at -110
+Strong (combined <5.0 + wind in): Under rate 41.6%  |
+ROI: +20.6%
+──────────────────────────────────────────────────────────────
+  ✅ GO  […
+[score_today] prediction_engine_log appended 3 row(s) -> C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\outputs\reports\prediction_engine_log.csv
+[score_today] Email failed (non-fatal): SMTP_PASSWORD (or BRIEF_SMTP_PASSWORD) not set
+
+[run_pipeline] 2026-05-26T00:38:25Z processed due jobs; exiting (--once).
+
+[job] id=2255 type=group_brief job_date_et=2026-05-25 game_group_id=7 scheduled_time=2026-05-25 20:40 ET
+[job] command='python batch/pipeline/generate_daily_brief.py --session primary --date 2026-05-25 --as-of "2026-05-25 20:40" --game-group-id 7'
+[job] context: group_id=7 window=[2026-05-25 20:40 ET -> 2026-05-25 20:42 ET]
+[job] start_et=2026-05-25 20:40:55 ET (claimed)
+[job] end_et=2026-05-25 20:40:57 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-25 20:42 ET (~120s)
+
+[job] id=2262 type=ledger_snapshot job_date_et=2026-05-25 game_group_id=7 scheduled_time=2026-05-25 20:42 ET
+[job] command='python batch/pipeline/daily_results_report.py --date 2026-05-25'
+[job] context: group_id=7 window=[2026-05-25 20:40 ET -> 2026-05-25 21:10 ET]
+[job] start_et=2026-05-25 20:42:57 ET (claimed)
+[job] end_et=2026-05-25 20:42:57 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-25 21:15 ET (~1980s)

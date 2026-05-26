@@ -944,6 +944,32 @@ CREATE TABLE IF NOT EXISTS brief_log (
 
 
 -- ------------------------------------------------------------
+-- score_today_log
+-- One row per slate date for the daily prediction engine (score_today job).
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS score_today_log (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_date_et        TEXT    NOT NULL UNIQUE,
+    generated_at_utc    TEXT    NOT NULL,
+    pipeline_job_id     INTEGER,
+    pipeline_run_id     INTEGER,
+    report_file         TEXT,
+    csv_file            TEXT,
+    games_scored        INTEGER,
+    ml_picks            INTEGER,
+    under_signals       INTEGER,
+    rl_signals          INTEGER,
+    engine_log_rows     INTEGER,
+    email_sent          INTEGER NOT NULL DEFAULT 0,
+    email_recipients    TEXT,
+    email_message       TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_score_today_log_game_date
+    ON score_today_log (game_date_et);
+
+
+-- ------------------------------------------------------------
 -- grading_log
 -- One row per daily grading run (batch/pipeline/grade_ledger.py).
 -- ------------------------------------------------------------

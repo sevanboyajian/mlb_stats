@@ -9,7 +9,7 @@ Seeds:
 - Test user (default email configurable; role='user')
 
 Subscriptions:
-- admin → group_brief, system_alert, admin_report
+- admin → group_brief, score_today, system_alert, admin_report
 - user  → group_brief
 
 Safe to run multiple times (no duplicate users; no duplicate subscriptions).
@@ -247,7 +247,7 @@ def main() -> int:
             last_name=args.test_last,
         )
 
-        for sub in ("group_brief", "system_alert", "admin_report"):
+        for sub in ("group_brief", "score_today", "system_alert", "admin_report"):
             _ensure_subscription(con, user_id=admin_id, subscription_type=sub, is_enabled=1)
         _ensure_subscription(con, user_id=user_id, subscription_type="group_brief", is_enabled=1)
 
