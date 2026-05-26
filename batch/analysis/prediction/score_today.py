@@ -750,6 +750,7 @@ def build_output_csv(scored: pd.DataFrame) -> pd.DataFrame:
         "home_rl_odds",
         "away_rl_odds",
         "rl_signal",
+        "wind_direction",
     ]
     existing = [c for c in cols if c in scored.columns]
     out = scored[existing].copy()
@@ -799,7 +800,58 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Override min games played filter (default: from meta or 20)",
     )
+    parser.add_argument(
+        "--no-email",
+        action="store_true",
+        help="Skip email delivery (still saves formatted report locally)",
+    )
     return parser.parse_args()
+
+
+def _load_delivery_env() -> None:
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    load_dotenv(_REPO_ROOT / "config" / ".env", override=False)
+    load_dotenv(_REPO_ROOT / ".env", override=False)
+    load_dotenv(override=False)
+
+
+def _resolve_email_recipients() -> list[str]:
+    import os
+
+    _load_delivery_env()
+    explicit = (os.getenv("SCORE_TODAY_EMAIL_TO") or os.getenv("EMAIL_TO") or "").strip()
+    if explicit:
+        return [p.strip() for p in explicit.replace(";", ",").split(",") if p.strip()]
+    try:
+        from delivery.recipient_resolver import get_recipients
+
+        rec = get_recipients("score_today") or get_recipients("group_brief")
+        if rec:
+            return rec
+    except ImportError:
+        pass
+    fallback = (os.getenv("BRIEF_EMAIL_TO") or os.getenv("SMTP_TO") or "").strip()
+    if fallback:
+        return [p.strip() for p in fallback.replace(";", ",").split(",") if p.strip()]
+    return []
+
+
+def _send_formatted_report_email(*, subject: str, body: str, attachment_path: Path) -> tuple[bool, str]:
+    from delivery.email_sender import send_report_email
+
+    recipients = _resolve_email_recipients()
+    if not recipients:
+        return False, "no recipients configured"
+    return send_report_email(
+        None,
+        subject,
+        recipients,
+        body=body,
+        attachment_path=attachment_path,
+    )
 
 
 def main() -> int:
@@ -862,10 +914,42 @@ def main() -> int:
     report_path.write_text(report + "\n", encoding="utf-8")
     build_output_csv(scored).to_csv(csv_path, index=False)
 
-    sys.stdout.buffer.write((report + "\n\n").encode("utf-8", errors="replace"))
+    from batch.analysis.prediction.format_report import format_prediction_report
+
+    trained_on = int(meta.get("trained_on_season", 2024))
+    subject, formatted_body = format_prediction_report(
+        csv_path,
+        score_date,
+        trained_on_season=trained_on,
+        min_games=min_games,
+    )
+    formatted_path = output_dir / f"prediction_engine_{score_date}.txt"
+    formatted_path.write_text(formatted_body + "\n", encoding="utf-8")
+
+    sys.stdout.buffer.write((formatted_body + "\n\n").encode("utf-8", errors="replace"))
     sys.stdout.buffer.flush()
     print(f"[score_today] Report saved to {report_path}")
+    print(f"[score_today] Prediction engine report saved to {formatted_path}")
     print(f"[score_today] CSV saved to {csv_path}")
+
+    if not args.no_email:
+        try:
+            ok, msg = _send_formatted_report_email(
+                subject=subject,
+                body=formatted_body,
+                attachment_path=formatted_path,
+            )
+            if ok:
+                print(f"[score_today] Report emailed: {subject}")
+                print(f"[score_today] Email sent: {msg}")
+            else:
+                print(f"[score_today] Email failed (non-fatal): {msg}")
+                print("[score_today] Report saved locally - check outputs/")
+        except Exception as exc:
+            print(f"[score_today] Email failed (non-fatal): {exc}")
+            print("[score_today] Report saved locally - check outputs/")
+    else:
+        print("[score_today] Email skipped (--no-email)")
     return 0
 
 

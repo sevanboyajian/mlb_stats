@@ -150,6 +150,23 @@ PREDICTION_ENGINE_LOG_COLUMNS = [
     "pl_units",
 ]
 
+SCORE_TODAY_LOG_COLUMNS = [
+    "game_date_et",
+    "generated_at_utc",
+    "pipeline_job_id",
+    "pipeline_run_id",
+    "report_file",
+    "csv_file",
+    "games_scored",
+    "ml_picks",
+    "under_signals",
+    "rl_signals",
+    "engine_log_rows",
+    "email_sent",
+    "email_recipients",
+    "email_message",
+]
+
 # Upstream rows in these statuses count as "resolved" for dependency checks so one stuck or
 # failed job does not block the entire slate. ``failed``/``timeout`` are terminal (not pending);
 # downstream may run with degraded/missing upstream data — use alerts and --explain-deps.
@@ -2067,6 +2084,26 @@ def _upsert_score_today_log(
     )
 
 
+def _export_score_today_log_csv(conn: sqlite3.Connection) -> Path | None:
+    """Write full score_today_log table to outputs/reports/score_today_log.csv."""
+    ensure_score_today_log(conn)
+    out_path = _REPO_ROOT / "outputs" / "reports" / "score_today_log.csv"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    rows = conn.execute(
+        f"""
+        SELECT {", ".join(SCORE_TODAY_LOG_COLUMNS)}
+        FROM score_today_log
+        ORDER BY game_date_et
+        """
+    ).fetchall()
+    with out_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=SCORE_TODAY_LOG_COLUMNS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({col: row[col] for col in SCORE_TODAY_LOG_COLUMNS})
+    return out_path if out_path.is_file() else None
+
+
 def _append_prediction_engine_log(job_date_et: str) -> int:
     """Replace same-day rows in prediction_engine_log.csv with fresh signal rows."""
     reports_dir = _REPO_ROOT / "outputs" / "reports"
@@ -2167,8 +2204,12 @@ def _append_prediction_engine_log(job_date_et: str) -> int:
     return len(rows_out)
 
 
-def _email_score_today_report(job_date_et: str) -> tuple[bool, str, str]:
-    """Email score_today txt body + csv attachment. Returns (ok, message, recipients_csv)."""
+def _email_score_today_report(
+    job_date_et: str,
+    *,
+    conn: sqlite3.Connection | None = None,
+) -> tuple[bool, str, str]:
+    """Email score_today report + daily csv + score_today_log csv. Returns (ok, message, recipients_csv)."""
     _load_delivery_env()
     reports_dir = _REPO_ROOT / "outputs" / "reports"
     txt_path = reports_dir / f"score_today_{job_date_et}.txt"
@@ -2191,11 +2232,27 @@ def _email_score_today_report(job_date_et: str) -> tuple[bool, str, str]:
         print(f"[score_today] Email skipped — {msg}")
         return False, msg, ""
 
+    extra_attachments: list[Path] = []
+    if conn is not None:
+        log_csv = _export_score_today_log_csv(conn)
+        if log_csv is not None:
+            extra_attachments.append(log_csv)
+    engine_log = reports_dir / "prediction_engine_log.csv"
+    if engine_log.is_file():
+        extra_attachments.append(engine_log)
+
     recipients_csv = ", ".join(recipients)
     subject = f"MLB Scout — Score Today {job_date_et}"
     body = txt_path.read_text(encoding="utf-8")
     attach = csv_path if csv_path.is_file() else None
-    ok, msg = send_report_email(None, subject, recipients, body=body, attachment_path=attach)
+    ok, msg = send_report_email(
+        None,
+        subject,
+        recipients,
+        body=body,
+        attachment_path=attach,
+        extra_attachment_paths=extra_attachments,
+    )
     if ok:
         print(f"[score_today] Email sent: {msg}")
     else:
@@ -2224,9 +2281,24 @@ def _post_score_today_success(
         print(f"[score_today] stdout (truncated):\n{tail}")
 
     engine_rows = _append_prediction_engine_log(date_et)
-    email_ok, email_msg, email_to = _email_score_today_report(date_et)
     counts = _parse_score_today_csv(csv_path)
     generated_at = _utc_now_iso_z()
+
+    email_ok = "Report emailed:" in stdout
+    email_failed = "Email failed (non-fatal):" in stdout
+    email_to = ""
+    email_msg = "sent by score_today.py" if email_ok else ""
+    if email_failed:
+        for line in stdout.splitlines():
+            if "Email failed (non-fatal):" in line:
+                email_msg = line.split("Email failed (non-fatal):", 1)[-1].strip()
+                break
+    elif email_ok:
+        for line in stdout.splitlines():
+            if line.startswith("[score_today] Email sent:"):
+                email_msg = line.split("[score_today] Email sent:", 1)[-1].strip()
+                break
+        email_to = ", ".join(_resolve_score_today_recipients())
 
     _upsert_score_today_log(
         con,
@@ -2240,8 +2312,9 @@ def _post_score_today_success(
         engine_log_rows=engine_rows,
         email_sent=email_ok,
         email_recipients=email_to,
-        email_message=email_msg,
+        email_message=email_msg or ("skipped (--no-email)" if "--no-email" in stdout else ""),
     )
+    _export_score_today_log_csv(con)
     con.commit()
     print(
         f"[score_today] Logged score_today_log game_date_et={date_et} "
