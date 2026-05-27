@@ -319,6 +319,7 @@ def format_prediction_report(
     lines.extend([
         "── UNDER PICKS ──────────────────────────────────",
         "[Backtest: Combined ERA <6.0 → 44.6% under rate]",
+        "[Min starts: 3 per SP for confirmed ERA WMA]",
         "[Strong:   Combined ERA <5.0 + wind in → 41.6%]",
         "",
     ])

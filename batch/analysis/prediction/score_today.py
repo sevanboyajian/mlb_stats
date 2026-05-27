@@ -36,6 +36,7 @@ from core.db.connection import connect as db_connect, get_db_path
 
 DEFAULT_MODELS_DIR = "outputs/models"
 DEFAULT_OUTPUT_DIR = "outputs/reports"
+MIN_SP_STARTS = 3  # minimum starts for reliable SP ERA WMA (Under signal)
 ET = ZoneInfo("America/New_York")
 
 # Match generate_daily_brief.py: repo-root .env wins over config/.env for SMTP.
@@ -430,8 +431,8 @@ def compute_ou_rl_signals(df: pd.DataFrame) -> pd.DataFrame:
     out["both_sp_known"] = (
         out["hsp_era_wma"].notna()
         & out["asp_era_wma"].notna()
-        & (out["hsp_starts_in_window"].fillna(0) > 0)
-        & (out["asp_starts_in_window"].fillna(0) > 0)
+        & (out["hsp_starts_in_window"].fillna(0) >= MIN_SP_STARTS)
+        & (out["asp_starts_in_window"].fillna(0) >= MIN_SP_STARTS)
     )
 
     out["under_signal"] = (
@@ -574,6 +575,34 @@ def _wind_label(row: pd.Series) -> str:
     return str(direction)
 
 
+def print_sp_starts_diagnostic(scored: pd.DataFrame) -> None:
+    """Print SP starts-in-window table for Under signal debugging."""
+    print(
+        f"[score_today] SP starts diagnostic (min starts for Under: {MIN_SP_STARTS})"
+    )
+    print(
+        f"  {'game':<12} {'h_era':>6} {'h_st':>5} {'a_era':>6} {'a_st':>5} "
+        f"{'sp_ok':>5} {'under':>5}"
+    )
+    print(f"  {'-'*12} {'-'*6} {'-'*5} {'-'*6} {'-'*5} {'-'*5} {'-'*5}")
+    for _, row in scored.sort_values("game_start_utc").iterrows():
+        game = f"{row['away_team']}@{row['home_team']}"
+        h_era = row.get("hsp_era_wma")
+        a_era = row.get("asp_era_wma")
+        h_st = row.get("hsp_starts_in_window")
+        a_st = row.get("asp_starts_in_window")
+        h_era_s = f"{float(h_era):.2f}" if pd.notna(h_era) else "n/a"
+        a_era_s = f"{float(a_era):.2f}" if pd.notna(a_era) else "n/a"
+        h_st_s = str(int(h_st)) if pd.notna(h_st) else "0"
+        a_st_s = str(int(a_st)) if pd.notna(a_st) else "0"
+        sp_ok = int(bool(row.get("both_sp_known")))
+        under = int(bool(row.get("under_signal")))
+        print(
+            f"  {game:<12} {h_era_s:>6} {h_st_s:>5} {a_era_s:>6} {a_st_s:>5} "
+            f"{sp_ok:>5} {under:>5}"
+        )
+
+
 def build_report(
     scored: pd.DataFrame,
     *,
@@ -648,10 +677,9 @@ def build_report(
     lines.extend([
         "",
         "── UNDER SIGNAL ──────────────────────────────────────────────",
-        "Both SP ERA WMA combined < 6.0  |  Backtest: 652 games  |",
-        "Under rate: 44.6%  |  ROI on Under: +14.8% at -110",
-        "Strong (combined <5.0 + wind in): Under rate 41.6%  |",
-        "ROI: +20.6%",
+        f"Both SP ERA WMA combined < 6.0  |  Min starts: {MIN_SP_STARTS}  |",
+        "Backtest: 652 games  |  Under rate: 44.6%  |  ROI: +14.8% at -110",
+        "Strong (combined <5.0 + wind in): Under rate 41.6%  |  ROI: +20.6%",
         "──────────────────────────────────────────────────────────────",
     ])
     if under_hits.empty:
@@ -748,6 +776,8 @@ def build_output_csv(scored: pd.DataFrame) -> pd.DataFrame:
         "captured_at_utc",
         "hsp_era_wma",
         "asp_era_wma",
+        "hsp_starts_in_window",
+        "asp_starts_in_window",
         "combined_era",
         "both_sp_known",
         "under_signal",
@@ -883,6 +913,7 @@ def main() -> int:
     scored = score_games(merged, pipeline, features, medians)
     scored = attach_odds_metrics(scored)
     scored = compute_ou_rl_signals(scored)
+    print_sp_starts_diagnostic(scored)
     scored = apply_decision_rules(
         scored,
         min_games=min_games,
