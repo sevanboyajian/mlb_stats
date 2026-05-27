@@ -38,6 +38,18 @@ DEFAULT_MODELS_DIR = "outputs/models"
 DEFAULT_OUTPUT_DIR = "outputs/reports"
 ET = ZoneInfo("America/New_York")
 
+# Match generate_daily_brief.py: repo-root .env wins over config/.env for SMTP.
+try:
+    import os
+
+    from dotenv import load_dotenv
+
+    load_dotenv(_REPO_ROOT / "config" / ".env", override=False)
+    load_dotenv(_REPO_ROOT / ".env", override=True)
+    load_dotenv(override=False)
+except ImportError:
+    pass
+
 _GAME_DATE_EXPR = "COALESCE(NULLIF(TRIM(g.game_date_et), ''), g.game_date)"
 
 FILL_DEFAULTS: dict[str, float] = {
@@ -808,50 +820,26 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _load_delivery_env() -> None:
-    try:
-        from dotenv import load_dotenv
-    except ImportError:
-        return
-    load_dotenv(_REPO_ROOT / "config" / ".env", override=False)
-    load_dotenv(_REPO_ROOT / ".env", override=False)
-    load_dotenv(override=False)
-
-
-def _resolve_email_recipients() -> list[str]:
-    import os
-
-    _load_delivery_env()
-    explicit = (os.getenv("SCORE_TODAY_EMAIL_TO") or os.getenv("EMAIL_TO") or "").strip()
-    if explicit:
-        return [p.strip() for p in explicit.replace(";", ",").split(",") if p.strip()]
+def _maybe_email_prediction_report(
+    *,
+    attach_path: Path,
+    subject: str,
+    body: str,
+    score_date: str,
+) -> tuple[bool, str]:
+    """Email prediction report using the same stack as generate_daily_brief.py."""
     try:
         from delivery.recipient_resolver import get_recipients
+        from delivery.email_sender import send_report_email
 
-        rec = get_recipients("score_today") or get_recipients("group_brief")
-        if rec:
-            return rec
-    except ImportError:
-        pass
-    fallback = (os.getenv("BRIEF_EMAIL_TO") or os.getenv("SMTP_TO") or "").strip()
-    if fallback:
-        return [p.strip() for p in fallback.replace(";", ",").split(",") if p.strip()]
-    return []
-
-
-def _send_formatted_report_email(*, subject: str, body: str, attachment_path: Path) -> tuple[bool, str]:
-    from delivery.email_sender import send_report_email
-
-    recipients = _resolve_email_recipients()
-    if not recipients:
-        return False, "no recipients configured"
-    return send_report_email(
-        None,
-        subject,
-        recipients,
-        body=body,
-        attachment_path=attachment_path,
-    )
+        recipients = get_recipients("group_brief")
+        if not recipients:
+            return False, "no recipients (group_brief)"
+        print(f"[score_today] Email recipients(group_brief)={recipients}")
+        ok, msg = send_report_email(str(attach_path), subject, recipients, body=body)
+        return ok, msg
+    except Exception as exc:
+        return False, str(exc)
 
 
 def main() -> int:
@@ -934,10 +922,11 @@ def main() -> int:
 
     if not args.no_email:
         try:
-            ok, msg = _send_formatted_report_email(
+            ok, msg = _maybe_email_prediction_report(
+                attach_path=formatted_path,
                 subject=subject,
                 body=formatted_body,
-                attachment_path=formatted_path,
+                score_date=score_date,
             )
             if ok:
                 print(f"[score_today] Report emailed: {subject}")

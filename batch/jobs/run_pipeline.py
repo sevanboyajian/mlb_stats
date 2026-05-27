@@ -1953,7 +1953,7 @@ def _load_delivery_env() -> None:
     except ImportError:
         return
     load_dotenv(_REPO_ROOT / "config" / ".env", override=False)
-    load_dotenv(_REPO_ROOT / ".env", override=False)
+    load_dotenv(_REPO_ROOT / ".env", override=True)
     load_dotenv(override=False)
 
 
