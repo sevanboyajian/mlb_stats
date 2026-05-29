@@ -37,6 +37,17 @@ from core.db.connection import connect as db_connect, get_db_path
 DEFAULT_MODELS_DIR = "outputs/models"
 DEFAULT_OUTPUT_DIR = "outputs/reports"
 MIN_SP_STARTS = 3  # minimum starts for reliable SP ERA WMA (Under signal)
+
+# Venues where Under signals are suppressed regardless of ERA.
+# These parks structurally override pitcher quality for totals.
+# Oracle Park: architecture neutralises wind (existing rule)
+# Fenway Park: short left field wall, pull-heavy lineups —
+#   3 blown Under signals 05-26 to 05-28 with ERA < 5.0
+UNDER_SUPPRESSED_VENUES = {
+    "Fenway Park",
+    "Oracle Park",  # add explicit Under gate alongside wind logic
+}
+
 ET = ZoneInfo("America/New_York")
 
 # Match generate_daily_brief.py: repo-root .env wins over config/.env for SMTP.
@@ -187,6 +198,7 @@ SELECT
     v.park_factor_runs,
     v.park_factor_hr,
     v.elevation_ft,
+    v.name                       AS venue_name,
 
     g.wind_direction
 
@@ -451,6 +463,16 @@ def compute_ou_rl_signals(df: pd.DataFrame) -> pd.DataFrame:
         & out["wind_in"]
     )
 
+    if "venue_name" in out.columns:
+        out["under_venue_suppressed"] = out["venue_name"].isin(UNDER_SUPPRESSED_VENUES)
+    else:
+        out["under_venue_suppressed"] = False
+
+    out["under_signal"] = out["under_signal"] & ~out["under_venue_suppressed"]
+    out["under_signal_strong"] = (
+        out["under_signal_strong"] & ~out["under_venue_suppressed"]
+    )
+
     fav_cols = out.apply(
         lambda r: pd.Series(
             get_favorite_info(r),
@@ -680,6 +702,7 @@ def build_report(
         f"Both SP ERA WMA combined < 6.0  |  Min starts: {MIN_SP_STARTS}  |",
         "Backtest: 652 games  |  Under rate: 44.6%  |  ROI: +14.8% at -110",
         "Strong (combined <5.0 + wind in): Under rate 41.6%  |  ROI: +20.6%",
+        "Suppressed venues: Fenway Park, Oracle Park",
         "──────────────────────────────────────────────────────────────",
     ])
     if under_hits.empty:
@@ -780,6 +803,8 @@ def build_output_csv(scored: pd.DataFrame) -> pd.DataFrame:
         "asp_starts_in_window",
         "combined_era",
         "both_sp_known",
+        "venue_name",
+        "under_venue_suppressed",
         "under_signal",
         "under_signal_strong",
         "total_line",
@@ -798,7 +823,13 @@ def build_output_csv(scored: pd.DataFrame) -> pd.DataFrame:
     out = scored[existing].copy()
     if "actionable" in out.columns:
         out["actionable"] = out["actionable"].astype(int)
-    for flag_col in ("under_signal", "under_signal_strong", "rl_signal", "both_sp_known"):
+    for flag_col in (
+        "under_signal",
+        "under_signal_strong",
+        "rl_signal",
+        "both_sp_known",
+        "under_venue_suppressed",
+    ):
         if flag_col in out.columns:
             out[flag_col] = out[flag_col].astype(int)
     return out

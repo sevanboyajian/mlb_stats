@@ -67,3 +67,80 @@
 [job] start_et=2026-05-29 06:22:37 ET (claimed)
 [job] end_et=2026-05-29 06:22:38 ET status=complete rc=0
 [run_pipeline] sleep-until-due: next pending at 2026-05-29 10:00 ET (~13080s)
+
+[job] id=2436 type=score_today job_date_et=2026-05-29 game_group_id=0 scheduled_time=2026-05-29 10:00 ET
+[job] command='python batch/analysis/prediction/score_today.py --db data/mlb_stats.db --date 2026-05-29'
+[job] start_et=2026-05-29 10:00:38 ET (claimed)
+[job] end_et=2026-05-29 10:00:42 ET status=complete rc=0
+[score_today] Completed — outputs saved to C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\outputs\reports\score_today_2026-05-29.txt
+[score_today] stdout (truncated):
+=================================================
+MLB SCOUT — PREDICTION ENGINE DAILY REPORT
+Friday, May 29, 2026
+Generated: 10:00 AM ET
+=================================================
+Model: LogReg (trained 2024)  |  Filter: >=20 GP
+-------------------------------------------------
+TODAY: 1ML  0RL  3Under  signal(s) found
+=================================================
+
+
+── MONEYLINE PICKS ──────────────────────────────
+[Backtest: -150/-199 tier → 72.7% acc, +14.7% ROI]
+[Backtest: -300+ tier    → 85.2% acc, +10.9% ROI]
+
+  #1  ATL @ CIN
+  Pick:       ATL ML -155
+  Confidence: 67%
+  Market:     58% implied  (edge +9.1%)
+  Tier:       -150 to -199
+  Game:       6:40 PM ET
+
+── RUN LINE PICKS ───────────────────────────────
+[Backtest: ML <=-301 → 63.2% cover, +21.1% ROI]
+[Note: 2026 YTD only 3 games — small sample]
+
+  No run line picks today.
+── UNDER PICKS ──────────────────────────────────
+[Backtest: Combined ERA <6.0 → 44.6% under rate]
+[Strong:   Combined ERA <5.0 + wind in → 41.6%]
+[Suppressed venues: Fenway Park, Oracle Park]
+
+  LAA @ TB
+  Pick:       UNDER 8.0  (-110)
+  Home SP:    TB — 1.06 ERA WMA
+  Away SP:    LAA — 1.64 ERA WMA
+  Combined:   2.70
+  Wind:       Unknown
+  Game:       7:10 PM ET
+
+  SD @ WSH
+  Pick:       UNDER 9.0  (-115)
+  Home SP:    WSH — 1.25 ERA WMA
+  Away SP:    SD — 3.04 ERA WMA
+  Combined:   4.29 STRONG
+  Wind:       IN
+  Game:       6:45 PM ET
+
+  MIA @ NYM
+  Pick:       UNDER 7.5  (-120)
+  Home SP:    NYM — 3.85 ERA WMA
+  Away SP:    MIA — 1.75 ERA WMA
+  Combined:   5.60
+  Wind:       OUT
+  Game:       7:10 PM ET
+
+
+── NO SIGNAL TODAY ──────────────────────────────
+
+  MIN @ PIT  6:45 PM ET
+    ML conf 56%  edge +0.3%  [Below confidence threshold + Odds not in target range]
+  TOR @ BAL  7:05 PM ET
+    ML conf 50%  edge +1.5%  [Below confidence threshold + Odds not in target range]
+  BOS @ CLE  7:10 PM ET
+    ML conf 60%  edge +7.4%  [Below confidence threshold + Odds not in target range]
+  CHC @ STL  7:15 PM ET
+    ML conf 59%  edge +…
+[score_today] prediction_engine_log wrote 4 row(s) for 2026-05-29 -> C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\outputs\reports\prediction_engine_log.csv
+[score_today] Logged score_today_log game_date_et=2026-05-29 ml=1 under=3 rl=0 email_sent=1
+[run_pipeline] sleep-until-due: next pending at 2026-05-29 17:10 ET (~25800s)

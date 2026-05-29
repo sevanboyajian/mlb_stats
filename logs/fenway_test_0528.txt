@@ -1,0 +1,6 @@
+﻿[score_today] Model trained on: 2024
+[score_today] Features: 16
+[score_today] Min games filter: 20
+[score_today] Confidence threshold: 65%
+[score_today] Scoring date: 2026-05-28
+[score_today] No unplayed games found for 2026-05-28

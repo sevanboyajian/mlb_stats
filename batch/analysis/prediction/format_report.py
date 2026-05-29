@@ -319,8 +319,8 @@ def format_prediction_report(
     lines.extend([
         "── UNDER PICKS ──────────────────────────────────",
         "[Backtest: Combined ERA <6.0 → 44.6% under rate]",
-        "[Min starts: 3 per SP for confirmed ERA WMA]",
         "[Strong:   Combined ERA <5.0 + wind in → 41.6%]",
+        "[Suppressed venues: Fenway Park, Oracle Park]",
         "",
     ])
     under_rows = [r for r in rows if _as_bool(r.get("under_signal"))]
