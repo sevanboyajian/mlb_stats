@@ -23,24 +23,11 @@ python batch/pipeline/generate_daily_brief.py [options]
 
 ## What it does
 
-- Builds **text** daily betting briefs by session: prior, morning, early, afternoon, primary, closing, late.
-- Writes **`.txt`** to **`outputs/briefs/`** by default and records runs in **`brief_log`** (unless **`--dry-run`**).
-- **Emails** the brief to `group_brief` subscribers when SMTP is configured (see below). Default attachment: **`.txt`**. Use **`--no-email`** to skip.
-- **`--docx`** also writes Word (requires `python-docx`); email attaches **`.docx`** instead of `.txt` when this flag is set.
+- Builds **text** (and optional file output) **daily betting briefs** by session: prior, morning, early, afternoon, primary, closing, late.
+- Writes to **`outputs/briefs/`** by default and records runs in **`brief_log`** (unless **`--dry-run`**).
 - **`--sync-bet-ledger-only`** skips brief generation and runs **`generate_bets_from_signal_state`** for **`--date`** (pregame materialization window — see script output and pipeline scheduling).
 
-### Game groups and pipeline `group_brief`
-
-Intraday briefs are scheduled **per start-time group**, not per game. See **`docs/Pipeline_Operations_Guide_2026-04.md`** → *Game grouping methodology* for the full rules (30-minute UTC clustering, `game_group_id`, odds-block merge).
-
-Summary:
-
-- **One `group_brief` per group** (~30 minutes before that group’s anchor first pitch).
-- **Each brief still shows the full pickable slate** at run time (all unplayed games), not only games in that group.
-- Pipeline passes **`--game-group-id N`** so each group can log and filename (`_gN`) without tripping duplicate guards.
-
 ---
-
 
 ## Sessions (`--session`)
 
@@ -115,25 +102,17 @@ python batch/pipeline/generate_daily_brief.py --session primary --date YYYY-MM-D
 
 | Topic | Location / behavior |
 |-------|---------------------|
-| Default file | `outputs/briefs/brief-{slate}_{stamp}_ET[_gN].txt` (see `--output`) |
-| **`--docx`** | Also write `.docx`; email attaches Word instead of `.txt` |
-| **`--no-email`** | Skip SMTP delivery |
+| Default file | `outputs/briefs/YYYY-MM-DD_SESSION.txt` (see `--output`) |
 | **`--no-file`** | Console only |
-| **`--output PATH`** | Write to given path |
-| Duplicate guard | Skips if already in **`brief_log`** unless **`--force`**; per `(date, session, game_group_id)` when `--game-group-id` is set |
+| **`--output PATH`** | Append to given path |
+| Duplicate guard | Skips if already in **`brief_log`** unless **`--force`** |
 | **`--warn-missing`** | Continue with partial data (missing fields warned) |
-
-### Email delivery
-
-Recipients come from **`delivery.recipient_resolver.get_recipients('group_brief')`** (active admins plus users subscribed to `group_brief`). Configure SMTP in repo-root **`.env`** (see **`config/.env.template`**): `SMTP_HOST`, `SMTP_USER`, `SMTP_PASSWORD`, etc.
-
-Default: message attaches the **`.txt`** brief. With **`--docx`**: attaches the **`.docx`** file (falls back to `.txt` if Word generation fails).
 
 ---
 
 ## Pipeline integration
 
-- **`group_brief`** → `python batch/pipeline/generate_daily_brief.py --session primary --date {job_date_et}` (runner adds `--as-of` and `--game-group-id`)
+- **`group_brief`** → `python batch/pipeline/generate_daily_brief.py --session primary --date {job_date_et}`
 - **`bet_ledger_sync`** → `python batch/pipeline/generate_daily_brief.py --sync-bet-ledger-only --date {job_date_et}`
 
 Dependencies and ordering are enforced by **`run_pipeline.py`**, not by this script alone. See **`docs/Pipeline_Operations_Guide_2026-04.md`**.
@@ -175,3 +154,43 @@ Morning (`early_peek`) briefs skip signal evaluation — there is **no** shadow 
 - `docs/Pipeline_Operations_Guide_2026-04.md` — full pipeline
 - `docs/MLB_Scout_Daily_Operations_Guide_2026-04.md` — Streamlit Operations UI (optional triggers)
 - `README.md` — `outputs/briefs/` and repo layout
+
+---
+
+## May 2026 Updates (v2.8)
+
+### bet_snapshots Table
+
+`generate_daily_brief.py` now writes a row to `bet_snapshots` at generation time via `ensure_bet_snapshots()` and `save_bet_snapshot()`. One row per game / market_type / bet_side / session.
+
+This is the **source of truth** for model state at decision time — independent of subsequent line movement or brief regeneration. Key columns: `odds_taken`, `model_p`, `implied_p`, `edge`, `eval_status`, `signals_used`, `placed_at`.
+
+> ⚠ Schema must be added to `schema.sql` if not present. See database user guide Section 10.0 for the full `CREATE TABLE` statement.
+
+### Phantom Bet Fix (Partial)
+
+MV-F ML rows were showing `BET` status while aggregate venue gates suppressed the signal. `_snapshot_eval_status_for_prior()` now aligns per-market `eval_status` with the aggregate gate decision before writing `bet_snapshots` and grading prior reports.
+
+Remaining edge cases under investigation: LHP_FADE outside gate, MV-F suppressed by venue.
+
+### Directional Conflict Penalty (OWM)
+
+When ML directional signals conflict on the same game, `score_game.py` subtracts the opposing signal's score from the primary pick via `_collect_opposing_ml_directional_signals()`. Brief shows audit flag: `"ML directional penalty −N (opposing signals: OWM)"`.
+
+Backtest of LHP_FADE / OWM conflict cases is pending — target late June / July 2026 (N≥20 required). See `findings_matrix` Open Items Section 6.7.
+
+### ⚠ 2026 Season P&L Baseline
+
+**Authoritative 2026 baseline as of 2026-05-04: 66 bets, 31W–35L, −8.34u.**
+
+Manual tracking is source of truth. The DB ledger is uncorrected. Do not use raw DB season totals for 2026 without checking the corrected baseline. A cleanup query is tracked in `findings_matrix` Open Items (Section 6.7).
+
+### Open Items Summary
+
+| Item | Status |
+|------|--------|
+| LHP_FADE / OWM conflict backtest | PENDING — late June / July 2026 |
+| First-fire ML odds overwritten by `brief_picks` upsert | KNOWN BUG — `first_fire_odds` column needed |
+| 2026 DB season baseline mismatch | PENDING cleanup SQL |
+
+See `SQL_and_CLI_Quick_Reference.md` Sections 12–15 for query patterns.

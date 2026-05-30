@@ -199,7 +199,7 @@ ORDER BY game_start_utc;
 | Use | Command / note |
 |-----|----------------|
 | Streamlit Scout UI | `cd online/app` then `streamlit run scout.py` |
-| Brief email delivery | **`generate_daily_brief.py`** emails **`.txt`** to `group_brief` subscribers; SMTP via **`SMTP_*`** / **`BRIEF_SMTP_*`** in **`.env`** — see **`delivery/email_sender.py`**, **`config/.env.template`** |
+| Brief email delivery | Configured via env (e.g. **`BRIEF_SMTP_*`**, **`BRIEF_EMAIL_TO`**); see **`delivery/email_sender.py`** and **`config/.env.template`** |
 
 ---
 
@@ -209,3 +209,126 @@ ORDER BY game_start_utc;
 - `docs/Pipeline_Operations_Guide_2026-04.md` — `schedule_pipeline_day` / `run_pipeline` details
 - `docs/MLB_Scout_Daily_Operations_Guide_2026-04.md` — Streamlit operations
 - `README.md` — repo layout and high-level flow
+
+---
+
+## 12. SQLite — `bet_snapshots` (Added May 2026)
+
+Written by `generate_daily_brief.py` at generation time. Source of truth for model state at decision time — not overwritten by subsequent line movement.
+
+**Schema (add to `schema.sql` if missing):**
+
+```sql
+CREATE TABLE IF NOT EXISTS bet_snapshots (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    game_date    TEXT    NOT NULL,
+    game_pk      INTEGER NOT NULL,
+    market_type  TEXT    NOT NULL,
+    bet_side     TEXT    NOT NULL,
+    bet          TEXT,
+    odds_taken   REAL,
+    score        REAL,
+    model_p      REAL,
+    implied_p    REAL,
+    edge         REAL,
+    eval_status  TEXT,
+    signals_used TEXT,
+    placed_at    TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (game_date, game_pk, market_type, bet_side, placed_at)
+);
+```
+
+**All snapshots for a slate date:**
+
+```sql
+SELECT game_date, game_pk, market_type, bet_side, bet,
+       odds_taken, score, model_p, implied_p, edge,
+       eval_status, signals_used, placed_at
+FROM bet_snapshots
+WHERE game_date = 'YYYY-MM-DD'
+ORDER BY placed_at, game_pk, market_type;
+```
+
+**Compare bet_snapshots eval_status to brief_picks (phantom bet check):**
+
+```sql
+SELECT bp.game_date, bp.game_pk, bp.market, bp.bet,
+       bs.eval_status, bs.odds_taken, bs.signals_used
+FROM brief_picks bp
+LEFT JOIN bet_snapshots bs
+  ON bs.game_date = bp.game_date
+ AND bs.game_pk   = bp.game_pk
+ AND bs.market_type = bp.market
+WHERE bp.game_date = 'YYYY-MM-DD'
+ORDER BY bp.game_pk;
+```
+
+---
+
+## 13. Season P&L Baseline — Manual Override (May 2026)
+
+> ⚠ **The DB 2026 season totals are uncorrected.** Manual tracking is authoritative.
+
+Corrected baseline as of **2026-05-04**: **66 bets, 31W–35L, −8.34u**
+
+Do not use raw DB season P&L for 2026 until the cleanup query is run.
+
+**Check current DB season totals (for comparison only):**
+
+```sql
+SELECT COUNT(*)                                    AS total_bets,
+       SUM(CASE WHEN result = 'W' THEN 1 ELSE 0 END) AS wins,
+       SUM(CASE WHEN result = 'L' THEN 1 ELSE 0 END) AS losses,
+       ROUND(SUM(COALESCE(pnl_units, 0)), 2)       AS total_units
+FROM bet_ledger
+WHERE game_date >= '2026-04-28';  -- MODEL_V2_START_DATE
+```
+
+---
+
+## 14. OWM — Directional Conflict Penalty (May 2026)
+
+When ML directional signals conflict on the same game (e.g. LHP_FADE vs OWM), `score_game.py` subtracts the opposing signal score from the primary pick score.
+
+**Brief audit flag to search for:**
+
+```sql
+-- Find games where a directional penalty was applied (from brief_log or bet_snapshots)
+SELECT game_date, game_pk, signals_used
+FROM bet_snapshots
+WHERE signals_used LIKE '%OWM%'
+  AND game_date >= '2026-05-01'
+ORDER BY game_date DESC;
+```
+
+**Backtest pending** — target late June / July 2026 once N≥20 LHP_FADE / OWM conflict cases accumulate.
+
+---
+
+## 15. Open Items Tracking (May 2026)
+
+Three open items documented in `findings_matrix_v2_4` Section 6.7:
+
+| Item | Status | Target |
+|------|--------|--------|
+| LHP_FADE / OWM conflict backtest | PENDING | Late June / July 2026 (N≥20) |
+| First-fire ML odds overwritten by closing line on `brief_picks` upsert | KNOWN BUG | Fix: add `first_fire_odds` column, write on INSERT only |
+| 2026 season P&L DB baseline mismatch | PENDING cleanup query | Before end-of-season analysis |
+
+**Query to surface the first-fire odds bug (picks with mismatched odds):**
+
+```sql
+-- brief_picks.odds is the closing line, not first-fire ML
+-- Compare against bet_snapshots.odds_taken for the first session
+SELECT bp.game_date, bp.game_pk, bp.market, bp.session,
+       bp.odds       AS closing_odds,
+       bs.odds_taken AS first_fire_odds
+FROM brief_picks bp
+JOIN bet_snapshots bs
+  ON bs.game_date  = bp.game_date
+ AND bs.game_pk    = bp.game_pk
+ AND bs.market_type = bp.market
+WHERE bp.game_date >= '2026-04-28'
+  AND ABS(COALESCE(bp.odds,0) - COALESCE(bs.odds_taken,0)) > 5
+ORDER BY bp.game_date DESC, bp.game_pk;
+```

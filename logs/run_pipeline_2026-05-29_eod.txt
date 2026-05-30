@@ -368,5 +368,3 @@ TODAY: 1ML  0RL  3Under  signal(s) found
 [job] id=2472 type=email_runlog_eod job_date_et=2026-05-29 game_group_id=0 scheduled_time=2026-05-29 22:22 ET
 [job] command='python batch/jobs/email_run_log.py --date 2026-05-29 --kind eod'
 [job] start_et=2026-05-29 22:22:59 ET (claimed)
-[job] end_et=2026-05-29 22:23:00 ET status=complete rc=0
-[run_pipeline] no pending pipeline_jobs; exiting (--exit-when-no-pending).
