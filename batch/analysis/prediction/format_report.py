@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 
 ET = ZoneInfo("America/New_York")
 MAX_WIDTH = 65
+NO_SIGNAL_ML_ODDS_CONF = 63.0  # show ML odds in NO SIGNAL block at/above this conf %
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_ENGINE_LOG = _REPO_ROOT / "outputs" / "reports" / "prediction_engine_log.csv"
@@ -113,7 +114,32 @@ def _odds_tier_label(odds: float | None) -> str:
     return "outside target range"
 
 
-def _humanize_skip(reason: str, *, min_games: int) -> str | None:
+def _humanize_odds_tier(row: dict[str, str] | None) -> str:
+    """Explain why odds_tier failed using odds_used (predicted winner ML)."""
+    if not row:
+        return "Odds not in target range"
+    odds = _as_float(row.get("odds_used"))
+    if odds is None:
+        return "Odds not in target range"
+    o = int(round(odds))
+    if o > 0:
+        return (
+            f"Odds +{o} on model pick — tiers require favorite "
+            f"(-150 to -199 or -300+)"
+        )
+    if o > -150:
+        return f"Odds {o} below -150 tier floor (need -150 to -199 or -300+)"
+    if o > -300:
+        return f"Odds {o} between tiers (gap: -200 to -299 excluded)"
+    return "Odds not in target range"
+
+
+def _humanize_skip(
+    reason: str,
+    *,
+    min_games: int,
+    row: dict[str, str] | None = None,
+) -> str | None:
     """Return plain-English skip reason, or None if early-season GP filter."""
     if not reason or reason == "PASS":
         return None
@@ -125,7 +151,7 @@ def _humanize_skip(reason: str, *, min_games: int) -> str | None:
         if part.startswith("conf<"):
             out.append("Below confidence threshold")
         elif part == "odds_tier":
-            out.append("Odds not in target range")
+            out.append(_humanize_odds_tier(row))
         elif part == "no_odds":
             out.append("No odds available")
         elif part.startswith("edge<"):
@@ -172,6 +198,18 @@ def _format_odds(val: object) -> str:
     if n is None:
         return "n/a"
     return f"{n:+d}"
+
+
+def _no_signal_odds_clause(row: dict[str, str], conf_pct: float) -> str:
+    """For near-threshold games, show model pick side and ML odds in NO SIGNAL block."""
+    if conf_pct < NO_SIGNAL_ML_ODDS_CONF:
+        return ""
+    winner = (row.get("predicted_winner") or "").strip()
+    if not winner:
+        return ""
+    odds_val = row.get("odds_used")
+    odds_s = _format_odds(odds_val) if _as_float(odds_val) is not None else "n/a"
+    return f"  odds {odds_s} ({winner} ML)"
 
 
 def _bet_risk_units(odds: object) -> float:
@@ -386,9 +424,12 @@ def format_prediction_report(
             home = row.get("home_team", "???")
             conf = _pct(row.get("confidence")) or 0.0
             edge = _pct(row.get("edge")) or 0.0
-            skip = _humanize_skip(row.get("skip_reason", ""), min_games=min_games) or "No signal"
+            skip = _humanize_skip(row.get("skip_reason", ""), min_games=min_games, row=row) or "No signal"
+            odds_clause = _no_signal_odds_clause(row, conf)
             lines.append(f"  {away} @ {home}  {_game_time_et(row.get('game_start_utc'))}")
-            lines.append(f"    ML conf {conf:.0f}%  edge {edge:+.1f}%  [{skip}]")
+            lines.append(
+                f"    ML conf {conf:.0f}%  edge {edge:+.1f}%{odds_clause}  [{skip}]"
+            )
 
     early: list[dict[str, str]] = [
         r for r in rows

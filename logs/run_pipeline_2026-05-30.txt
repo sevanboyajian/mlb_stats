@@ -164,3 +164,17 @@ TODAY: 1ML  0RL  4Under  signal(s) found
 [score_today] prediction_engine_log wrote 5 row(s) for 2026-05-30 -> C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\outputs\reports\prediction_engine_log.csv
 [score_today] Logged score_today_log game_date_et=2026-05-30 ml=1 under=4 rl=0 email_sent=1
 [run_pipeline] sleep-until-due: next pending at 2026-05-30 12:40 ET (~9600s)
+
+[job] id=2486 type=odds_pull job_date_et=2026-05-30 game_group_id=1 scheduled_time=2026-05-30 12:40 ET
+[job] command='python batch/ingestion/load_odds.py --pregame --markets game --date 2026-05-30'
+[job] context: group_id=1 window=[2026-05-30 12:35 ET -> 2026-05-30 12:45 ET]
+[job] start_et=2026-05-30 12:40:35 ET (claimed)
+[job] end_et=2026-05-30 12:40:38 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-30 12:45 ET (~300s)
+
+[job] id=2491 type=odds_check job_date_et=2026-05-30 game_group_id=1 scheduled_time=2026-05-30 12:45 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-05-30'
+[job] context: group_id=1 window=[2026-05-30 12:35 ET -> 2026-05-30 12:50 ET]
+[job] start_et=2026-05-30 12:45:38 ET (claimed)
+[job] end_et=2026-05-30 12:45:38 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-30 13:25 ET (~2400s)

@@ -835,6 +835,30 @@ def build_output_csv(scored: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def print_odds_tier_debug(scored: pd.DataFrame) -> None:
+    """Print per-game odds tier inputs (use with --debug)."""
+    print("[score_today] Odds tier debug (odds_used = predicted winner ML):")
+    print(
+        f"  {'game':<12} {'pick':<4} {'home_ml':>7} {'away_ml':>7} "
+        f"{'odds_used':>8} {'tier_ok':>7} {'skip'}"
+    )
+    for _, row in scored.sort_values("game_start_utc").iterrows():
+        game = f"{row['away_team']}@{row['home_team']}"
+        pick = row.get("predicted_winner", "?")
+        ou = row.get("odds_used")
+        tier_ok = passes_odds_tier(ou)
+        hm = row.get("home_ml")
+        am = row.get("away_ml")
+        hm_s = f"{int(hm):+d}" if pd.notna(hm) else "n/a"
+        am_s = f"{int(am):+d}" if pd.notna(am) else "n/a"
+        ou_s = f"{int(ou):+d}" if pd.notna(ou) else "n/a"
+        skip = row.get("skip_reason", "")
+        print(
+            f"  {game:<12} {pick:<4} {hm_s:>7} {am_s:>7} {ou_s:>8} "
+            f"{int(bool(tier_ok)):>7} {skip}"
+        )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Score today's unplayed games and output ranked ML picks."
@@ -877,6 +901,11 @@ def parse_args() -> argparse.Namespace:
         "--no-email",
         action="store_true",
         help="Skip email delivery (still saves formatted report locally)",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Print odds tier diagnostic table per game",
     )
     return parser.parse_args()
 
@@ -950,6 +979,8 @@ def main() -> int:
         min_games=min_games,
         confidence_threshold=confidence_threshold,
     )
+    if args.debug:
+        print_odds_tier_debug(scored)
 
     report = build_report(
         scored,

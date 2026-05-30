@@ -1,0 +1,152 @@
+﻿=================================================
+MLB SCOUT ΓÇö PREDICTION ENGINE DAILY REPORT
+Saturday, May 30, 2026
+Generated: 12:47 PM ET
+=================================================
+Model: LogReg (trained 2024)  |  Filter: >=20 GP
+-------------------------------------------------
+TODAY: 1ML  0RL  4Under  signal(s) found
+=================================================
+
+
+ΓöÇΓöÇ MONEYLINE PICKS ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+[Backtest: -150/-199 tier ΓåÆ 72.7% acc, +14.7% ROI]
+[Backtest: -300+ tier    ΓåÆ 85.2% acc, +10.9% ROI]
+
+  #1  NYY @ ATH
+  Pick:       NYY ML -155
+  Confidence: 65%
+  Market:     58% implied  (edge +7.3%)
+  Tier:       -150 to -199
+  Game:       10:05 PM ET
+
+ΓöÇΓöÇ RUN LINE PICKS ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+[Backtest: ML <=-301 ΓåÆ 63.2% cover, +21.1% ROI]
+[Note: 2026 YTD only 3 games ΓÇö small sample]
+
+  No run line picks today.
+ΓöÇΓöÇ UNDER PICKS ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+[Backtest: Combined ERA <6.0 ΓåÆ 44.6% under rate]
+[Strong:   Combined ERA <5.0 + wind in ΓåÆ 41.6%]
+[Suppressed venues: Fenway Park, Oracle Park]
+
+  MIA @ NYM
+  Pick:       UNDER 7.0  (-102)
+  Home SP:    NYM ΓÇö 3.07 ERA WMA
+  Away SP:    MIA ΓÇö 0.15 ERA WMA
+  Combined:   3.22
+  Wind:       L To R
+  Game:       4:10 PM ET
+
+  NYY @ ATH
+  Pick:       UNDER 9.5  (-105)
+  Home SP:    ATH ΓÇö 2.36 ERA WMA
+  Away SP:    NYY ΓÇö 3.28 ERA WMA
+  Combined:   5.64
+  Wind:       IN
+  Game:       10:05 PM ET
+
+  BOS @ CLE
+  Pick:       UNDER 6.5  (-120)
+  Home SP:    CLE ΓÇö 2.19 ERA WMA
+  Away SP:    BOS ΓÇö 3.70 ERA WMA
+  Combined:   5.89
+  Wind:       OUT
+  Game:       4:10 PM ET
+
+  CHC @ STL
+  Pick:       UNDER 8.0  (-110)
+  Home SP:    STL ΓÇö 3.96 ERA WMA
+  Away SP:    CHC ΓÇö 1.94 ERA WMA
+  Combined:   5.90
+  Wind:       L To R
+  Game:       7:15 PM ET
+
+
+ΓöÇΓöÇ NO SIGNAL TODAY ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+
+  DET @ CWS  2:10 PM ET
+    ML conf 52%  edge -0.2%  [Below confidence threshold + Odds -118 below -150 tier floor (need -150 to -199 or -300+)]
+  SD @ WSH  4:05 PM ET
+    ML conf 51%  edge +4.1%  [Below confidence threshold + Odds +105 on model pick ΓÇö tiers require favorite (-150 to -199 or -300+)]
+  KC @ TEX  4:05 PM ET
+    ML conf 55%  edge +1.7%  [Below confidence threshold + Odds -130 below -150 tier floor (need -150 to -199 or -300+)]
+  MIN @ PIT  4:05 PM ET
+    ML conf 55%  edge -1.2%  [Below confidence threshold + Odds -145 below -150 tier floor (need -150 to -199 or -300+)]
+  TOR @ BAL  4:05 PM ET
+    ML conf 59%  edge +5.5%  [Below confidence threshold + Odds -130 below -150 tier floor (need -150 to -199 or -300+)]
+  LAA @ TB  4:10 PM ET
+    ML conf 52%  edge -6.7%  [Below confidence threshold]
+  MIL @ HOU  4:10 PM ET
+    ML conf 59%  edge +7.7%  [Below confidence threshold + Odds -118 below -150 tier floor (need -150 to -199 or -300+)]
+  ATL @ CIN  7:15 PM ET
+    ML conf 66%  edge +12.4%  odds -125 (ATL ML)  [Odds -125 below -150 tier floor (need -150 to -199 or -300+)]
+  SF @ COL  9:10 PM ET
+    ML conf 51%  edge +1.7%  [Below confidence threshold + Odds -105 below -150 tier floor (need -150 to -199 or -300+)]
+  AZ @ SEA  10:10 PM ET
+    ML conf 53%  edge -4.5%  [Below confidence threshold]
+  PHI @ LAD  10:10 PM ET
+    ML conf 65%  edge +12.3%  odds -125 (LAD ML)  [Odds -125 below -150 tier floor (need -150 to -199 or -300+)]
+
+
+ΓöÇΓöÇ LIVE TRACKING (season to date) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+
+  ML    2 picks  2W-0L  +25.7% ROI
+  RL    1 picks  1W-0L  +45.9% ROI
+  Under 1 picks  1W-0L  +82.7% ROI
+  ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+  Total: 4 picks  4W-0L  +2.55u
+  Note: result/P&L blank for today's picks
+
+
+=================================================
+Not financial advice. Verify all lines before
+placing any wager. Lines from last odds pull ΓÇö
+confirm current prices at your bookmaker.
+=================================================
+MLB Scout  ┬╖  outputs/reports/prediction_engine_2026-05-30.txt
+
+[score_today] Model trained on: 2024
+[score_today] Features: 16
+[score_today] Min games filter: 20
+[score_today] Confidence threshold: 65%
+[score_today] Scoring date: 2026-05-30
+[score_today] SP starts diagnostic (min starts for Under: 3)
+  game          h_era  h_st  a_era  a_st sp_ok under
+  ------------ ------ ----- ------ ----- ----- -----
+  DET@CWS        1.79     5   5.96     5     1     0
+  SD@WSH         6.31     5   4.19     5     1     0
+  KC@TEX         3.58     5   5.42     5     1     0
+  MIN@PIT        4.59     5   5.14     5     1     0
+  TOR@BAL        3.63     5   3.00     5     1     0
+  LAA@TB         2.64     5   5.65     5     1     0
+  MIA@NYM        3.07     5   0.15     5     1     1
+  MIL@HOU        4.85     5   5.36     5     1     0
+  BOS@CLE        2.19     5   3.70     5     1     1
+  CHC@STL        3.96     5   1.94     5     1     1
+  ATL@CIN        8.58     5   3.48     5     1     0
+  SF@COL         4.23     5   3.55     5     1     0
+  NYY@ATH        2.36     5   3.28     5     1     1
+  AZ@SEA         3.77     5   2.46     5     1     0
+  PHI@LAD        3.70     5   3.39     5     1     0
+[score_today] Odds tier debug (odds_used = predicted winner ML):
+  game         pick home_ml away_ml odds_used tier_ok skip
+  DET@CWS      DET     -102    -118     -118       0 conf<65%,odds_tier
+  SD@WSH       WSH     +105    -126     +105       0 conf<65%,odds_tier
+  KC@TEX       TEX     -130    +105     -130       0 conf<65%,odds_tier
+  MIN@PIT      PIT     -145    +118     -145       0 conf<65%,odds_tier
+  TOR@BAL      TOR     +105    -130     -130       0 conf<65%,odds_tier
+  LAA@TB       TB      -160    +135     -160       1 conf<65%
+  MIA@NYM      MIA     -135    +110     +110       0 conf<65%,odds_tier
+  MIL@HOU      MIL     -102    -118     -118       0 conf<65%,odds_tier
+  BOS@CLE      CLE     -130    +105     -130       0 conf<65%,odds_tier
+  CHC@STL      CHC     +110    -135     -135       0 conf<65%,odds_tier
+  ATL@CIN      ATL     +105    -125     -125       0 odds_tier
+  SF@COL       COL     -105    -115     -105       0 conf<65%,odds_tier
+  NYY@ATH      NYY     +125    -155     -155       1 PASS
+  AZ@SEA       SEA     -150    +125     -150       1 conf<65%
+  PHI@LAD      LAD     -125    +105     -125       0 odds_tier
+[score_today] Report saved to C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\outputs\reports\score_today_2026-05-30.txt
+[score_today] Prediction engine report saved to C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\outputs\reports\prediction_engine_2026-05-30.txt
+[score_today] CSV saved to C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\outputs\reports\score_today_2026-05-30.csv
+[score_today] Email skipped (--no-email)
