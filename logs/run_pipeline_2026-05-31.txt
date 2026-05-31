@@ -45,3 +45,5 @@
 [job] id=2523 type=prior_report job_date_et=2026-05-31 game_group_id=0 scheduled_time=2026-05-31 06:15 ET
 [job] command='python batch/pipeline/generate_daily_brief.py --session prior --date 2026-05-31 --as-of "2026-05-31 06:15"'
 [job] start_et=2026-05-31 06:15:45 ET (claimed)
+[job] end_et=2026-05-31 06:15:49 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-05-31 06:20 ET (~300s)
