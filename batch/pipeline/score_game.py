@@ -107,6 +107,14 @@ SIGNAL_BASE_SCORE: dict[str, int] = {
 MVB_HOME_SP_ERA_ELITE = 2.50   # suppress MV-B entirely
 MVB_SP_ERA_STRONG = 3.50       # penalize score (-1 per side)
 
+OWM_OPS_THRESHOLD = 0.80
+OWM_ERA_THRESHOLD = 5.00
+OWM_HOME_SP_ERA_MAX = 4.0  # Strong SP only — backtest confirmed 66.7% win rate
+OWM_ML_CAP = -275
+OWM_MIN_AWAY_STARTS = 2
+OWM_MIN_HOME_OFF_GAMES = 2
+OWM_MIN_HOME_SP_STARTS = 2
+
 
 def _mvb_starter_eras(fdg: FullyDressedGame) -> tuple[float | None, float | None]:
     home_sp = fdg.matchup.home_sp
@@ -603,74 +611,95 @@ def _eval_owm(g: FullyDressedGame, game_month: int) -> SignalFinding:
     """
     OWM — Offensive WMA vs Pitcher WMA Matchup.
     Fires when home team has strong recent offensive form AND away starter
-    has been struggling recently. Independent of weather and odds band.
+    has been struggling recently AND home starter is strong (ERA WMA < 4.0).
+    Independent of weather and odds band.
 
     Conditions:
-      - Home team rolling_ops_wma >= 0.800 (2021-2025 backtest: strong recent offense)
-      - Away starter era_wma >= 5.00 (struggling pitcher)
-      - Home ML not more extreme than -275 (cap on heavy favorites)
-      - Away starter has >= 2 starts in WMA window (sufficient data)
-      - Home team has >= 2 games in WMA window
+      - Home team rolling_ops_wma >= OWM_OPS_THRESHOLD
+      - Away starter era_wma >= OWM_ERA_THRESHOLD
+      - Home starter era_wma < OWM_HOME_SP_ERA_MAX (Strong SP gate)
+      - Home ML not more extreme than OWM_ML_CAP
+      - Away starter has >= OWM_MIN_AWAY_STARTS in WMA window
+      - Home starter has >= OWM_MIN_HOME_SP_STARTS in WMA window
+      - Home team has >= OWM_MIN_HOME_OFF_GAMES in WMA window
       - Game month Apr–Sep (months 4–9)
       - Home team is not a heavy underdog (home_impl >= 0.40)
     Bet side: home_ml
     """
     home_off = g.matchup.home_offense
     away_sp = g.matchup.away_sp
+    home_sp = g.matchup.home_sp
 
     # Data gates — require sufficient WMA history
     home_wma_ok = (
         home_off.rolling_ops_wma is not None
-        and home_off.games_in_window >= 2
+        and home_off.games_in_window >= OWM_MIN_HOME_OFF_GAMES
     )
     pitcher_wma_ok = (
         away_sp.era_wma is not None
-        and getattr(away_sp, "starts_in_window", 0) >= 2
+        and getattr(away_sp, "starts_in_window", 0) >= OWM_MIN_AWAY_STARTS
+    )
+    home_sp_wma_ok = (
+        home_sp is not None
+        and home_sp.era_wma is not None
+        and getattr(home_sp, "starts_in_window", 0) >= OWM_MIN_HOME_SP_STARTS
     )
 
     # Market gate — not heavy dog; cap extreme home favorites
     mkt = g.market
     home_impl = mkt.home_impl
-    ops_threshold = 0.800  # raised from 0.780 — backtest 2021-2025:
-                           # N=185, 64.9% win rate, +2.6% ROI
-                           # (vs 0.780: N=214, 63.6% win, +1.0% ROI)
-    era_threshold = 5.00    # 2025 backtest: optimal balance of N and win rate
-    ml_cap = -275    # cap: avoid extreme favorites where 1 loss = big drawdown
     market_ok = (
         home_impl is not None
         and float(home_impl) >= 0.40          # not a heavy underdog
         and mkt.home_ml_current is not None
-        and int(mkt.home_ml_current) >= ml_cap  # not an extreme favorite
+        and int(mkt.home_ml_current) >= OWM_ML_CAP  # not an extreme favorite
     )
 
     # Month gate
     month_ok = game_month in {4, 5, 6, 7, 8, 9}
 
     # Core firing conditions
-    ops_ok = home_wma_ok and float(home_off.rolling_ops_wma) >= ops_threshold
-    era_ok = pitcher_wma_ok and float(away_sp.era_wma) >= era_threshold
+    ops_ok = home_wma_ok and float(home_off.rolling_ops_wma) >= OWM_OPS_THRESHOLD
+    era_ok = pitcher_wma_ok and float(away_sp.era_wma) >= OWM_ERA_THRESHOLD
+    home_sp_strong = home_sp_wma_ok and float(home_sp.era_wma) < OWM_HOME_SP_ERA_MAX
+    core_match = ops_ok and era_ok
 
-    fires = ops_ok and era_ok and market_ok and month_ok
+    fires = core_match and home_sp_strong and market_ok and month_ok
 
     if fires:
         ops_val = float(home_off.rolling_ops_wma)
         era_val = float(away_sp.era_wma)
+        home_era_val = float(home_sp.era_wma)
         sp_name = away_sp.name or g.identifiers.away_team_abbr
         reason = (
             f"OWM — Home {g.identifiers.home_team_abbr} offense hot "
-            f"(OPS WMA {ops_val:.3f} >= {ops_threshold}) vs struggling away "
-            f"SP {sp_name} (ERA WMA {era_val:.2f} >= {era_threshold}). "
+            f"(OPS WMA {ops_val:.3f} >= {OWM_OPS_THRESHOLD}) vs struggling away "
+            f"SP {sp_name} (ERA WMA {era_val:.2f} >= {OWM_ERA_THRESHOLD}). "
+            f"Home SP ERA WMA {home_era_val:.2f} < {OWM_HOME_SP_ERA_MAX:.1f} (Strong). "
             f"Matchup signal — independent of wind."
+        )
+    elif core_match and home_sp_wma_ok and not home_sp_strong:
+        home_era_val = float(home_sp.era_wma)
+        reason = (
+            f"OWM blocked — home SP ERA WMA {home_era_val:.2f} >= "
+            f"{OWM_HOME_SP_ERA_MAX:.1f} (need Strong SP < {OWM_HOME_SP_ERA_MAX:.1f})"
         )
     else:
         ops_disp = f"{home_off.rolling_ops_wma:.3f}" if home_off.rolling_ops_wma is not None else "N/A"
         era_disp = f"{away_sp.era_wma:.2f}" if away_sp.era_wma is not None else "N/A"
+        home_era_disp = (
+            f"{home_sp.era_wma:.2f}"
+            if home_sp is not None and home_sp.era_wma is not None
+            else "N/A"
+        )
         reason = (
-            f"OWM blocked: ops_wma={ops_disp} (need>={ops_threshold}) "
-            f"era_wma={era_disp} (need>={era_threshold}) "
-            f"market_ok={market_ok} (home_fav, cap>={ml_cap}) "
+            f"OWM blocked: ops_wma={ops_disp} (need>={OWM_OPS_THRESHOLD}) "
+            f"era_wma={era_disp} (need>={OWM_ERA_THRESHOLD}) "
+            f"home_sp_era_wma={home_era_disp} (need<{OWM_HOME_SP_ERA_MAX:.1f}) "
+            f"market_ok={market_ok} (home_fav, cap>={OWM_ML_CAP}) "
             f"month_ok={month_ok} "
-            f"home_wma_ok={home_wma_ok} pitcher_wma_ok={pitcher_wma_ok}"
+            f"home_wma_ok={home_wma_ok} pitcher_wma_ok={pitcher_wma_ok} "
+            f"home_sp_wma_ok={home_sp_wma_ok}"
         )
 
     return SignalFinding(
@@ -1140,6 +1169,15 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
     mvf = _eval_mv_f(g, s1h2_fired)
     lhp_findings = _eval_lhp_fade(g, game_month, s1h2_fired)
     owm = _eval_owm(g, game_month)
+    if owm.fires:
+        home_sp = g.matchup.home_sp
+        if home_sp is not None and home_sp.era_wma is not None:
+            extra_flags.append(
+                f"home SP ERA WMA {float(home_sp.era_wma):.2f} "
+                f"(gate < {OWM_HOME_SP_ERA_MAX:.1f} — Strong)"
+            )
+    elif (owm.edge_basis or "").startswith("OWM blocked — home SP ERA WMA"):
+        extra_flags.append(owm.edge_basis)
     mvb = _eval_mv_b(g, game_month, extra_flags)
     s1 = _eval_s1(g, home_streak, s1h2_fired)
     h3b = _eval_h3b(g, mvb.fires)
@@ -1631,10 +1669,9 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
     if owm_standalone_ok and not diversity_ok:
         stake_basis = (
             "OWM signal — home offense hot (OPS WMA >= 0.800) vs struggling "
-            "away SP (ERA WMA >= 5.00). "
-            "Staking independently (backtest 2021-2025: N=185, 64.9% win, +2.6% ROI). "
-            "Score boosted when home SP also struggling (+17.4% ROI sub-group) "
-            "or OPS differential narrow (+27.8% ROI sub-group)."
+            "away SP (ERA WMA >= 5.00), home SP strong (ERA WMA < 4.0). "
+            "Staking independently (backtest 2019-2025: Strong home SP 66.7% win, +7.6% ROI). "
+            "Score boosted when OPS differential narrow (+27.8% ROI sub-group)."
         )
     elif wind_total_ok and any(
         s.signal_id == "MV-B" and s.fires for s in fired_best
