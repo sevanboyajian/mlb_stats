@@ -186,11 +186,12 @@ def _load_rows(score_csv_path: str | Path) -> list[dict[str, str]]:
         return list(csv.DictReader(f))
 
 
-def _signal_counts(rows: list[dict[str, str]]) -> tuple[int, int, int]:
+def _signal_counts(rows: list[dict[str, str]]) -> tuple[int, int, int, int]:
     ml = sum(1 for r in rows if _as_bool(r.get("actionable")))
     rl = sum(1 for r in rows if _as_bool(r.get("rl_signal")))
     under = sum(1 for r in rows if _as_bool(r.get("under_signal")))
-    return ml, rl, under
+    owm = sum(1 for r in rows if _as_bool(r.get("owm_signal")))
+    return ml, rl, under, owm
 
 
 def _format_odds(val: object) -> str:
@@ -271,8 +272,8 @@ def format_prediction_report(
     Plain ASCII, max ~65 chars per line, no ANSI codes.
     """
     rows = _load_rows(score_csv_path)
-    ml_count, rl_count, under_count = _signal_counts(rows)
-    total_signals = ml_count + rl_count + under_count
+    ml_count, rl_count, under_count, owm_count = _signal_counts(rows)
+    total_signals = ml_count + rl_count + under_count + owm_count
 
     dow, mon_short, day_num, month_long, year = _date_header_parts(date_str)
     subject = (
@@ -288,7 +289,7 @@ def format_prediction_report(
         "=" * 49,
         f"Model: LogReg (trained {trained_on_season})  |  Filter: >={min_games} GP",
         "-" * 49,
-        f"TODAY: {ml_count}ML  {rl_count}RL  {under_count}Under  signal(s) found",
+        f"TODAY: {ml_count}ML  {rl_count}RL  {under_count}Under  {owm_count}OWM  signal(s) found",
         "=" * 49,
         "",
         "",
@@ -400,6 +401,52 @@ def format_prediction_report(
 
     lines.extend([
         "",
+        "── OWM PICKS ────────────────────────────────────",
+        "[Backtest: home OPS WMA >= 0.80 + away SP ERA >= 5.0]",
+        "[Gate: home SP ERA WMA < 4.0 — Strong SP only]",
+        "[2019-2025: Strong home SP 66.7% win / +7.6% ROI]",
+        "",
+    ])
+    owm_rows = [r for r in rows if _as_bool(r.get("owm_signal"))]
+    owm_rows.sort(key=lambda r: -(_as_float(r.get("h_rolling_ops_wma")) or 0))
+    if not owm_rows:
+        lines.append("  No OWM picks today.")
+    else:
+        for row in owm_rows:
+            away = row.get("away_team", "???")
+            home = row.get("home_team", "???")
+            home_ops = _as_float(row.get("h_rolling_ops_wma"))
+            away_era = _as_float(row.get("asp_era_wma"))
+            home_era = _as_float(row.get("hsp_era_wma"))
+            home_ml = _format_odds(row.get("home_ml"))
+            ops_line = (
+                f"  Home OPS:   {home_ops:.3f} WMA"
+                if home_ops is not None
+                else "  Home OPS:   n/a WMA"
+            )
+            away_line = (
+                f"  Away SP:    {away_era:.2f} ERA WMA"
+                if away_era is not None
+                else "  Away SP:    n/a ERA WMA"
+            )
+            data_line = (
+                f"  DATA:       home SP ERA WMA {home_era:.2f} "
+                f"(gate < 4.0 — Strong)"
+                if home_era is not None
+                else "  DATA:       home SP ERA WMA n/a"
+            )
+            lines.extend([
+                f"  {away} @ {home}",
+                f"  Pick:       {home} ML {home_ml}",
+                ops_line,
+                away_line,
+                data_line,
+                f"  Game:       {_game_time_et(row.get('game_start_utc'))}",
+                "",
+            ])
+
+    lines.extend([
+        "",
         "── NO SIGNAL TODAY ──────────────────────────────",
         "",
     ])
@@ -410,6 +457,8 @@ def format_prediction_report(
         if _as_bool(row.get("under_signal")):
             continue
         if _as_bool(row.get("rl_signal")):
+            continue
+        if _as_bool(row.get("owm_signal")):
             continue
         reason = row.get("skip_reason", "")
         if _early_season_skip(reason, min_games=min_games):
@@ -425,6 +474,9 @@ def format_prediction_report(
             conf = _pct(row.get("confidence")) or 0.0
             edge = _pct(row.get("edge")) or 0.0
             skip = _humanize_skip(row.get("skip_reason", ""), min_games=min_games, row=row) or "No signal"
+            owm_block = (row.get("owm_block_reason") or "").strip()
+            if owm_block:
+                skip = owm_block if skip == "No signal" else f"{skip} + {owm_block}"
             odds_clause = _no_signal_odds_clause(row, conf)
             lines.append(f"  {away} @ {home}  {_game_time_et(row.get('game_start_utc'))}")
             lines.append(

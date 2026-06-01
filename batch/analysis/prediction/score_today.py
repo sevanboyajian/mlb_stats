@@ -37,6 +37,9 @@ from core.db.connection import connect as db_connect, get_db_path
 DEFAULT_MODELS_DIR = "outputs/models"
 DEFAULT_OUTPUT_DIR = "outputs/reports"
 MIN_SP_STARTS = 3  # minimum starts for reliable SP ERA WMA (Under signal)
+OWM_OPS_THRESHOLD = 0.80
+OWM_ERA_THRESHOLD = 5.0
+OWM_HOME_SP_ERA_MAX = 4.0  # Strong SP only — backtest confirmed 66.7% win rate
 
 # Venues where Under signals are suppressed regardless of ERA.
 # These parks structurally override pitcher quality for totals.
@@ -159,6 +162,10 @@ SELECT
     ) AS a_season_games_played,
 
     COALESCE(trs_hg.rolling_ops, trs_hl.rolling_ops)              AS h_rolling_ops,
+    COALESCE(
+        trs_hg.rolling_ops_wma, trs_hl.rolling_ops_wma,
+        trs_hg.rolling_ops, trs_hl.rolling_ops
+    )                                                              AS h_rolling_ops_wma,
     COALESCE(trs_hg.rolling_runs_scored_pg, trs_hl.rolling_runs_scored_pg) AS h_rolling_runs_scored_pg,
     COALESCE(trs_hg.rolling_runs_allowed_pg, trs_hl.rolling_runs_allowed_pg) AS h_rolling_runs_allowed_pg,
     COALESCE(trs_hg.rolling_run_diff_pg, trs_hl.rolling_run_diff_pg) AS h_rolling_run_diff_pg,
@@ -486,6 +493,43 @@ def compute_ou_rl_signals(df: pd.DataFrame) -> pd.DataFrame:
         out["favorite_ml"].astype(float) <= -301
     )
 
+    out = _apply_owm_signal(out)
+
+    return out
+
+
+def _apply_owm_signal(df: pd.DataFrame) -> pd.DataFrame:
+    """OWM — home hot offense vs struggling away SP, with strong home SP gate."""
+    out = df.copy()
+
+    home_ops = pd.to_numeric(out.get("h_rolling_ops_wma"), errors="coerce")
+    away_era = pd.to_numeric(out.get("asp_era_wma"), errors="coerce")
+    home_era = pd.to_numeric(out.get("hsp_era_wma"), errors="coerce")
+    away_starts = pd.to_numeric(out.get("asp_starts_in_window"), errors="coerce").fillna(0)
+    home_starts = pd.to_numeric(out.get("hsp_starts_in_window"), errors="coerce").fillna(0)
+
+    away_sp_ok = away_era.notna() & (away_starts >= MIN_SP_STARTS)
+    home_sp_ok = home_era.notna() & (home_starts >= MIN_SP_STARTS)
+    ops_ok = home_ops.notna() & (home_ops >= OWM_OPS_THRESHOLD)
+    away_era_ok = away_sp_ok & (away_era >= OWM_ERA_THRESHOLD)
+    home_sp_strong = home_sp_ok & (home_era < OWM_HOME_SP_ERA_MAX)
+
+    out["owm_signal"] = ops_ok & away_era_ok & home_sp_strong
+
+    core_match = ops_ok & away_era_ok
+    blocked = core_match & home_sp_ok & ~home_sp_strong
+    block_reasons: list[str] = []
+    for i in out.index:
+        if not bool(blocked.loc[i]):
+            block_reasons.append("")
+            continue
+        era_val = float(home_era.loc[i])
+        block_reasons.append(
+            f"OWM blocked — home SP ERA WMA {era_val:.2f} >= {OWM_HOME_SP_ERA_MAX:.1f} "
+            f"(need Strong SP < {OWM_HOME_SP_ERA_MAX:.1f})"
+        )
+    out["owm_block_reason"] = block_reasons
+
     return out
 
 
@@ -640,6 +684,7 @@ def build_report(
     eligible = scored[scored["rule_min_games"]]
     under_hits = scored[scored["under_signal"]]
     rl_hits = scored[scored["rl_signal"]]
+    owm_hits = scored[scored["owm_signal"]] if "owm_signal" in scored.columns else scored.iloc[0:0]
 
     lines = [
         f"SCORE TODAY — {score_date}",
@@ -657,6 +702,9 @@ def build_report(
         f"(>={confidence_threshold:.0%} conf, fav, tier -150/-199 or -300+)",
         f"── Under signals:           {len(under_hits)}  (combined SP ERA WMA < 6.0)",
         f"── Run line signals:        {len(rl_hits)}  (ML favorite <= -301)",
+        f"── OWM signals:             {len(owm_hits)}  "
+        f"(home OPS WMA >= {OWM_OPS_THRESHOLD}, away SP ERA >= {OWM_ERA_THRESHOLD}, "
+        f"home SP ERA < {OWM_HOME_SP_ERA_MAX})",
         "",
     ]
 
@@ -739,6 +787,44 @@ def build_report(
 
     lines.extend([
         "",
+        "── OWM SIGNAL ────────────────────────────────────────────────",
+        f"Home OPS WMA >= {OWM_OPS_THRESHOLD}  |  Away SP ERA WMA >= {OWM_ERA_THRESHOLD}  |",
+        f"Home SP ERA WMA < {OWM_HOME_SP_ERA_MAX} (Strong SP gate)  |  Min starts: {MIN_SP_STARTS}",
+        "Backtest 2019-2025: Strong home SP 66.7% win / +7.6% ROI",
+        "──────────────────────────────────────────────────────────────",
+    ])
+    if owm_hits.empty:
+        lines.extend([
+            "  No OWM signal today.",
+            f"  (Blocked when home SP ERA WMA >= {OWM_HOME_SP_ERA_MAX})",
+        ])
+    else:
+        for _, row in owm_hits.sort_values("h_rolling_ops_wma", ascending=False).iterrows():
+            matchup = f"{row['away_team']}@{row['home_team']}"
+            home_ml_raw = row.get("home_ml")
+            if pd.notna(home_ml_raw):
+                home_ml_s = f"{int(home_ml_raw):+d}"
+            else:
+                home_ml_s = "n/a"
+            lines.append(
+                f"  ✅ GO  [{matchup}]  →  {row['home_team']} ML {home_ml_s}\n"
+                f"      Home offense OPS WMA: {row['h_rolling_ops_wma']:.3f}\n"
+                f"      Away SP ERA WMA: {row['asp_era_wma']:.2f}\n"
+                f"      DATA: home SP ERA WMA {row['hsp_era_wma']:.2f} "
+                f"(gate < {OWM_HOME_SP_ERA_MAX:.1f} — Strong)"
+            )
+
+    blocked_owm = scored[
+        scored.get("owm_block_reason", pd.Series("", index=scored.index)).astype(str).str.len() > 0
+    ] if "owm_block_reason" in scored.columns else scored.iloc[0:0]
+    if not blocked_owm.empty:
+        lines.extend(["", "  OWM blocked (home SP gate):"])
+        for _, row in blocked_owm.sort_values("game_start_utc").iterrows():
+            matchup = f"{row['away_team']}@{row['home_team']}"
+            lines.append(f"  [{matchup}]  {row['owm_block_reason']}")
+
+    lines.extend([
+        "",
         "── RUN LINE SIGNAL ───────────────────────────────────────────",
         "ML Favorite <= -301  |  Backtest: 57 games 2024-2025  |",
         "Cover rate: 63.2%  |  ROI: +21.1% at avg RL odds -116",
@@ -799,6 +885,7 @@ def build_output_csv(scored: pd.DataFrame) -> pd.DataFrame:
         "captured_at_utc",
         "hsp_era_wma",
         "asp_era_wma",
+        "h_rolling_ops_wma",
         "hsp_starts_in_window",
         "asp_starts_in_window",
         "combined_era",
@@ -817,6 +904,8 @@ def build_output_csv(scored: pd.DataFrame) -> pd.DataFrame:
         "home_rl_odds",
         "away_rl_odds",
         "rl_signal",
+        "owm_signal",
+        "owm_block_reason",
         "wind_direction",
     ]
     existing = [c for c in cols if c in scored.columns]
@@ -827,6 +916,7 @@ def build_output_csv(scored: pd.DataFrame) -> pd.DataFrame:
         "under_signal",
         "under_signal_strong",
         "rl_signal",
+        "owm_signal",
         "both_sp_known",
         "under_venue_suppressed",
     ):
