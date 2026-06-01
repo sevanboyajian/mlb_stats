@@ -104,3 +104,59 @@ KeyboardInterrupt
 [run_pipeline] db=C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\data\mlb_stats.db
 [run_pipeline] mode=loop poll_seconds=60 ghost=False stale_minutes=30 timeout_minutes=30 sleep_until_due=True scope_job_date_et='2026-06-01' exit_when_no_pending=True
 [run_pipeline] sleep-until-due: next pending at 2026-06-01 10:00 ET (~2340s)
+
+[job] id=2572 type=score_today job_date_et=2026-06-01 game_group_id=0 scheduled_time=2026-06-01 10:00 ET
+[job] command='python batch/analysis/prediction/score_today.py --db data/mlb_stats.db --date 2026-06-01'
+[job] start_et=2026-06-01 10:00:41 ET (claimed)
+[job] end_et=2026-06-01 10:00:48 ET status=complete rc=0
+[score_today] Completed — outputs saved to C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\outputs\reports\score_today_2026-06-01.txt
+[score_today] stdout (truncated):
+=================================================
+MLB SCOUT — PREDICTION ENGINE DAILY REPORT
+Monday, June 1, 2026
+Generated: 10:00 AM ET
+=================================================
+Model: LogReg (trained 2024)  |  Filter: >=20 GP
+-------------------------------------------------
+TODAY: 0ML  0RL  0Under  signal(s) found
+=================================================
+
+
+── MONEYLINE PICKS ──────────────────────────────
+[Backtest: -150/-199 tier → 72.7% acc, +14.7% ROI]
+[Backtest: -300+ tier    → 85.2% acc, +10.9% ROI]
+
+  No moneyline picks today.
+── RUN LINE PICKS ───────────────────────────────
+[Backtest: ML <=-301 → 63.2% cover, +21.1% ROI]
+[Note: 2026 YTD only 3 games — small sample]
+
+  No run line picks today.
+── UNDER PICKS ──────────────────────────────────
+[Backtest: Combined ERA <6.0 → 44.6% under rate]
+[Strong:   Combined ERA <5.0 + wind in → 41.6%]
+[Suppressed venues: Fenway Park, Oracle Park]
+
+  No under picks today.
+
+── NO SIGNAL TODAY ──────────────────────────────
+
+  DET @ TB  6:40 PM ET
+    ML conf 57%  edge +18.0%  [Below confidence threshold + Odds +145 on model pick — tiers require favorite (-150 to -199 or -300+)]
+  MIA @ WSH  6:45 PM ET
+    ML conf 54%  edge -3.5%  [Below confidence threshold]
+  KC @ CIN  7:10 PM ET
+    ML conf 57%  edge -7.8%  [Below confidence threshold + Odds -210 between tiers (gap: -200 to -299 excluded)]
+  CWS @ MIN  7:40 PM ET
+    ML conf 51%  edge +10.2%  [Below confidence threshold + Odds +135 on model pick — tiers require favorite (-150 to -199 or -300+)]
+  SF @ MIL  7:40 PM ET
+    ML conf 63%  edge +4.4%  odds -160 (MIL ML)  [Below confidence threshold]
+  TEX @ STL  7:45 PM ET
+    ML conf 55%  edge +1.0%  [Below confidence threshold + Odds -130 below -150 tier floor (need -150 to -199 or -300+)]
+  COL @ LAA  9:38 PM ET
+    ML conf 57%  edge -8.8%  [Below confidence threshold + Odds -220 between tiers (gap: -200 to -299 excluded)]
+  NYM @ SEA  9:40 PM ET
+    ML conf 55%  edge -2.3%  [Below confidence threshold + O…
+[score_today] prediction_engine_log cleared prior rows for 2026-06-01 (no signals) -> C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\outputs\reports\prediction_engine_log.csv
+[score_today] Logged score_today_log game_date_et=2026-06-01 ml=0 under=0 rl=0 email_sent=1
+[run_pipeline] sleep-until-due: next pending at 2026-06-01 17:10 ET (~25800s)
