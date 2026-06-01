@@ -13,3 +13,5 @@ date,game_pk,market_type,bet_type,score,model_p,implied_p,edge,result
 2026-05-29,824353,ML,moneyline,3,0.720,0.439,0.120,1
 2026-05-30,823375,TOTAL,total,0,0.546,0.512,0.033,1
 2026-05-30,824593,ML,moneyline,10,0.710,0.500,0.120,1
+2026-05-31,824354,ML,moneyline,10,0.720,0.507,0.120,0
+2026-05-31,824592,ML,moneyline,10,0.720,0.576,0.120,1
