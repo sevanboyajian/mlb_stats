@@ -106,11 +106,49 @@ def home_sp_tier(era: float) -> str:
     return "Home SP Weak"
 
 
+def query_rolling_stats_coverage(
+    con: sqlite3.Connection, start_year: int, end_year: int
+) -> dict[str, list[int]]:
+    """Seasons with rolling-stats rows inside the requested year window."""
+    team_rows = con.execute(
+        """
+        SELECT season, COUNT(*)
+        FROM team_rolling_stats
+        WHERE season BETWEEN ? AND ?
+          AND season != 2020
+        GROUP BY season
+        ORDER BY season
+        """,
+        (start_year, end_year),
+    ).fetchall()
+    pitcher_rows = con.execute(
+        """
+        SELECT season, COUNT(*)
+        FROM pitcher_rolling_stats
+        WHERE season BETWEEN ? AND ?
+          AND season != 2020
+        GROUP BY season
+        ORDER BY season
+        """,
+        (start_year, end_year),
+    ).fetchall()
+    return {
+        "team_rolling": [int(r[0]) for r in team_rows],
+        "pitcher_rolling": [int(r[0]) for r in pitcher_rows],
+    }
+
+
+def missing_rolling_seasons(
+    start_year: int, end_year: int, available: list[int]
+) -> list[int]:
+    wanted = [y for y in range(start_year, end_year + 1) if y not in EXCLUDE_SEASONS]
+    have = set(available)
+    return [y for y in wanted if y not in have]
+
+
 def load_games(con: sqlite3.Connection, start_year: int, end_year: int) -> pd.DataFrame:
-    seasons = [y for y in range(start_year, end_year + 1) if y not in EXCLUDE_SEASONS]
-    if not seasons:
+    if start_year > end_year:
         return pd.DataFrame()
-    ph = ",".join("?" * len(seasons))
 
     sql = f"""
     SELECT
@@ -161,7 +199,8 @@ def load_games(con: sqlite3.Connection, start_year: int, end_year: int) -> pd.Da
       AND g.status = 'Final'
       AND g.home_score IS NOT NULL
       AND g.away_score IS NOT NULL
-      AND g.season IN ({ph})
+      AND g.season BETWEEN ? AND ?
+      AND g.season != 2020
       AND CAST(strftime('%m', {_GAME_DATE}) AS INTEGER) BETWEEN 5 AND 8
       AND COALESCE(th.rolling_ops_wma, th.rolling_ops) IS NOT NULL
       AND COALESCE(ta.rolling_ops_wma, ta.rolling_ops) IS NOT NULL
@@ -169,7 +208,7 @@ def load_games(con: sqlite3.Connection, start_year: int, end_year: int) -> pd.Da
       AND prs_a.era_wma IS NOT NULL
     ORDER BY g.season, {_GAME_DATE}, g.game_pk
     """
-    df = pd.read_sql_query(sql, con, params=seasons)
+    df = pd.read_sql_query(sql, con, params=(start_year, end_year))
     if df.empty:
         return df
 
@@ -332,6 +371,8 @@ def write_report(
     ops_threshold: float,
     era_threshold: float,
     nom_df: pd.DataFrame,
+    coverage: dict[str, list[int]],
+    missing_team_seasons: list[int],
 ) -> None:
     lines: list[str] = []
     lines.append("OWM VETO BACKTEST")
@@ -353,6 +394,21 @@ def write_report(
         "Note: team_rolling_stats rows are pre-game builder snapshots on game_pk; "
         "no computed_at vs game_start filter applied (consistent with score_today)."
     )
+    lines.append(
+        f"Rolling-stats DB coverage: team={coverage['team_rolling'] or 'none'}, "
+        f"pitcher={coverage['pitcher_rolling'] or 'none'}"
+    )
+    if missing_team_seasons:
+        lines.append(
+            "DATA GAP: no team_rolling_stats for "
+            f"{missing_team_seasons} — INNER JOIN limits games to covered seasons."
+        )
+    if not df.empty:
+        by_season = df.groupby("season").size().sort_index()
+        lines.append(
+            "Games loaded by season: "
+            + ", ".join(f"{int(s)}={int(n)}" for s, n in by_season.items())
+        )
     lines.append(f"Total games loaded: {len(df)}")
     lines.append(f"OWM fires: {len(owm_df)}")
 
@@ -541,8 +597,30 @@ def main() -> int:
     report_path = out_dir / "owm_veto_backtest.txt"
     csv_path = out_dir / "owm_veto_detail.csv"
 
+    print(
+        f"[owm_veto] Season filter: {args.start_year}-{args.end_year} "
+        f"(excludes {sorted(EXCLUDE_SEASONS)})"
+    )
+
     con = db_connect(args.db)
     try:
+        coverage = query_rolling_stats_coverage(con, args.start_year, args.end_year)
+        missing_team = missing_rolling_seasons(
+            args.start_year, args.end_year, coverage["team_rolling"]
+        )
+        print(
+            f"[owm_veto] team_rolling_stats seasons in range: "
+            f"{coverage['team_rolling'] or '(none)'}"
+        )
+        print(
+            f"[owm_veto] pitcher_rolling_stats seasons in range: "
+            f"{coverage['pitcher_rolling'] or '(none)'}"
+        )
+        if missing_team:
+            print(
+                f"[owm_veto] WARNING: no team_rolling_stats for {missing_team} - "
+                "JOIN caps effective window"
+            )
         df = load_games(con, args.start_year, args.end_year)
     finally:
         con.close()
@@ -561,6 +639,8 @@ def main() -> int:
         ops_threshold=args.owm_ops_threshold,
         era_threshold=args.owm_era_threshold,
         nom_df=nom_df,
+        coverage=coverage,
+        missing_team_seasons=missing_team,
     )
 
     if args.output_csv:
