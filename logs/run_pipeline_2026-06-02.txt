@@ -57,3 +57,86 @@
 [job] start_et=2026-06-02 07:01:38 ET (claimed)
 [job] end_et=2026-06-02 07:01:40 ET status=complete rc=0
 [run_pipeline] sleep-until-due: next pending at 2026-06-02 10:00 ET (~10740s)
+
+[job] id=2607 type=score_today job_date_et=2026-06-02 game_group_id=0 scheduled_time=2026-06-02 10:00 ET
+[job] command='python batch/analysis/prediction/score_today.py --db data/mlb_stats.db --date 2026-06-02'
+[job] start_et=2026-06-02 10:00:40 ET (claimed)
+[job] end_et=2026-06-02 10:00:45 ET status=complete rc=0
+[score_today] Completed — outputs saved to C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\outputs\reports\score_today_2026-06-02.txt
+[score_today] stdout (truncated):
+=================================================
+MLB SCOUT — PREDICTION ENGINE DAILY REPORT
+Tuesday, June 2, 2026
+Generated: 10:00 AM ET
+=================================================
+Model: LogReg (trained 2024)  |  Filter: >=20 GP
+-------------------------------------------------
+TODAY: 0ML  0RL  2Under  1OWM  signal(s) found
+=================================================
+
+
+── MONEYLINE PICKS ──────────────────────────────
+[Backtest: -150/-199 tier → 72.7% acc, +14.7% ROI]
+[Backtest: -300+ tier    → 85.2% acc, +10.9% ROI]
+
+  No moneyline picks today.
+── RUN LINE PICKS ───────────────────────────────
+[Backtest: ML <=-301 → 63.2% cover, +21.1% ROI]
+[Note: 2026 YTD only 3 games — small sample]
+
+  No run line picks today.
+── UNDER PICKS ──────────────────────────────────
+[Backtest: Combined ERA <6.0 → 44.6% under rate]
+[Strong:   Combined ERA <5.0 + wind in → 41.6%]
+[Suppressed venues: Fenway Park, Oracle Park]
+
+  CLE @ NYY
+  Pick:       UNDER 7.5  (-115)
+  Home SP:    NYY — 1.68 ERA WMA
+  Away SP:    CLE — 2.76 ERA WMA
+  Combined:   4.44
+  Wind:       OUT
+  Game:       7:05 PM ET
+
+  KC @ CIN
+  Pick:       UNDER 9.0  (-110)
+  Home SP:    CIN — 1.81 ERA WMA
+  Away SP:    KC — 3.45 ERA WMA
+  Combined:   5.26
+  Wind:       R To L
+  Game:       7:10 PM ET
+
+
+── OWM PICKS ────────────────────────────────────
+[Backtest: home OPS WMA >= 0.80 + away SP ERA >= 5.0]
+[Gate: home SP ERA WMA < 4.0 — Strong SP only]
+[2019-2025: Strong home SP 66.7% win / +7.6% ROI]
+
+  LAD @ AZ
+  Pick:       AZ ML +105
+  Home OPS:   0.871 WMA
+  Away SP:    5.26 ERA WMA
+  DATA:       home SP ERA WMA 2.13 (gate < 4.0 — Strong)
+  Game:       9:40 PM ET
+
+
+── NO SIGNAL TODAY ──────────────────────────────
+
+  DET @ TB  6:40 PM ET
+    ML conf 58%  edge +15.5%  [Below confidence threshold + Odds +125 on model pick — tiers require favorite (-150 to -199 or -300+)]
+  SD @ PHI  6:40 PM ET
+    ML conf 53%  edge -2.7%  [Below confidence threshold + Odds -140 below -150 tier floor (need -150 to -199 or -300…
+[score_today] prediction_engine_log wrote 2 row(s) for 2026-06-02 -> C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\outputs\reports\prediction_engine_log.csv
+[score_today] Logged score_today_log game_date_et=2026-06-02 ml=0 under=2 rl=0 email_sent=1
+[run_pipeline] sleep-until-due: next pending at 2026-06-02 17:10 ET (~25800s)
+Traceback (most recent call last):
+  File "C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\batch\jobs\run_pipeline.py", line 2890, in <module>
+    main()
+  File "C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\batch\jobs\run_pipeline.py", line 2868, in main
+    run_loop(
+  File "C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\batch\jobs\run_pipeline.py", line 2382, in run_loop
+    if _sleep_until_next_pending_or_poll(
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\batch\jobs\run_pipeline.py", line 752, in _sleep_until_next_pending_or_poll
+    time.sleep(delta)
+KeyboardInterrupt
