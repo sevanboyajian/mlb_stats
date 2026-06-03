@@ -191,7 +191,11 @@ def _signal_counts(rows: list[dict[str, str]]) -> tuple[int, int, int, int, int]
     rl = sum(1 for r in rows if _as_bool(r.get("rl_signal")))
     under = sum(1 for r in rows if _as_bool(r.get("under_signal")))
     owm = sum(1 for r in rows if _as_bool(r.get("owm_signal")))
-    away_dog = sum(1 for r in rows if _as_bool(r.get("away_dog_rl_signal")))
+    away_dog = sum(
+        1
+        for r in rows
+        if _as_bool(r.get("away_dog_rl_fires", r.get("away_dog_rl_signal")))
+    )
     return ml, rl, under, owm, away_dog
 
 
@@ -401,36 +405,66 @@ def format_prediction_report(
                 "",
             ])
 
+    away_dog_rows = [r for r in rows if _as_bool(r.get("away_dog_rl_fires", r.get("away_dog_rl_signal")))]
+    ad_fired = len(away_dog_rows)
+    ad_staked = sum(1 for r in away_dog_rows if _as_bool(r.get("away_dog_rl_actionable")))
+    ad_juice = sum(1 for r in away_dog_rows if _as_bool(r.get("away_dog_rl_juice_blocked")))
     lines.extend([
         "",
         "── AWAY DOG RL PICKS ────────────────────────────",
         "[Away ML +101–+130 | total ≤ 8.5 | away underdog]",
         "[Backtest May–Aug 2019–2025: 66.1% cover, n=1,059]",
-        "[Standalone 0.10u — no ML signal required]",
+        f"[Cap {4} per day | Juice gate: -190 or better]",
+        f"Today: {ad_staked} staked / {ad_fired} qualified / {ad_juice} juice-blocked",
         "",
     ])
-    away_dog_rows = [r for r in rows if _as_bool(r.get("away_dog_rl_signal"))]
-    away_dog_rows.sort(key=lambda r: _as_int(r.get("away_ml")) or 0)
+    away_dog_rows.sort(
+        key=lambda r: _as_int(r.get("away_rl_odds")) if _as_int(r.get("away_rl_odds")) is not None else -10_000,
+        reverse=True,
+    )
+    total_qual = sum(
+        1 for r in away_dog_rows if not _as_bool(r.get("away_dog_rl_juice_blocked"))
+    )
     if not away_dog_rows:
         lines.append("  No Away Dog RL picks today.")
     else:
         for row in away_dog_rows:
+            if _as_bool(row.get("away_dog_rl_juice_blocked")):
+                continue
             away = row.get("away_team", "???")
             home = row.get("home_team", "???")
             aml = _as_int(row.get("away_ml"))
             tot = _as_float(row.get("total_line"))
             rl_odds = _format_odds(row.get("away_rl_odds"))
             tot_s = f"{tot:g}" if tot is not None else "?"
+            rank = _as_int(row.get("away_dog_rl_rank"))
+            rank_s = f"({rank}/{total_qual})" if rank is not None else ""
+            if _as_bool(row.get("away_dog_rl_actionable")):
+                tag = f"GO {rank_s}".strip()
+                stake_s = "0.10u"
+            else:
+                tag = f"NO BET {rank_s}".strip()
+                stake_s = "0.00u — cap"
             lines.extend([
-                f"  {away} @ {home}",
+                f"  {tag}  {away} @ {home}",
                 f"  Pick:       {away} +1.5 ({rl_odds})",
                 f"  Away ML:    +{aml}" if aml is not None else "  Away ML:    n/a",
                 f"  Total:      {tot_s}",
                 f"  SIGNAL:     Away Dog RL (standalone)",
-                f"  STAKE:      0.10u",
+                f"  STAKE:      {stake_s}",
                 f"  Game:       {_game_time_et(row.get('game_start_utc'))}",
                 "",
             ])
+        jb = [r for r in away_dog_rows if _as_bool(r.get("away_dog_rl_juice_blocked"))]
+        if jb:
+            lines.append("  Juice-blocked:")
+            for row in jb:
+                away = row.get("away_team", "???")
+                home = row.get("home_team", "???")
+                lines.append(
+                    f"    {away} @ {home}  {(row.get('away_dog_rl_block_reason') or '').strip()}"
+                )
+            lines.append("")
 
     lines.extend([
         "",

@@ -3415,6 +3415,12 @@ def _effective_stake_for_scored_game(sg: object | None) -> float:
     if sg is None:
         return 0.0
     try:
+        if bool(getattr(sg, "away_dog_rl_cap_blocked", False)):
+            return 0.0
+        if getattr(sg, "best_side", None) == "away_rl":
+            if bool(getattr(sg, "away_dog_rl_actionable", False)):
+                return float(getattr(sg, "away_dog_rl_stake", 0.0) or 0.0)
+            return 0.0
         sm = float(getattr(sg, "stake_multiplier", 0.0) or 0.0)
         pa = getattr(sg, "pick_is_actionable", None)
         if pa is False:
@@ -3427,7 +3433,12 @@ def _effective_stake_for_scored_game(sg: object | None) -> float:
 
 
 def _scored_pick_stake_units(entry: dict) -> float:
-    return _effective_stake_for_scored_game((entry.get("sigs") or {}).get("_scored_game"))
+    sigs = entry.get("sigs") or {}
+    if sigs.get("_away_dog_rl_card"):
+        if bool(sigs.get("away_dog_rl_actionable")):
+            return float(sigs.get("away_dog_rl_stake") or 0.10)
+        return 0.0
+    return _effective_stake_for_scored_game(sigs.get("_scored_game"))
 
 
 def save_brief_picks(
@@ -4987,10 +4998,17 @@ def format_bet_block(scored_game: object, *, is_late_signal: bool = False) -> st
         and bool(getattr(s, "fires", False))
         for s in active_card
     )
+    cap_blocked = bool(getattr(scored_game, "away_dog_rl_cap_blocked", False))
     if away_dog_card:
-        why_line = (
-            "WHY: Away light underdog in low-total game — structural RL edge."
-        )
+        if cap_blocked:
+            why_line = (
+                "WHY: Signal qualifies but daily cap of 4 reached. "
+                "Shown for tracking only — do not stake."
+            )
+        else:
+            why_line = (
+                "WHY: Away light underdog in low-total game — structural RL edge."
+            )
     conflict_txt = ""
     for c in _signal_conflict_lines_for_card(scored_game):
         conflict_txt += f"│\n│  {c}\n"
@@ -5027,6 +5045,10 @@ def format_bet_block(scored_game: object, *, is_late_signal: bool = False) -> st
         tag = "  [AWAY DOG RL]" if away_dog_card and side == "away_rl" else ""
         head_line = f"│  {head}  {bet_txt:<18}{tag}  [{tier_txt} · {confidence}%]"
         stake_line = color_text(f"│  STAKE: {stake:.2f}u  ← PLAY THIS", "green")
+    elif cap_blocked and away_dog_card and side == "away_rl":
+        head = color_text("⛔ NO BET:", "red")
+        head_line = f"│  {head}  {bet_txt:<18}  [AWAY DOG RL — CAP]"
+        stake_line = color_text("│  STAKE: 0.00u — NO BET", "dim")
     else:
         head = color_text("❌ NO BET:", "dim")
         head_line = f"│  {head}  {bet_txt:<18}  [{confidence}%]"
@@ -6691,28 +6713,31 @@ def build_primary_brief(games, streaks, starters, game_date,
             "streak":  streak_line(game, streaks),
         }
         evaluated_entries.append(entry)
+
+    from batch.pipeline.score_game import apply_away_dog_rl_slate_limits
+
+    away_dog_slate_stats = apply_away_dog_rl_slate_limits(evaluated_entries)
+
+    for entry in evaluated_entries:
+        game = entry["game"]
+        sigs = entry["sigs"]
         best_score = int(sigs.get("best_aggregate_score") or 0)
         picks = list(sigs.get("picks") or [])
-        away_dog_ok = bool(sigs.get("away_dog_rl_actionable")) or (
-            bool(sigs.get("away_dog_rl_fires"))
-            and (entry.get("sigs") or {}).get("_scored_game") is not None
-            and getattr(
-                (entry.get("sigs") or {}).get("_scored_game"),
-                "pick_is_actionable",
-                False,
-            )
-            and getattr(
-                (entry.get("sigs") or {}).get("_scored_game"),
-                "best_side",
-                None,
-            )
-            == "away_rl"
-        )
-        if (best_score >= 5 and picks) or away_dog_ok:
+        away_dog_fires = bool(sigs.get("away_dog_rl_fires"))
+        away_dog_juice = bool(sigs.get("away_dog_rl_juice_blocked"))
+        away_dog_cap = bool(sigs.get("away_dog_rl_cap_blocked"))
+        away_dog_show_rl = away_dog_fires and not away_dog_juice
+        if (best_score >= 5 and picks) or away_dog_show_rl:
             all_picks.append(entry)
             sg_main = (entry.get("sigs") or {}).get("_scored_game")
-            if (
-                bool(sigs.get("away_dog_rl_actionable"))
+            need_supp = (
+                away_dog_show_rl
+                and sg_main is not None
+                and getattr(sg_main, "best_side", None) != "away_rl"
+            )
+            if need_supp or (
+                away_dog_cap
+                and away_dog_show_rl
                 and sg_main is not None
                 and getattr(sg_main, "best_side", None) != "away_rl"
             ):
@@ -6727,9 +6752,7 @@ def build_primary_brief(games, streaks, starters, game_date,
                         "_away_dog_rl_card": True,
                         "picks": [
                             {
-                                "bet": (
-                                    f"{game.get('away_abbr', 'AWAY')} +1.5"
-                                ),
+                                "bet": f"{game.get('away_abbr', 'AWAY')} +1.5",
                                 "market": "RL",
                                 "odds": sigs.get("away_rl_odds")
                                 if sigs.get("away_rl_odds") is not None
@@ -6745,15 +6768,20 @@ def build_primary_brief(games, streaks, starters, game_date,
                         ],
                         "signals": ["Away Dog RL"],
                         "signal_ids": ["AWAY_DOG_RL"],
-                        "away_dog_rl_actionable": True,
-                        "away_dog_rl_stake": 0.10,
+                        "away_dog_rl_actionable": bool(sigs.get("away_dog_rl_actionable")),
+                        "away_dog_rl_stake": float(sigs.get("away_dog_rl_stake") or 0.0),
+                        "away_dog_rl_cap_blocked": away_dog_cap,
+                        "away_dog_rl_juice_blocked": away_dog_juice,
+                        "away_dog_rl_rank": sigs.get("away_dog_rl_rank"),
                     },
                     "starter": entry["starter"],
                     "streak": entry["streak"],
                 }
-                all_picks.append(rl_entry)
+                if need_supp or away_dog_cap:
+                    all_picks.append(rl_entry)
+        elif away_dog_fires and away_dog_juice:
+            no_signal.append(entry)
         else:
-            # No published "bets to avoid" — treat no-pick games (incl. internal avoid flags) as no-signal slate
             no_signal.append(entry)
 
     # ── Daily bet cap: keep top N by edge (stake>0) ──────────────────────
@@ -6810,7 +6838,15 @@ def build_primary_brief(games, streaks, starters, game_date,
 
     lines.append(section("🔥  ACTION SUMMARY", width=BW))
     lines.append(f"\n  Bets Today: {len(bets_list)}")
-    lines.append(f"  Games Evaluated: {len(games)}\n")
+    lines.append(f"  Games Evaluated: {len(games)}")
+    if away_dog_slate_stats.get("fired", 0):
+        ad = away_dog_slate_stats
+        lines.append(
+            f"  Away Dog RL signals: {ad['fired']} fired → {ad['staked']} staked "
+            f"(juice gate blocked {ad['juice_blocked']}, "
+            f"cap blocked {ad['cap_blocked']})"
+        )
+    lines.append("")
     if bets_list:
         lines.extend(["  " + b for b in bets_list])
         lines.append("")

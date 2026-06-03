@@ -47,6 +47,9 @@ AWAY_DOG_RL_ML_MAX = 130
 AWAY_DOG_RL_TOTAL_MAX = 8.5
 AWAY_DOG_RL_ML_NEXT_TIER_MIN = 131
 AWAY_DOG_RL_ML_NEXT_TIER_MAX = 160
+# Strictly better than -190: -190 passes, -191 blocks.
+AWAY_DOG_RL_MAX_JUICE = -190
+AWAY_DOG_RL_DAILY_CAP = 4
 
 # Venues where Under signals are suppressed regardless of ERA.
 # These parks structurally override pitcher quality for totals.
@@ -502,6 +505,7 @@ def compute_ou_rl_signals(df: pd.DataFrame) -> pd.DataFrame:
 
     out = _apply_owm_signal(out)
     out = _apply_away_dog_rl_signal(out)
+    out = _finalize_away_dog_rl_slate(out)
 
     return out
 
@@ -584,6 +588,61 @@ def _apply_away_dog_rl_signal(df: pd.DataFrame) -> pd.DataFrame:
         else:
             block_reasons.append("")
     out["away_dog_rl_block_reason"] = block_reasons
+    return out
+
+
+def _finalize_away_dog_rl_slate(df: pd.DataFrame) -> pd.DataFrame:
+    """Juice gate per row, then daily cap (best RL juice first) across the slate."""
+    out = df.copy()
+    for col, default in (
+        ("away_dog_rl_actionable", False),
+        ("away_dog_rl_juice_blocked", False),
+        ("away_dog_rl_cap_blocked", False),
+        ("away_dog_rl_rank", pd.NA),
+        ("away_dog_rl_stake", 0.0),
+    ):
+        if col not in out.columns:
+            out[col] = default
+
+    rl_odds = pd.to_numeric(out.get("away_rl_odds"), errors="coerce")
+    fires = out["away_dog_rl_fires"].fillna(False).astype(bool)
+    out.loc[fires, "away_dog_rl_juice_blocked"] = (
+        fires & rl_odds.notna() & (rl_odds < AWAY_DOG_RL_MAX_JUICE)
+    )
+    for i in out.index[fires & out["away_dog_rl_juice_blocked"]]:
+        o = int(rl_odds.loc[i])
+        away = out.loc[i, "away_team"]
+        home = out.loc[i, "home_team"]
+        out.loc[i, "away_dog_rl_block_reason"] = (
+            f"[Away Dog RL — {away}@{home} RL odds {o:+d} worse than -190 juice gate]"
+        )
+        out.loc[i, "away_dog_rl_actionable"] = False
+        out.loc[i, "away_dog_rl_stake"] = 0.0
+
+    eligible = out.index[
+        fires & ~out["away_dog_rl_juice_blocked"].astype(bool)
+    ].tolist()
+    sort_key = out.loc[eligible, "away_rl_odds"].map(
+        lambda x: float(x) if pd.notna(x) else -10_000.0
+    )
+    order = sorted(eligible, key=lambda i: float(sort_key.loc[i]), reverse=True)
+    total_qual = len(order)
+
+    for rank, idx in enumerate(order, start=1):
+        out.at[idx, "away_dog_rl_rank"] = rank
+        if rank <= AWAY_DOG_RL_DAILY_CAP:
+            out.at[idx, "away_dog_rl_actionable"] = True
+            out.at[idx, "away_dog_rl_stake"] = 0.10
+            out.at[idx, "away_dog_rl_cap_blocked"] = False
+        else:
+            out.at[idx, "away_dog_rl_actionable"] = False
+            out.at[idx, "away_dog_rl_stake"] = 0.0
+            out.at[idx, "away_dog_rl_cap_blocked"] = True
+            out.at[idx, "away_dog_rl_block_reason"] = (
+                f"[Away Dog RL — daily cap reached "
+                f"({AWAY_DOG_RL_DAILY_CAP}/{AWAY_DOG_RL_DAILY_CAP})]"
+            )
+
     return out
 
 
@@ -744,6 +803,17 @@ def build_report(
         if "away_dog_rl_signal" in scored.columns
         else scored.iloc[0:0]
     )
+    ad_fired_n = int(away_dog_hits.shape[0]) if not away_dog_hits.empty else 0
+    ad_staked_n = (
+        int(away_dog_hits["away_dog_rl_actionable"].sum())
+        if ad_fired_n and "away_dog_rl_actionable" in away_dog_hits.columns
+        else 0
+    )
+    ad_juice_n = (
+        int(away_dog_hits["away_dog_rl_juice_blocked"].sum())
+        if ad_fired_n and "away_dog_rl_juice_blocked" in away_dog_hits.columns
+        else 0
+    )
 
     lines = [
         f"SCORE TODAY — {score_date}",
@@ -764,8 +834,8 @@ def build_report(
         f"── OWM signals:             {len(owm_hits)}  "
         f"(home OPS WMA >= {OWM_OPS_THRESHOLD}, away SP ERA >= {OWM_ERA_THRESHOLD}, "
         f"home SP ERA < {OWM_HOME_SP_ERA_MAX})",
-        f"── Away Dog RL signals:     {len(away_dog_hits)}  "
-        f"(away ML +{AWAY_DOG_RL_ML_MIN}–+{AWAY_DOG_RL_ML_MAX}, total ≤ {AWAY_DOG_RL_TOTAL_MAX})",
+        f"── Away Dog RL signals:     {ad_fired_n} fired → {ad_staked_n} staked "
+        f"(juice blocked {ad_juice_n}, cap max {AWAY_DOG_RL_DAILY_CAP})",
         "",
     ]
 
@@ -890,7 +960,9 @@ def build_report(
         f"Away ML +{AWAY_DOG_RL_ML_MIN}–+{AWAY_DOG_RL_ML_MAX} (inclusive)  |  "
         f"Closing total ≤ {AWAY_DOG_RL_TOTAL_MAX}  |  Away team underdog",
         "Backtest May–Aug 2019–2025: 66.1% cover, +2.2% edge vs implied, n=1,059",
-        "Stake: 0.10u (standalone — no ML signal required)",
+        f"Cap: {AWAY_DOG_RL_DAILY_CAP} per day  |  "
+        f"Juice gate: RL odds must be -190 or better (-190 passes)",
+        f"Today: {ad_staked_n} staked / {ad_fired_n} qualified / {ad_juice_n} juice-blocked",
         "──────────────────────────────────────────────────────────────",
     ])
     if away_dog_hits.empty:
@@ -899,35 +971,59 @@ def build_report(
             f"  (Near-miss: away ML +{AWAY_DOG_RL_ML_MIN}–+{AWAY_DOG_RL_ML_MAX} but total > {AWAY_DOG_RL_TOTAL_MAX})",
         ])
     else:
-        for _, row in away_dog_hits.sort_values("away_ml").iterrows():
+        sort_col = "away_rl_odds"
+        ad_sorted = away_dog_hits.sort_values(
+            sort_col,
+            ascending=False,
+            na_position="last",
+        )
+        total_qual = int((~ad_sorted["away_dog_rl_juice_blocked"].fillna(False)).sum())
+        for _, row in ad_sorted.iterrows():
             matchup = f"{row['away_team']}@{row['home_team']}"
             aml = int(row["away_ml"])
             tot = float(row["total_line"])
+            if bool(row.get("away_dog_rl_juice_blocked")):
+                continue
+            rank = row.get("away_dog_rl_rank")
+            try:
+                rank_i = int(rank)
+            except (TypeError, ValueError):
+                rank_i = None
             rl_odds = row.get("away_rl_odds")
-            if pd.notna(rl_odds):
-                rl_s = f"{int(rl_odds):+d}"
-                rl_line = (
-                    f"  ✅ GO  [{matchup}]  →  {row['away_team']} +1.5\n"
-                    f"      Away ML: +{aml}  |  Total: {tot:g}  |  RL odds: {rl_s}\n"
-                    f"      SIGNAL: Away Dog RL (standalone)\n"
-                    f"      DATA: away ML +{aml} (band +101–+130)\n"
-                    f"      DATA: total line {tot:g} (gate ≤ {AWAY_DOG_RL_TOTAL_MAX:g})\n"
-                    f"      DATA: away RL odds {rl_s}\n"
-                    f"      DATA: backtest cover rate 66.1% (n=1,059, May–Aug 2019–2025)\n"
-                    f"      STAKE: 0.10u ← PLAY THIS"
-                )
+            rl_s = f"{int(rl_odds):+d}" if pd.notna(rl_odds) else "n/a"
+            rank_lbl = (
+                f"({rank_i}/{total_qual})"
+                if rank_i is not None and total_qual
+                else ""
+            )
+            if bool(row.get("away_dog_rl_actionable")):
+                prefix = f"  ✅ GO  {rank_lbl}".strip()
+                stake_l = "      STAKE: 0.10u ← PLAY THIS"
             else:
-                rl_line = (
-                    f"  ✅ GO  [{matchup}]  →  {row['away_team']} +1.5\n"
-                    f"      Away ML: +{aml}  |  Total: {tot:g}  |  RL odds: n/a\n"
-                    f"      ⚠ RL odds not confirmed — verify juice before placing\n"
-                    f"      SIGNAL: Away Dog RL (standalone)\n"
-                    f"      DATA: away ML +{aml} (band +101–+130)\n"
-                    f"      DATA: total line {tot:g} (gate ≤ {AWAY_DOG_RL_TOTAL_MAX:g})\n"
-                    f"      DATA: backtest cover rate 66.1% (n=1,059, May–Aug 2019–2025)\n"
-                    f"      STAKE: 0.10u ← PLAY THIS"
-                )
-            lines.append(rl_line)
+                prefix = f"  ⛔ NO BET {rank_lbl}".strip()
+                stake_l = "      STAKE: 0.00u — NO BET (daily cap reached)"
+            lines.append(
+                f"{prefix}  [{matchup}]  →  {row['away_team']} +1.5\n"
+                f"      Away ML: +{aml}  |  Total: {tot:g}  |  RL odds: {rl_s}\n"
+                f"      SIGNAL: Away Dog RL (standalone)\n"
+                f"      DATA: away ML +{aml} (band +101–+130)\n"
+                f"      DATA: total line {tot:g} (gate ≤ {AWAY_DOG_RL_TOTAL_MAX:g})\n"
+                f"      DATA: away RL odds {rl_s}\n"
+                f"      DATA: backtest cover rate 66.1% (n=1,059, May–Aug 2019–2025)\n"
+                f"{stake_l}"
+            )
+
+    juice_blocked = (
+        away_dog_hits[away_dog_hits["away_dog_rl_juice_blocked"].fillna(False)]
+        if ad_fired_n and "away_dog_rl_juice_blocked" in away_dog_hits.columns
+        else away_dog_hits.iloc[0:0]
+    )
+    if not juice_blocked.empty:
+        lines.extend(["", "  Away Dog RL juice-blocked:"])
+        for _, row in juice_blocked.sort_values("game_start_utc").iterrows():
+            matchup = f"{row['away_team']}@{row['home_team']}"
+            reason = (row.get("away_dog_rl_block_reason") or "").strip()
+            lines.append(f"  [{matchup}]  {reason}")
 
     near_miss = scored[
         scored.get("away_dog_rl_block_reason", pd.Series("", index=scored.index))
@@ -935,6 +1031,7 @@ def build_report(
         .str.len()
         > 0
     ] if "away_dog_rl_block_reason" in scored.columns else scored.iloc[0:0]
+    near_miss = near_miss[~near_miss.index.isin(away_dog_hits.index)]
     if not near_miss.empty:
         lines.extend(["", "  Away Dog RL near-miss:"])
         for _, row in near_miss.sort_values("game_start_utc").iterrows():
@@ -1026,6 +1123,11 @@ def build_output_csv(scored: pd.DataFrame) -> pd.DataFrame:
         "owm_block_reason",
         "away_dog_rl_signal",
         "away_dog_rl_fires",
+        "away_dog_rl_actionable",
+        "away_dog_rl_rank",
+        "away_dog_rl_juice_blocked",
+        "away_dog_rl_cap_blocked",
+        "away_dog_rl_stake",
         "away_dog_rl_block_reason",
         "wind_direction",
     ]

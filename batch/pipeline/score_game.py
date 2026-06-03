@@ -124,6 +124,9 @@ AWAY_DOG_RL_ML_MAX = 130      # away ML maximum (inclusive, American odds)
 AWAY_DOG_RL_TOTAL_MAX = 8.5   # closing total line maximum (inclusive)
 AWAY_DOG_RL_ML_NEXT_TIER_MIN = 131
 AWAY_DOG_RL_ML_NEXT_TIER_MAX = 160
+# Strictly better than -190: -190 passes, -191 blocks (``odds < -190``).
+AWAY_DOG_RL_MAX_JUICE = -190
+AWAY_DOG_RL_DAILY_CAP = 4
 
 
 def _mvb_starter_eras(fdg: FullyDressedGame) -> tuple[float | None, float | None]:
@@ -781,11 +784,10 @@ def _eval_away_dog_rl(g: FullyDressedGame) -> SignalFinding:
         )
     else:
         fires = True
-        rl_note = (
-            _fmt_odds(away_rl_odds)
-            if away_rl_odds is not None
-            else "verify juice before placing"
-        )
+        if away_rl_odds is None:
+            rl_note = "RL odds unavailable — verify juice before placing"
+        else:
+            rl_note = _fmt_odds(away_rl_odds)
         reason = (
             f"Away Dog RL — {away_abbr} light underdog ({_fmt_odds(away_ml)}) "
             f"in low-total game ({float(total_line):g}); away +1.5 @ {rl_note}."
@@ -1203,6 +1205,9 @@ class ScoredGame:
     away_dog_rl_actionable: bool = False
     away_dog_rl_stake: float = 0.0
     away_dog_rl_block_reason: str | None = None
+    away_dog_rl_juice_blocked: bool = False
+    away_dog_rl_cap_blocked: bool = False
+    away_dog_rl_rank: int | None = None
 
 
 def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> ScoredGame:
@@ -1830,8 +1835,28 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
 
     away_dog_rl_actionable = False
     away_dog_rl_stake = 0.0
+    away_dog_rl_juice_blocked = False
+    away_dog_rl_cap_blocked = False
+    away_dog_rl_rank = None
 
     if away_dog_fired:
+        if mkt.away_rl_odds is not None:
+            try:
+                if int(mkt.away_rl_odds) < AWAY_DOG_RL_MAX_JUICE:
+                    away_dog_rl_juice_blocked = True
+                    away_abbr_j = (g.identifiers.away_team_abbr or "AWAY").strip()
+                    extra_flags.append(
+                        f"[Away Dog RL — {away_abbr_j} RL odds "
+                        f"{_fmt_odds(mkt.away_rl_odds)} worse than -190 juice gate]"
+                    )
+            except (TypeError, ValueError):
+                pass
+        else:
+            extra_flags.append(
+                "Away Dog RL: RL odds unavailable — verify juice before placing"
+            )
+
+    if away_dog_fired and not away_dog_rl_juice_blocked:
         aggregated_scores["away_rl"] = max(
             int(aggregated_scores.get("away_rl", 0) or 0), 8
         )
@@ -1879,24 +1904,12 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
                 )
             else:
                 top_pick = away_dog_sig
-            stake = 0.10
-            tier = "Tier1"
-            pick_is_actionable = True
-            eval_status = "BET"
             stake_basis = (
                 "Away Dog RL — away light underdog (+101–+130) in low-total game "
-                f"(≤ {AWAY_DOG_RL_TOTAL_MAX:g}). Standalone structural RL edge "
-                "(backtest 66.1% cover, n=1,059)."
+                f"(≤ {AWAY_DOG_RL_TOTAL_MAX:g}). Slate cap/juice applied after "
+                "full-day sort (best RL juice first, max 4 staked)."
             )
             aggregated_scores["away_rl"] = away_rl_score
-            _align_market_evals_with_actionability(
-                market_evals,
-                pick_is_actionable=True,
-                best_side=best_side,
-            )
-        else:
-            away_dog_rl_actionable = True
-            away_dog_rl_stake = 0.10
 
     return ScoredGame(
         game=g,
@@ -1924,7 +1937,179 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
         away_dog_rl_actionable=away_dog_rl_actionable,
         away_dog_rl_stake=away_dog_rl_stake,
         away_dog_rl_block_reason=away_dog_rl_block_reason,
+        away_dog_rl_juice_blocked=away_dog_rl_juice_blocked,
+        away_dog_rl_cap_blocked=away_dog_rl_cap_blocked,
+        away_dog_rl_rank=away_dog_rl_rank,
     )
+
+
+def _entry_away_rl_odds(entry: dict) -> int | None:
+    sigs = entry.get("sigs") or {}
+    raw = sigs.get("away_rl_odds")
+    if raw is None:
+        g = entry.get("game") or {}
+        raw = g.get("away_rl_odds")
+    if raw is None:
+        sg = sigs.get("_scored_game")
+        if sg is not None:
+            try:
+                raw = sg.game.market.away_rl_odds
+            except Exception:
+                raw = None
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _patch_entry_away_dog_rl(
+    entry: dict,
+    *,
+    actionable: bool,
+    stake: float,
+    juice_blocked: bool,
+    cap_blocked: bool,
+    rank: int | None,
+    block_reason: str | None,
+    total_qualifying: int | None = None,
+) -> None:
+    sigs = entry.setdefault("sigs", {})
+    sigs["away_dog_rl_actionable"] = bool(actionable)
+    sigs["away_dog_rl_stake"] = float(stake)
+    sigs["away_dog_rl_juice_blocked"] = bool(juice_blocked)
+    sigs["away_dog_rl_cap_blocked"] = bool(cap_blocked)
+    if rank is not None:
+        sigs["away_dog_rl_rank"] = int(rank)
+    if block_reason:
+        sigs["away_dog_rl_block_reason"] = block_reason
+    if total_qualifying is not None and rank is not None:
+        sigs["away_dog_rl_rank_label"] = f"{rank}/{total_qualifying}"
+
+    sg = sigs.get("_scored_game")
+    if sg is None:
+        return
+    flags = list(getattr(sg, "data_flags", None) or [])
+    if cap_blocked and rank is not None and total_qualifying is not None:
+        cap_line = (
+            f"DATA: rank {rank}/{total_qualifying} by juice — "
+            f"cap is {AWAY_DOG_RL_DAILY_CAP}"
+        )
+        if cap_line not in flags:
+            flags.append(cap_line)
+    sg = replace(
+        sg,
+        away_dog_rl_actionable=bool(actionable),
+        away_dog_rl_stake=float(stake),
+        away_dog_rl_juice_blocked=bool(juice_blocked),
+        away_dog_rl_cap_blocked=bool(cap_blocked),
+        away_dog_rl_rank=rank,
+        away_dog_rl_block_reason=block_reason,
+        data_flags=flags,
+    )
+    if actionable and getattr(sg, "best_side", None) == "away_rl":
+        sg = replace(
+            sg,
+            stake_multiplier=float(stake),
+            pick_is_actionable=True,
+            output_tier="Tier1",
+        )
+    elif cap_blocked and getattr(sg, "best_side", None) == "away_rl":
+        sg = replace(
+            sg,
+            stake_multiplier=0.0,
+            pick_is_actionable=False,
+        )
+    sigs["_scored_game"] = sg
+
+
+def apply_away_dog_rl_slate_limits(entries: list[dict]) -> dict[str, int]:
+    """
+    Post-pass: juice gate per game, then daily cap (best RL juice first).
+    Mutates ``entry['sigs']`` and ``_scored_game`` on each row.
+    """
+    seen_pk: set[int] = set()
+    fired = 0
+    juice_blocked_n = 0
+    cap_blocked_n = 0
+    staked = 0
+
+    candidates: list[dict] = []
+    for entry in entries:
+        sigs = entry.get("sigs") or {}
+        if not sigs.get("away_dog_rl_fires"):
+            continue
+        try:
+            gpk = int((entry.get("game") or {}).get("game_pk"))
+        except (TypeError, ValueError, KeyError):
+            gpk = id(entry)
+        if gpk in seen_pk:
+            continue
+        seen_pk.add(gpk)
+        fired += 1
+
+        sg = sigs.get("_scored_game")
+        juice = bool(
+            sigs.get("away_dog_rl_juice_blocked")
+            or (sg is not None and getattr(sg, "away_dog_rl_juice_blocked", False))
+        )
+        if juice:
+            juice_blocked_n += 1
+            _patch_entry_away_dog_rl(
+                entry,
+                actionable=False,
+                stake=0.0,
+                juice_blocked=True,
+                cap_blocked=False,
+                rank=None,
+                block_reason=None,
+            )
+            continue
+
+        candidates.append(entry)
+
+    candidates.sort(
+        key=lambda e: _entry_away_rl_odds(e) if _entry_away_rl_odds(e) is not None else -10_000,
+        reverse=True,
+    )
+    total_qual = len(candidates)
+
+    for rank, entry in enumerate(candidates, start=1):
+        if rank <= AWAY_DOG_RL_DAILY_CAP:
+            staked += 1
+            _patch_entry_away_dog_rl(
+                entry,
+                actionable=True,
+                stake=0.10,
+                juice_blocked=False,
+                cap_blocked=False,
+                rank=rank,
+                block_reason=None,
+                total_qualifying=total_qual,
+            )
+        else:
+            cap_blocked_n += 1
+            _patch_entry_away_dog_rl(
+                entry,
+                actionable=False,
+                stake=0.0,
+                juice_blocked=False,
+                cap_blocked=True,
+                rank=rank,
+                block_reason=(
+                    f"[Away Dog RL — daily cap reached "
+                    f"({AWAY_DOG_RL_DAILY_CAP}/{AWAY_DOG_RL_DAILY_CAP})]"
+                ),
+                total_qualifying=total_qual,
+            )
+
+    return {
+        "fired": fired,
+        "staked": staked,
+        "juice_blocked": juice_blocked_n,
+        "cap_blocked": cap_blocked_n,
+    }
 
 
 def _game_row_for_dress(game: dict[str, Any]) -> dict[str, Any]:
@@ -1985,15 +2170,18 @@ def scored_game_for_away_dog_rl_card(scored: ScoredGame) -> ScoredGame:
     away_rl_score = max(
         8, int((scored.aggregated_by_side or {}).get("away_rl", 0) or 0)
     )
+    stake = float(getattr(scored, "away_dog_rl_stake", 0.0) or 0.0)
+    actionable = bool(getattr(scored, "away_dog_rl_actionable", False))
     return replace(
         scored,
         best_side="away_rl",
         best_aggregate_score=away_rl_score,
         active_bets=[away_dog],
         top_pick=away_dog,
-        stake_multiplier=0.10,
-        pick_is_actionable=True,
-        output_tier="Tier1",
+        stake_multiplier=stake,
+        pick_is_actionable=actionable and stake > 0,
+        output_tier="Tier1" if actionable and stake > 0 else None,
+        away_dog_rl_cap_blocked=bool(getattr(scored, "away_dog_rl_cap_blocked", False)),
         tier_basis=(
             "Away Dog RL — standalone away +1.5 in low-total game "
             "(backtest 66.1% cover, n=1,059)."
@@ -2278,6 +2466,9 @@ def scored_game_to_eval_dict(scored: ScoredGame, session: str) -> dict[str, Any]
             else getattr(scored, "away_dog_rl_stake", 0.0) or 0.0
         ),
         "away_dog_rl_block_reason": getattr(scored, "away_dog_rl_block_reason", None),
+        "away_dog_rl_juice_blocked": bool(getattr(scored, "away_dog_rl_juice_blocked", False)),
+        "away_dog_rl_cap_blocked": bool(getattr(scored, "away_dog_rl_cap_blocked", False)),
+        "away_dog_rl_rank": getattr(scored, "away_dog_rl_rank", None),
         "away_rl_odds": mkt.away_rl_odds,
     }
 
