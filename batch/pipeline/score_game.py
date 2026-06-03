@@ -60,6 +60,7 @@ SIGNAL_PRIORITY: dict[str, int] = {
     "MV-F": 2,
     "LHP_FADE": 3,
     "LHP_FADE_RL": 4,
+    "AWAY_DOG_RL": 4,
     "MV-B": 5,
     "S1": 6,
     "H3b": 7,
@@ -72,6 +73,7 @@ SIGNAL_STRENGTH: dict[str, str] = {
     "H3b": "moderate",
     "LHP_FADE": "moderate",
     "LHP_FADE_RL": "moderate",
+    "AWAY_DOG_RL": "moderate",
     "OWM": "moderate",
     "S1": "weak",
 }
@@ -92,6 +94,7 @@ SIGNAL_BASE_SCORE: dict[str, int] = {
     "MV-B": 7,
     "LHP_FADE": 7,
     "LHP_FADE_RL": 6,
+    "AWAY_DOG_RL": 8,
     "OWM": 8,
     "S1": 5,
     "H3b": 3,
@@ -115,6 +118,13 @@ OWM_MIN_AWAY_STARTS = 2
 OWM_MIN_HOME_OFF_GAMES = 2
 OWM_MIN_HOME_SP_STARTS = 2
 
+# Away Dog RL signal (Tier 1 — backtest confirmed 66.1% cover, n=1059)
+AWAY_DOG_RL_ML_MIN = 101      # away ML minimum (inclusive, American odds)
+AWAY_DOG_RL_ML_MAX = 130      # away ML maximum (inclusive, American odds)
+AWAY_DOG_RL_TOTAL_MAX = 8.5   # closing total line maximum (inclusive)
+AWAY_DOG_RL_ML_NEXT_TIER_MIN = 131
+AWAY_DOG_RL_ML_NEXT_TIER_MAX = 160
+
 
 def _mvb_starter_eras(fdg: FullyDressedGame) -> tuple[float | None, float | None]:
     home_sp = fdg.matchup.home_sp
@@ -135,6 +145,7 @@ SIGNAL_DEFAULT_BET_SIDE: dict[str, str] = {
     "MV-F": "away_ml",
     "LHP_FADE": "away_ml",
     "LHP_FADE_RL": "away_rl",
+    "AWAY_DOG_RL": "away_rl",
     "NF4": "away_ml",
     "S1": "away_ml",
     "MV-B": "over_total",
@@ -150,6 +161,7 @@ SIGNAL_DISPLAY_NAME: dict[str, str] = {
     "H3b": "Wind → Over",
     "LHP_FADE": "LHP Mismatch",
     "LHP_FADE_RL": "LHP RL Edge",
+    "AWAY_DOG_RL": "Away Dog RL",
     "S1": "Streak Pressure",
     "NF4": "Pitching Edge",
     "JulyOVER": "July over boost",
@@ -712,6 +724,88 @@ def _eval_owm(g: FullyDressedGame, game_month: int) -> SignalFinding:
     )
 
 
+def _away_dog_rl_near_miss_note(
+    away_ml: int | None,
+    home_ml: int | None,
+    total_line: float | None,
+) -> str | None:
+    """Near-miss note for NO SIGNAL when away ML is in extended band but gate fails."""
+    if away_ml is None or home_ml is None:
+        return None
+    try:
+        aml = int(away_ml)
+        hml = int(home_ml)
+    except (TypeError, ValueError):
+        return None
+    if aml <= hml:
+        return None
+    if AWAY_DOG_RL_ML_MIN <= aml <= AWAY_DOG_RL_ML_MAX:
+        if total_line is not None and float(total_line) > AWAY_DOG_RL_TOTAL_MAX:
+            return (
+                f"[Away Dog RL — total {float(total_line):g} above "
+                f"{AWAY_DOG_RL_TOTAL_MAX:g} gate (need ≤ {AWAY_DOG_RL_TOTAL_MAX:g})]"
+            )
+    elif AWAY_DOG_RL_ML_NEXT_TIER_MIN <= aml <= AWAY_DOG_RL_ML_NEXT_TIER_MAX:
+        return (
+            f"[Away Dog RL — away ML +{aml} outside +101–+130 band "
+            f"(not yet implemented tier)]"
+        )
+    return None
+
+
+def _eval_away_dog_rl(g: FullyDressedGame) -> SignalFinding:
+    """
+    Standalone Away Dog RL signal.
+    Fires when away team is light underdog (+101–+130) in a low-total game (≤8.5).
+    Backtest: 66.1% cover rate, +2.2% edge vs implied, n=1059 (May–Aug 2019–2025).
+    """
+    mkt = g.market
+    away_ml = mkt.away_ml_current
+    home_ml = mkt.home_ml_current
+    total_line = mkt.total_current
+    away_rl_odds = mkt.away_rl_odds
+    away_abbr = (g.identifiers.away_team_abbr or "AWAY").strip()
+
+    fires = False
+    reason = "Away dog RL: light underdog in low-total game"
+
+    if away_ml is None or home_ml is None or total_line is None:
+        reason = "missing odds or total"
+    elif int(away_ml) <= int(home_ml):
+        reason = "away team not underdog"
+    elif not (AWAY_DOG_RL_ML_MIN <= int(away_ml) <= AWAY_DOG_RL_ML_MAX):
+        reason = f"away ML {int(away_ml)} outside +101–+130 band"
+    elif float(total_line) > AWAY_DOG_RL_TOTAL_MAX:
+        reason = (
+            f"total {float(total_line):g} above {AWAY_DOG_RL_TOTAL_MAX:g} threshold"
+        )
+    else:
+        fires = True
+        rl_note = (
+            _fmt_odds(away_rl_odds)
+            if away_rl_odds is not None
+            else "verify juice before placing"
+        )
+        reason = (
+            f"Away Dog RL — {away_abbr} light underdog ({_fmt_odds(away_ml)}) "
+            f"in low-total game ({float(total_line):g}); away +1.5 @ {rl_note}."
+        )
+
+    odds_txt = (
+        _fmt_odds(away_rl_odds)
+        if away_rl_odds is not None
+        else "+1.5 (RL odds unconfirmed)"
+    )
+    return SignalFinding(
+        signal_id="AWAY_DOG_RL",
+        signal_strength=SIGNAL_STRENGTH["AWAY_DOG_RL"],
+        bet_side="away_rl",
+        odds=odds_txt,
+        edge_basis=reason,
+        fires=fires,
+    )
+
+
 def _eval_h3b(g: FullyDressedGame, mvb_fires: bool) -> SignalFinding:
     gdb = _gdb()
     env = g.environment
@@ -1105,6 +1199,10 @@ class ScoredGame:
     eval_status: str | None = None
     # Per-market evaluation to prevent cross-market signal leakage (ML/TOTAL/RL scored independently)
     market_evals: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Standalone Away Dog RL (may co-exist with ML pick on same game)
+    away_dog_rl_actionable: bool = False
+    away_dog_rl_stake: float = 0.0
+    away_dog_rl_block_reason: str | None = None
 
 
 def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> ScoredGame:
@@ -1181,9 +1279,10 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
     mvb = _eval_mv_b(g, game_month, extra_flags)
     s1 = _eval_s1(g, home_streak, s1h2_fired)
     h3b = _eval_h3b(g, mvb.fires)
+    away_dog_rl = _eval_away_dog_rl(g)
 
     incoming = list(getattr(g, "signals", None) or [])
-    all_signals = [*incoming, s1h2, mvf, *lhp_findings, owm, mvb, s1, h3b]
+    all_signals = [*incoming, s1h2, mvf, *lhp_findings, owm, mvb, s1, h3b, away_dog_rl]
     avoids = _eval_avoids(g)
     blocked = [f for f in all_signals if not f.fires]
 
@@ -1718,6 +1817,87 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
                 )
             data_flags.append(msg)
 
+    away_dog_fired = any(
+        s.signal_id == "AWAY_DOG_RL" and s.fires for s in scored_signals
+    )
+    away_dog_rl_block_reason = _away_dog_rl_near_miss_note(
+        mkt.away_ml_current,
+        mkt.home_ml_current,
+        mkt.total_current,
+    )
+    if away_dog_rl_block_reason and not away_dog_fired:
+        data_flags.append(away_dog_rl_block_reason)
+
+    away_dog_rl_actionable = False
+    away_dog_rl_stake = 0.0
+
+    if away_dog_fired:
+        aggregated_scores["away_rl"] = max(
+            int(aggregated_scores.get("away_rl", 0) or 0), 8
+        )
+        away_rl_score = int(aggregated_scores["away_rl"])
+        away_dog_sig = next(
+            s for s in scored_signals if s.signal_id == "AWAY_DOG_RL" and s.fires
+        )
+        if away_ml is not None:
+            data_flags.append(f"away ML +{int(away_ml)} (band +101–+130)")
+        if mkt.total_current is not None:
+            data_flags.append(
+                f"total line {float(mkt.total_current):g} "
+                f"(gate ≤ {AWAY_DOG_RL_TOTAL_MAX:g})"
+            )
+        rl_odds_flag = (
+            _fmt_odds(mkt.away_rl_odds)
+            if mkt.away_rl_odds is not None
+            else "not confirmed — verify juice before placing"
+        )
+        data_flags.append(f"away RL odds {rl_odds_flag}")
+        data_flags.append(
+            "backtest cover rate 66.1% (n=1,059, May–Aug 2019–2025)"
+        )
+
+        rl_ev = market_evals.get("RL")
+        if isinstance(rl_ev, dict) and rl_ev.get("evaluated"):
+            rl_ev["edge_ok"] = True
+            rl_ev["eval_status"] = "BET"
+            rl_ev["best_side"] = "away_rl"
+            rl_ev["score"] = away_rl_score
+
+        ml_publishable = (
+            int(best_score) >= BETTING_THRESHOLD
+            and best_side in ("away_ml", "home_ml", "over_total", "under_total")
+        )
+
+        if not ml_publishable or best_side == "away_rl":
+            best_side = "away_rl"
+            best_score = away_rl_score
+            active_bets = list(buckets.get("away_rl", []) or [away_dog_sig])
+            if active_bets:
+                top_pick = max(
+                    active_bets,
+                    key=lambda s: int(getattr(s, "confidence_score", 0) or 0),
+                )
+            else:
+                top_pick = away_dog_sig
+            stake = 0.10
+            tier = "Tier1"
+            pick_is_actionable = True
+            eval_status = "BET"
+            stake_basis = (
+                "Away Dog RL — away light underdog (+101–+130) in low-total game "
+                f"(≤ {AWAY_DOG_RL_TOTAL_MAX:g}). Standalone structural RL edge "
+                "(backtest 66.1% cover, n=1,059)."
+            )
+            aggregated_scores["away_rl"] = away_rl_score
+            _align_market_evals_with_actionability(
+                market_evals,
+                pick_is_actionable=True,
+                best_side=best_side,
+            )
+        else:
+            away_dog_rl_actionable = True
+            away_dog_rl_stake = 0.10
+
     return ScoredGame(
         game=g,
         signals_fired=scored_signals,
@@ -1741,6 +1921,9 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
         edge=float(edge) if edge is not None else None,
         eval_status=eval_status,
         market_evals=market_evals,
+        away_dog_rl_actionable=away_dog_rl_actionable,
+        away_dog_rl_stake=away_dog_rl_stake,
+        away_dog_rl_block_reason=away_dog_rl_block_reason,
     )
 
 
@@ -1784,6 +1967,37 @@ def fully_dressed_from_game_dict(
         brief_session=session,
         home_streak=int(streaks.get(hid, 0)),
         away_streak=int(streaks.get(aid, 0)),
+    )
+
+
+def scored_game_for_away_dog_rl_card(scored: ScoredGame) -> ScoredGame:
+    """Overlay ``ScoredGame`` for a supplementary Away Dog RL card (0.10u)."""
+    away_dog = next(
+        (
+            s
+            for s in (scored.signals_fired or [])
+            if s.signal_id == "AWAY_DOG_RL" and s.fires
+        ),
+        None,
+    )
+    if away_dog is None:
+        return scored
+    away_rl_score = max(
+        8, int((scored.aggregated_by_side or {}).get("away_rl", 0) or 0)
+    )
+    return replace(
+        scored,
+        best_side="away_rl",
+        best_aggregate_score=away_rl_score,
+        active_bets=[away_dog],
+        top_pick=away_dog,
+        stake_multiplier=0.10,
+        pick_is_actionable=True,
+        output_tier="Tier1",
+        tier_basis=(
+            "Away Dog RL — standalone away +1.5 in low-total game "
+            "(backtest 66.1% cover, n=1,059)."
+        ),
     )
 
 
@@ -1940,6 +2154,38 @@ def scored_game_to_eval_dict(scored: ScoredGame, session: str) -> dict[str, Any]
                     "bet_side": "under_total",
                 }
                 picks.append(pick)
+            elif scored.best_side == "away_rl":
+                rl_line = mkt.away_rl_line
+                bet = (
+                    f"{ids.away_team_abbr} {rl_line:+g}"
+                    if rl_line is not None
+                    else f"{ids.away_team_abbr} +1.5"
+                )
+                rl_odds = (
+                    _fmt_odds(mkt.away_rl_odds)
+                    if mkt.away_rl_odds is not None
+                    else "verify juice"
+                )
+                pick = {
+                    "bet": bet,
+                    "market": "RL",
+                    "odds": rl_odds,
+                    "reason": reason or (top.edge_basis or ""),
+                    "priority": pr,
+                    "confidence_score": int(top.confidence_score or 0),
+                    "score_basis": top.score_basis,
+                    "signal_id": top.signal_id,
+                    "bet_side": "away_rl",
+                }
+                picks.append(pick)
+
+    away_dog_fires = any(
+        s.signal_id == "AWAY_DOG_RL" and s.fires for s in scored.signals_fired
+    )
+    if away_dog_fires and "AWAY_DOG_RL" not in internal_signal_ids:
+        internal_signal_ids.append("AWAY_DOG_RL")
+    if away_dog_fires and "Away Dog RL" not in display_signals:
+        display_signals.append("Away Dog RL")
 
     watch = False
     watch_reason = None
@@ -2016,6 +2262,23 @@ def scored_game_to_eval_dict(scored: ScoredGame, session: str) -> dict[str, Any]
         "watch": watch,
         "watch_reason": watch_reason,
         "data_flags": scored.data_flags,
+        "away_dog_rl_fires": away_dog_fires,
+        "away_dog_rl_signal": 1 if away_dog_fires else 0,
+        "away_dog_rl_actionable": bool(
+            away_dog_fires
+            and (
+                scored.pick_is_actionable
+                and scored.best_side == "away_rl"
+                or getattr(scored, "away_dog_rl_actionable", False)
+            )
+        ),
+        "away_dog_rl_stake": float(
+            scored.stake_multiplier
+            if (away_dog_fires and scored.best_side == "away_rl" and scored.pick_is_actionable)
+            else getattr(scored, "away_dog_rl_stake", 0.0) or 0.0
+        ),
+        "away_dog_rl_block_reason": getattr(scored, "away_dog_rl_block_reason", None),
+        "away_rl_odds": mkt.away_rl_odds,
     }
 
 

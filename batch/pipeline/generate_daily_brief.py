@@ -2030,7 +2030,28 @@ def get_additional_model_selections(
 
 def _entry_pick_is_actionable(entry: dict) -> bool:
     sg = (entry.get("sigs") or {}).get("_scored_game")
-    return bool(sg is not None and getattr(sg, "pick_is_actionable", False))
+    if sg is not None and getattr(sg, "pick_is_actionable", False):
+        return True
+    if bool((entry.get("sigs") or {}).get("away_dog_rl_actionable")):
+        return True
+    return False
+
+
+def _effective_stake_for_away_dog_rl_entry(entry: dict) -> float:
+    sigs = entry.get("sigs") or {}
+    if bool(sigs.get("away_dog_rl_actionable")):
+        try:
+            return float(sigs.get("away_dog_rl_stake") or 0.10)
+        except (TypeError, ValueError):
+            return 0.10
+    sg = sigs.get("_scored_game")
+    if (
+        sg is not None
+        and getattr(sg, "best_side", None) == "away_rl"
+        and getattr(sg, "pick_is_actionable", False)
+    ):
+        return float(getattr(sg, "stake_multiplier", 0.0) or 0.0)
+    return 0.0
 
 
 def _collect_additional_selection_card_map(
@@ -4792,6 +4813,7 @@ SIGNAL_LABELS = {
     "LHP_FADE_RL": "LHP RL Edge",
     "NF4": "Pitching Edge",
     "H3b": "Wind → Over",
+    "AWAY_DOG_RL": "Away Dog RL",
 }
 
 
@@ -4851,6 +4873,7 @@ def generate_why_line(signals: list) -> str:
         "H3b": "over conditions from wind",
         "LHP_FADE": "lefty/righty mismatch",
         "LHP_FADE_RL": "run line matchup edge",
+        "AWAY_DOG_RL": "away light underdog run line edge",
         "NF4": "pitching mismatch",
     }
 
@@ -4958,6 +4981,16 @@ def format_bet_block(scored_game: object, *, is_late_signal: bool = False) -> st
         signal_lines = "(none)"
 
     why_line = generate_why_line(list(getattr(scored_game, "active_bets", []) or []))
+    active_card = list(getattr(scored_game, "active_bets", []) or [])
+    away_dog_card = any(
+        str(getattr(s, "signal_id", "") or "") == "AWAY_DOG_RL"
+        and bool(getattr(s, "fires", False))
+        for s in active_card
+    )
+    if away_dog_card:
+        why_line = (
+            "WHY: Away light underdog in low-total game — structural RL edge."
+        )
     conflict_txt = ""
     for c in _signal_conflict_lines_for_card(scored_game):
         conflict_txt += f"│\n│  {c}\n"
@@ -4991,12 +5024,19 @@ def format_bet_block(scored_game: object, *, is_late_signal: bool = False) -> st
 
     if stake > 0:
         head = color_text("🔥 BET:", "green")
-        head_line = f"│  {head}  {bet_txt:<18}  [{tier_txt} · {confidence}%]"
+        tag = "  [AWAY DOG RL]" if away_dog_card and side == "away_rl" else ""
+        head_line = f"│  {head}  {bet_txt:<18}{tag}  [{tier_txt} · {confidence}%]"
         stake_line = color_text(f"│  STAKE: {stake:.2f}u  ← PLAY THIS", "green")
     else:
         head = color_text("❌ NO BET:", "dim")
         head_line = f"│  {head}  {bet_txt:<18}  [{confidence}%]"
         stake_line = color_text("│  STAKE: 0.00u  ← SKIP", "dim")
+
+    model_score_txt = (
+        "n/a"
+        if away_dog_card and side == "away_rl"
+        else str(best_score)
+    )
 
     return f"""
 ┌─────────────────────────────────────────────────────────┐
@@ -5007,7 +5047,7 @@ def format_bet_block(scored_game: object, *, is_late_signal: bool = False) -> st
 │  SIGNAL:
 {signal_lines}
 │
-│  MODEL SCORE: {best_score}
+│  MODEL SCORE: {model_score_txt}
 {stake_line}
 └─────────────────────────────────────────────────────────┘
 """.strip()
@@ -6653,8 +6693,65 @@ def build_primary_brief(games, streaks, starters, game_date,
         evaluated_entries.append(entry)
         best_score = int(sigs.get("best_aggregate_score") or 0)
         picks = list(sigs.get("picks") or [])
-        if best_score >= 5 and picks:
+        away_dog_ok = bool(sigs.get("away_dog_rl_actionable")) or (
+            bool(sigs.get("away_dog_rl_fires"))
+            and (entry.get("sigs") or {}).get("_scored_game") is not None
+            and getattr(
+                (entry.get("sigs") or {}).get("_scored_game"),
+                "pick_is_actionable",
+                False,
+            )
+            and getattr(
+                (entry.get("sigs") or {}).get("_scored_game"),
+                "best_side",
+                None,
+            )
+            == "away_rl"
+        )
+        if (best_score >= 5 and picks) or away_dog_ok:
             all_picks.append(entry)
+            sg_main = (entry.get("sigs") or {}).get("_scored_game")
+            if (
+                bool(sigs.get("away_dog_rl_actionable"))
+                and sg_main is not None
+                and getattr(sg_main, "best_side", None) != "away_rl"
+            ):
+                from batch.pipeline.score_game import scored_game_for_away_dog_rl_card
+
+                rl_sg = scored_game_for_away_dog_rl_card(sg_main)
+                rl_entry = {
+                    "game": game,
+                    "sigs": {
+                        **sigs,
+                        "_scored_game": rl_sg,
+                        "_away_dog_rl_card": True,
+                        "picks": [
+                            {
+                                "bet": (
+                                    f"{game.get('away_abbr', 'AWAY')} +1.5"
+                                ),
+                                "market": "RL",
+                                "odds": sigs.get("away_rl_odds")
+                                if sigs.get("away_rl_odds") is not None
+                                else "verify juice",
+                                "reason": (
+                                    "Away light underdog in low-total game — "
+                                    "structural RL edge."
+                                ),
+                                "priority": 4,
+                                "signal_id": "AWAY_DOG_RL",
+                                "bet_side": "away_rl",
+                            }
+                        ],
+                        "signals": ["Away Dog RL"],
+                        "signal_ids": ["AWAY_DOG_RL"],
+                        "away_dog_rl_actionable": True,
+                        "away_dog_rl_stake": 0.10,
+                    },
+                    "starter": entry["starter"],
+                    "streak": entry["streak"],
+                }
+                all_picks.append(rl_entry)
         else:
             # No published "bets to avoid" — treat no-pick games (incl. internal avoid flags) as no-signal slate
             no_signal.append(entry)
@@ -6702,6 +6799,9 @@ def build_primary_brief(games, streaks, starters, game_date,
         bet_side = str(bs or "").strip()
         if bet_side == "away_ml":
             bet_lbl = f"{(sg.game.identifiers.away_team_abbr or 'AWAY')} ML"
+        elif bet_side == "away_rl":
+            g = e.get("game") or {}
+            bet_lbl = f"{(g.get('away_abbr') or 'AWAY')} +1.5 RL"
         elif bet_side == "home_ml":
             bet_lbl = f"{(sg.game.identifiers.home_team_abbr or 'HOME')} ML"
         else:

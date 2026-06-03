@@ -41,6 +41,13 @@ OWM_OPS_THRESHOLD = 0.80
 OWM_ERA_THRESHOLD = 5.0
 OWM_HOME_SP_ERA_MAX = 4.0  # Strong SP only — backtest confirmed 66.7% win rate
 
+# Away Dog RL signal (Tier 1 — backtest confirmed 66.1% cover, n=1059)
+AWAY_DOG_RL_ML_MIN = 101
+AWAY_DOG_RL_ML_MAX = 130
+AWAY_DOG_RL_TOTAL_MAX = 8.5
+AWAY_DOG_RL_ML_NEXT_TIER_MIN = 131
+AWAY_DOG_RL_ML_NEXT_TIER_MAX = 160
+
 # Venues where Under signals are suppressed regardless of ERA.
 # These parks structurally override pitcher quality for totals.
 # Oracle Park: architecture neutralises wind (existing rule)
@@ -494,6 +501,7 @@ def compute_ou_rl_signals(df: pd.DataFrame) -> pd.DataFrame:
     )
 
     out = _apply_owm_signal(out)
+    out = _apply_away_dog_rl_signal(out)
 
     return out
 
@@ -530,6 +538,52 @@ def _apply_owm_signal(df: pd.DataFrame) -> pd.DataFrame:
         )
     out["owm_block_reason"] = block_reasons
 
+    return out
+
+
+def _apply_away_dog_rl_signal(df: pd.DataFrame) -> pd.DataFrame:
+    """Standalone Away Dog +1.5 when away ML +101–+130 and total ≤ 8.5."""
+    out = df.copy()
+    away_ml = pd.to_numeric(out.get("away_ml"), errors="coerce")
+    home_ml = pd.to_numeric(out.get("home_ml"), errors="coerce")
+    total_line = pd.to_numeric(out.get("total_line"), errors="coerce")
+
+    away_dog = away_ml.notna() & home_ml.notna() & (away_ml > home_ml)
+    band_ok = away_dog & (away_ml >= AWAY_DOG_RL_ML_MIN) & (away_ml <= AWAY_DOG_RL_ML_MAX)
+    total_ok = total_line.notna() & (total_line <= AWAY_DOG_RL_TOTAL_MAX)
+    out["away_dog_rl_signal"] = band_ok & total_ok
+    out["away_dog_rl_fires"] = out["away_dog_rl_signal"]
+
+    block_reasons: list[str] = []
+    for i in out.index:
+        if bool(out.loc[i, "away_dog_rl_signal"]):
+            block_reasons.append("")
+            continue
+        aml = away_ml.loc[i]
+        hml = home_ml.loc[i]
+        tot = total_line.loc[i]
+        if pd.isna(aml) or pd.isna(hml):
+            block_reasons.append("")
+            continue
+        if int(aml) <= int(hml):
+            block_reasons.append("")
+            continue
+        if AWAY_DOG_RL_ML_MIN <= int(aml) <= AWAY_DOG_RL_ML_MAX:
+            if pd.notna(tot) and float(tot) > AWAY_DOG_RL_TOTAL_MAX:
+                block_reasons.append(
+                    f"[Away Dog RL — total {float(tot):g} above "
+                    f"{AWAY_DOG_RL_TOTAL_MAX:g} gate (need ≤ {AWAY_DOG_RL_TOTAL_MAX:g})]"
+                )
+            else:
+                block_reasons.append("")
+        elif AWAY_DOG_RL_ML_NEXT_TIER_MIN <= int(aml) <= AWAY_DOG_RL_ML_NEXT_TIER_MAX:
+            block_reasons.append(
+                f"[Away Dog RL — away ML +{int(aml)} outside +101–+130 band "
+                f"(not yet implemented tier)]"
+            )
+        else:
+            block_reasons.append("")
+    out["away_dog_rl_block_reason"] = block_reasons
     return out
 
 
@@ -685,6 +739,11 @@ def build_report(
     under_hits = scored[scored["under_signal"]]
     rl_hits = scored[scored["rl_signal"]]
     owm_hits = scored[scored["owm_signal"]] if "owm_signal" in scored.columns else scored.iloc[0:0]
+    away_dog_hits = (
+        scored[scored["away_dog_rl_signal"]]
+        if "away_dog_rl_signal" in scored.columns
+        else scored.iloc[0:0]
+    )
 
     lines = [
         f"SCORE TODAY — {score_date}",
@@ -705,6 +764,8 @@ def build_report(
         f"── OWM signals:             {len(owm_hits)}  "
         f"(home OPS WMA >= {OWM_OPS_THRESHOLD}, away SP ERA >= {OWM_ERA_THRESHOLD}, "
         f"home SP ERA < {OWM_HOME_SP_ERA_MAX})",
+        f"── Away Dog RL signals:     {len(away_dog_hits)}  "
+        f"(away ML +{AWAY_DOG_RL_ML_MIN}–+{AWAY_DOG_RL_ML_MAX}, total ≤ {AWAY_DOG_RL_TOTAL_MAX})",
         "",
     ]
 
@@ -825,6 +886,63 @@ def build_report(
 
     lines.extend([
         "",
+        "── AWAY DOG RL SIGNAL ─────────────────────────────────────────",
+        f"Away ML +{AWAY_DOG_RL_ML_MIN}–+{AWAY_DOG_RL_ML_MAX} (inclusive)  |  "
+        f"Closing total ≤ {AWAY_DOG_RL_TOTAL_MAX}  |  Away team underdog",
+        "Backtest May–Aug 2019–2025: 66.1% cover, +2.2% edge vs implied, n=1,059",
+        "Stake: 0.10u (standalone — no ML signal required)",
+        "──────────────────────────────────────────────────────────────",
+    ])
+    if away_dog_hits.empty:
+        lines.extend([
+            "  No Away Dog RL signal today.",
+            f"  (Near-miss: away ML +{AWAY_DOG_RL_ML_MIN}–+{AWAY_DOG_RL_ML_MAX} but total > {AWAY_DOG_RL_TOTAL_MAX})",
+        ])
+    else:
+        for _, row in away_dog_hits.sort_values("away_ml").iterrows():
+            matchup = f"{row['away_team']}@{row['home_team']}"
+            aml = int(row["away_ml"])
+            tot = float(row["total_line"])
+            rl_odds = row.get("away_rl_odds")
+            if pd.notna(rl_odds):
+                rl_s = f"{int(rl_odds):+d}"
+                rl_line = (
+                    f"  ✅ GO  [{matchup}]  →  {row['away_team']} +1.5\n"
+                    f"      Away ML: +{aml}  |  Total: {tot:g}  |  RL odds: {rl_s}\n"
+                    f"      SIGNAL: Away Dog RL (standalone)\n"
+                    f"      DATA: away ML +{aml} (band +101–+130)\n"
+                    f"      DATA: total line {tot:g} (gate ≤ {AWAY_DOG_RL_TOTAL_MAX:g})\n"
+                    f"      DATA: away RL odds {rl_s}\n"
+                    f"      DATA: backtest cover rate 66.1% (n=1,059, May–Aug 2019–2025)\n"
+                    f"      STAKE: 0.10u ← PLAY THIS"
+                )
+            else:
+                rl_line = (
+                    f"  ✅ GO  [{matchup}]  →  {row['away_team']} +1.5\n"
+                    f"      Away ML: +{aml}  |  Total: {tot:g}  |  RL odds: n/a\n"
+                    f"      ⚠ RL odds not confirmed — verify juice before placing\n"
+                    f"      SIGNAL: Away Dog RL (standalone)\n"
+                    f"      DATA: away ML +{aml} (band +101–+130)\n"
+                    f"      DATA: total line {tot:g} (gate ≤ {AWAY_DOG_RL_TOTAL_MAX:g})\n"
+                    f"      DATA: backtest cover rate 66.1% (n=1,059, May–Aug 2019–2025)\n"
+                    f"      STAKE: 0.10u ← PLAY THIS"
+                )
+            lines.append(rl_line)
+
+    near_miss = scored[
+        scored.get("away_dog_rl_block_reason", pd.Series("", index=scored.index))
+        .astype(str)
+        .str.len()
+        > 0
+    ] if "away_dog_rl_block_reason" in scored.columns else scored.iloc[0:0]
+    if not near_miss.empty:
+        lines.extend(["", "  Away Dog RL near-miss:"])
+        for _, row in near_miss.sort_values("game_start_utc").iterrows():
+            matchup = f"{row['away_team']}@{row['home_team']}"
+            lines.append(f"  [{matchup}]  {row['away_dog_rl_block_reason']}")
+
+    lines.extend([
+        "",
         "── RUN LINE SIGNAL ───────────────────────────────────────────",
         "ML Favorite <= -301  |  Backtest: 57 games 2024-2025  |",
         "Cover rate: 63.2%  |  ROI: +21.1% at avg RL odds -116",
@@ -906,6 +1024,9 @@ def build_output_csv(scored: pd.DataFrame) -> pd.DataFrame:
         "rl_signal",
         "owm_signal",
         "owm_block_reason",
+        "away_dog_rl_signal",
+        "away_dog_rl_fires",
+        "away_dog_rl_block_reason",
         "wind_direction",
     ]
     existing = [c for c in cols if c in scored.columns]
@@ -917,6 +1038,7 @@ def build_output_csv(scored: pd.DataFrame) -> pd.DataFrame:
         "under_signal_strong",
         "rl_signal",
         "owm_signal",
+        "away_dog_rl_signal",
         "both_sp_known",
         "under_venue_suppressed",
     ):

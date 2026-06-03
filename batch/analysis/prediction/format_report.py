@@ -186,12 +186,13 @@ def _load_rows(score_csv_path: str | Path) -> list[dict[str, str]]:
         return list(csv.DictReader(f))
 
 
-def _signal_counts(rows: list[dict[str, str]]) -> tuple[int, int, int, int]:
+def _signal_counts(rows: list[dict[str, str]]) -> tuple[int, int, int, int, int]:
     ml = sum(1 for r in rows if _as_bool(r.get("actionable")))
     rl = sum(1 for r in rows if _as_bool(r.get("rl_signal")))
     under = sum(1 for r in rows if _as_bool(r.get("under_signal")))
     owm = sum(1 for r in rows if _as_bool(r.get("owm_signal")))
-    return ml, rl, under, owm
+    away_dog = sum(1 for r in rows if _as_bool(r.get("away_dog_rl_signal")))
+    return ml, rl, under, owm, away_dog
 
 
 def _format_odds(val: object) -> str:
@@ -272,8 +273,8 @@ def format_prediction_report(
     Plain ASCII, max ~65 chars per line, no ANSI codes.
     """
     rows = _load_rows(score_csv_path)
-    ml_count, rl_count, under_count, owm_count = _signal_counts(rows)
-    total_signals = ml_count + rl_count + under_count + owm_count
+    ml_count, rl_count, under_count, owm_count, away_dog_count = _signal_counts(rows)
+    total_signals = ml_count + rl_count + under_count + owm_count + away_dog_count
 
     dow, mon_short, day_num, month_long, year = _date_header_parts(date_str)
     subject = (
@@ -289,7 +290,8 @@ def format_prediction_report(
         "=" * 49,
         f"Model: LogReg (trained {trained_on_season})  |  Filter: >={min_games} GP",
         "-" * 49,
-        f"TODAY: {ml_count}ML  {rl_count}RL  {under_count}Under  {owm_count}OWM  signal(s) found",
+        f"TODAY: {ml_count}ML  {rl_count}RL  {away_dog_count}AwayDogRL  "
+        f"{under_count}Under  {owm_count}OWM  signal(s) found",
         "=" * 49,
         "",
         "",
@@ -401,6 +403,37 @@ def format_prediction_report(
 
     lines.extend([
         "",
+        "── AWAY DOG RL PICKS ────────────────────────────",
+        "[Away ML +101–+130 | total ≤ 8.5 | away underdog]",
+        "[Backtest May–Aug 2019–2025: 66.1% cover, n=1,059]",
+        "[Standalone 0.10u — no ML signal required]",
+        "",
+    ])
+    away_dog_rows = [r for r in rows if _as_bool(r.get("away_dog_rl_signal"))]
+    away_dog_rows.sort(key=lambda r: _as_int(r.get("away_ml")) or 0)
+    if not away_dog_rows:
+        lines.append("  No Away Dog RL picks today.")
+    else:
+        for row in away_dog_rows:
+            away = row.get("away_team", "???")
+            home = row.get("home_team", "???")
+            aml = _as_int(row.get("away_ml"))
+            tot = _as_float(row.get("total_line"))
+            rl_odds = _format_odds(row.get("away_rl_odds"))
+            tot_s = f"{tot:g}" if tot is not None else "?"
+            lines.extend([
+                f"  {away} @ {home}",
+                f"  Pick:       {away} +1.5 ({rl_odds})",
+                f"  Away ML:    +{aml}" if aml is not None else "  Away ML:    n/a",
+                f"  Total:      {tot_s}",
+                f"  SIGNAL:     Away Dog RL (standalone)",
+                f"  STAKE:      0.10u",
+                f"  Game:       {_game_time_et(row.get('game_start_utc'))}",
+                "",
+            ])
+
+    lines.extend([
+        "",
         "── OWM PICKS ────────────────────────────────────",
         "[Backtest: home OPS WMA >= 0.80 + away SP ERA >= 5.0]",
         "[Gate: home SP ERA WMA < 4.0 — Strong SP only]",
@@ -460,6 +493,8 @@ def format_prediction_report(
             continue
         if _as_bool(row.get("owm_signal")):
             continue
+        if _as_bool(row.get("away_dog_rl_signal")):
+            continue
         reason = row.get("skip_reason", "")
         if _early_season_skip(reason, min_games=min_games):
             continue
@@ -475,6 +510,9 @@ def format_prediction_report(
             edge = _pct(row.get("edge")) or 0.0
             skip = _humanize_skip(row.get("skip_reason", ""), min_games=min_games, row=row) or "No signal"
             owm_block = (row.get("owm_block_reason") or "").strip()
+            away_dog_block = (row.get("away_dog_rl_block_reason") or "").strip()
+            if away_dog_block:
+                skip = away_dog_block if skip == "No signal" else f"{skip} + {away_dog_block}"
             if owm_block:
                 skip = owm_block if skip == "No signal" else f"{skip} + {owm_block}"
             odds_clause = _no_signal_odds_clause(row, conf)
