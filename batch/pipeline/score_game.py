@@ -127,6 +127,7 @@ AWAY_DOG_RL_ML_NEXT_TIER_MAX = 160
 # Strictly better than -190: -190 passes, -191 blocks (``odds < -190``).
 AWAY_DOG_RL_MAX_JUICE = -190
 AWAY_DOG_RL_DAILY_CAP = 4
+AWAY_DOG_RL_STAKE = 0.10  # unit stake per backtest / score_today calibration
 
 
 def _mvb_starter_eras(fdg: FullyDressedGame) -> tuple[float | None, float | None]:
@@ -2081,7 +2082,7 @@ def apply_away_dog_rl_slate_limits(entries: list[dict]) -> dict[str, int]:
             _patch_entry_away_dog_rl(
                 entry,
                 actionable=True,
-                stake=0.10,
+                stake=AWAY_DOG_RL_STAKE,
                 juice_blocked=False,
                 cap_blocked=False,
                 rank=rank,

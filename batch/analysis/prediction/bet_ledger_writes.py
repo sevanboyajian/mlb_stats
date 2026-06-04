@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from batch.pipeline.bet_ledger_schema import ensure_bet_ledger_extended
+from batch.pipeline.score_game import AWAY_DOG_RL_STAKE
 
 ET = ZoneInfo("America/New_York")
 
@@ -28,7 +29,7 @@ DEFAULT_STAKE = {
     "RL": 1.0,
     "UNDER": 1.0,
     "OWM": 1.0,
-    "AWAY_DOG_RL": 0.10,
+    "AWAY_DOG_RL": AWAY_DOG_RL_STAKE,
 }
 
 
@@ -140,7 +141,13 @@ def collect_score_today_picks(scored: pd.DataFrame, score_date: str) -> list[dic
         if bool(row.get("away_dog_rl_actionable")):
             ro = row.get("away_rl_odds")
             bet = f"{away} +1.5"
-            _add("AWAY_DOG_RL", bet=bet, odds=ro, pick_side="away_rl", stake=0.10)
+            _add(
+                "AWAY_DOG_RL",
+                bet=bet,
+                odds=ro,
+                pick_side="away_rl",
+                stake=AWAY_DOG_RL_STAKE,
+            )
 
     return picks
 

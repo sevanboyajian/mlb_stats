@@ -2068,10 +2068,12 @@ def _entry_pick_is_actionable(entry: dict) -> bool:
 def _effective_stake_for_away_dog_rl_entry(entry: dict) -> float:
     sigs = entry.get("sigs") or {}
     if bool(sigs.get("away_dog_rl_actionable")):
+        from batch.pipeline.score_game import AWAY_DOG_RL_STAKE
+
         try:
-            return float(sigs.get("away_dog_rl_stake") or 0.10)
+            return float(sigs.get("away_dog_rl_stake") or AWAY_DOG_RL_STAKE)
         except (TypeError, ValueError):
-            return 0.10
+            return AWAY_DOG_RL_STAKE
     sg = sigs.get("_scored_game")
     if (
         sg is not None
@@ -2686,41 +2688,120 @@ def _ledger_latest_from_signal_rows(
     return latest
 
 
-def _ledger_signal_row_is_actionable(conn: sqlite3.Connection, game_date: str, r: sqlite3.Row) -> bool:
-    """Re-score at the row's recorded_at and require ScoredGame.pick_is_actionable (ledger/brief parity)."""
-    st = (r["signal_type"] or "").strip()
-    if st not in ("top", "next"):
-        return True
+def _get_scored_game_for_signal_row(
+    conn: sqlite3.Connection, game_date: str, r: sqlite3.Row,
+) -> object | None:
+    """Re-score at signal_state ``recorded_at`` and return ``ScoredGame`` (or None)."""
     rec_dt = _parse_recorded_at_et_ledger(r["recorded_at"])
     as_of = rec_dt if rec_dt is not None else _now_et()
     try:
         games = load_games(conn, game_date, verbose=False, as_of_dt=as_of)
     except Exception:
-        return False
+        return None
     gmap = {int(g["game_pk"]): g for g in games if g.get("game_pk") is not None}
     game = gmap.get(int(r["game_pk"]))
     if not game:
-        return False
+        return None
     try:
         team_ids = list({int(game["home_team_id"]), int(game["away_team_id"])})
     except Exception:
-        return False
+        return None
     try:
         streaks = load_streaks(conn, game_date, team_ids, verbose=False)
         starters, starter_flags = load_starters(conn, game_date, verbose=False)
     except Exception:
-        return False
+        return None
     sess = str(r["session"] or "primary").strip() or "primary"
     try:
         sigs = evaluate_signals(
             conn, game, streaks, sess, starters, starter_flags=starter_flags,
         )
     except Exception:
-        return False
-    sg = sigs.get("_scored_game")
+        return None
+    return sigs.get("_scored_game")
+
+
+def _ledger_signal_row_is_actionable(conn: sqlite3.Connection, game_date: str, r: sqlite3.Row) -> bool:
+    """Re-score at the row's recorded_at and require ScoredGame.pick_is_actionable (ledger/brief parity)."""
+    st = (r["signal_type"] or "").strip()
+    if st not in ("top", "next"):
+        return True
+    sg = _get_scored_game_for_signal_row(conn, game_date, r)
     if sg is None:
         return False
+    if bool(getattr(sg, "away_dog_rl_actionable", False)):
+        bet_u = str(r["bet"] or "").upper()
+        if str(r["market_type"] or "").lower() in ("spread", "runline") and "+1.5" in bet_u:
+            return True
     return bool(getattr(sg, "pick_is_actionable", False))
+
+
+def _snapshot_has_away_dog_rl_signal(
+    conn: sqlite3.Connection, game_date: str, game_pk: int,
+) -> bool:
+    try:
+        row = conn.execute(
+            """
+            SELECT signals_used FROM bet_snapshots
+            WHERE game_date = ? AND game_pk = ? AND market_type = 'RL'
+            LIMIT 1
+            """,
+            (game_date, int(game_pk)),
+        ).fetchone()
+        if row is None:
+            return False
+        raw = row[0] if not hasattr(row, "keys") else row["signals_used"]
+        return "AWAY_DOG_RL" in str(raw or "").upper()
+    except Exception:
+        return False
+
+
+def _ledger_stake_units_for_signal_row(
+    conn: sqlite3.Connection, game_date: str, r: sqlite3.Row,
+) -> float:
+    """Stake for bet_ledger materialization from signal_state (top/next/avoid)."""
+    from batch.pipeline.score_game import AWAY_DOG_RL_STAKE
+
+    sig_type = (r["signal_type"] or "").strip()
+    if sig_type == "avoid":
+        return 0.0
+    mt = str(r["market_type"] or "").lower()
+    bet_u = str(r["bet"] or "").upper()
+    is_away_rl_bet = mt in ("spread", "runline") and "+1.5" in bet_u
+    if is_away_rl_bet:
+        if _snapshot_has_away_dog_rl_signal(conn, game_date, int(r["game_pk"])):
+            return AWAY_DOG_RL_STAKE
+        sg = _get_scored_game_for_signal_row(conn, game_date, r)
+        if sg is not None and bool(getattr(sg, "away_dog_rl_actionable", False)):
+            return float(getattr(sg, "away_dog_rl_stake", 0.0) or AWAY_DOG_RL_STAKE)
+    sg = _get_scored_game_for_signal_row(conn, game_date, r)
+    if sg is not None:
+        if bool(getattr(sg, "away_dog_rl_actionable", False)) and is_away_rl_bet:
+            return float(getattr(sg, "away_dog_rl_stake", 0.0) or AWAY_DOG_RL_STAKE)
+        if bool(getattr(sg, "pick_is_actionable", False)):
+            sm = float(getattr(sg, "stake_multiplier", 0.0) or 0.0)
+            if sm > 0:
+                return sm
+    return 1.0 if sig_type in ("top", "next") else 0.0
+
+
+def _ledger_signal_type_for_row(
+    conn: sqlite3.Connection, game_date: str, r: sqlite3.Row, stake: float,
+) -> str | None:
+    from batch.pipeline.score_game import AWAY_DOG_RL_STAKE
+
+    if stake <= 0:
+        return None
+    mt = str(r["market_type"] or "").lower()
+    bet_u = str(r["bet"] or "").upper()
+    if mt in ("spread", "runline") and "+1.5" in bet_u:
+        if stake <= AWAY_DOG_RL_STAKE + 1e-9:
+            if _snapshot_has_away_dog_rl_signal(conn, game_date, int(r["game_pk"])):
+                return "AWAY_DOG_RL"
+            sg = _get_scored_game_for_signal_row(conn, game_date, r)
+            if sg is not None and bool(getattr(sg, "away_dog_rl_actionable", False)):
+                return "AWAY_DOG_RL"
+    return None
 
 
 def _snapshot_is_staked_bet(
@@ -2767,7 +2848,7 @@ def _insert_bet_ledger_from_snapshots(
     try:
         rows = conn.execute(
             """
-            SELECT game_pk, market_type, bet, odds_taken, placed_at
+            SELECT game_pk, market_type, bet, odds_taken, placed_at, signals_used
             FROM bet_snapshots
             WHERE game_date = ?
               AND upper(trim(coalesce(eval_status, ''))) = 'BET'
@@ -2800,14 +2881,28 @@ def _insert_bet_ledger_from_snapshots(
         placed_at = str(r["placed_at"] or "")
         tlb = _ledger_total_line_at_bet(ledger_mt, str(r["bet"] or ""))
         ledger_mv = model_version_for_brief_pick_date(game_date)
+        from batch.pipeline.score_game import AWAY_DOG_RL_STAKE
+
+        bet_u = str(r["bet"] or "").upper()
+        try:
+            sigs_raw = r["signals_used"]
+        except (KeyError, IndexError, TypeError):
+            sigs_raw = None
+        is_away_dog = (
+            snap_mt == "RL"
+            and "+1.5" in bet_u
+            and "AWAY_DOG_RL" in str(sigs_raw or "").upper()
+        )
+        snap_stake = AWAY_DOG_RL_STAKE if is_away_dog else 1.0
+        snap_signal_type = "AWAY_DOG_RL" if is_away_dog else None
         try:
             cur = conn.execute(
                 """
                 INSERT OR IGNORE INTO bet_ledger
                     (game_date, game_pk, market_type, bet, odds_taken, stake_units,
                      signal_at_time, session, placed_at, total_line_at_bet, late_signal,
-                     model_version, result, pnl_units)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                     model_version, result, pnl_units, source, signal_type)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     game_date,
@@ -2815,7 +2910,7 @@ def _insert_bet_ledger_from_snapshots(
                     ledger_mt,
                     r["bet"],
                     r["odds_taken"],
-                    1.0,
+                    snap_stake,
                     "top",
                     "primary",
                     placed_at,
@@ -2824,6 +2919,8 @@ def _insert_bet_ledger_from_snapshots(
                     ledger_mv,
                     None,
                     None,
+                    "brief",
+                    snap_signal_type,
                 ),
             )
             if getattr(cur, "rowcount", 0) == 1:
@@ -2969,7 +3066,8 @@ def _insert_bet_ledger_from_latest(
                     conn, game_date, int(r["game_pk"]), mt,
                 ):
                     continue
-        stake = 0.0 if sig_type == "avoid" else 1.0
+        stake = _ledger_stake_units_for_signal_row(conn, game_date, r)
+        ledger_signal_type = _ledger_signal_type_for_row(conn, game_date, r, stake)
         if sig_type == "avoid":
             odds_val = None
         else:
@@ -3014,8 +3112,8 @@ def _insert_bet_ledger_from_latest(
                 INSERT OR IGNORE INTO bet_ledger
                     (game_date, game_pk, market_type, bet, odds_taken, stake_units,
                      signal_at_time, session, placed_at, total_line_at_bet, late_signal,
-                     model_version, result, pnl_units)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                     model_version, result, pnl_units, source, signal_type)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     game_date,
@@ -3032,6 +3130,8 @@ def _insert_bet_ledger_from_latest(
                     ledger_mv,
                     None,
                     None,
+                    "brief",
+                    ledger_signal_type,
                 ),
             )
             if getattr(cur, "rowcount", 0) == 1:
@@ -3447,7 +3547,9 @@ def _effective_stake_for_scored_game(sg: object | None) -> float:
             return 0.0
         if getattr(sg, "best_side", None) == "away_rl":
             if bool(getattr(sg, "away_dog_rl_actionable", False)):
-                return float(getattr(sg, "away_dog_rl_stake", 0.0) or 0.0)
+                from batch.pipeline.score_game import AWAY_DOG_RL_STAKE
+
+                return float(getattr(sg, "away_dog_rl_stake", 0.0) or AWAY_DOG_RL_STAKE)
             return 0.0
         sm = float(getattr(sg, "stake_multiplier", 0.0) or 0.0)
         pa = getattr(sg, "pick_is_actionable", None)
@@ -3464,7 +3566,9 @@ def _scored_pick_stake_units(entry: dict) -> float:
     sigs = entry.get("sigs") or {}
     if sigs.get("_away_dog_rl_card"):
         if bool(sigs.get("away_dog_rl_actionable")):
-            return float(sigs.get("away_dog_rl_stake") or 0.10)
+            from batch.pipeline.score_game import AWAY_DOG_RL_STAKE
+
+            return float(sigs.get("away_dog_rl_stake") or AWAY_DOG_RL_STAKE)
         return 0.0
     return _effective_stake_for_scored_game(sigs.get("_scored_game"))
 
