@@ -1221,6 +1221,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print odds tier diagnostic table per game",
     )
+    parser.add_argument(
+        "--verify-ledger",
+        action="store_true",
+        help="After run, print bet_ledger rows for --date (dedupe diagnostic)",
+    )
     return parser.parse_args()
 
 
@@ -1277,6 +1282,12 @@ def main() -> int:
         games = load_today_games(con, score_date)
         if games.empty:
             print(f"[score_today] No unplayed games found for {score_date}")
+            if args.verify_ledger:
+                from batch.analysis.prediction.bet_ledger_writes import (
+                    verify_bet_ledger_for_date,
+                )
+
+                verify_bet_ledger_for_date(con, score_date)
             return 0
 
         odds = load_current_odds(con, games["game_pk"].tolist())
@@ -1295,6 +1306,31 @@ def main() -> int:
     )
     if args.debug:
         print_odds_tier_debug(scored)
+
+    try:
+        from batch.analysis.prediction.bet_ledger_writes import (
+            collect_score_today_picks,
+            verify_bet_ledger_for_date,
+            write_picks_to_bet_ledger,
+        )
+
+        con_ledger = db_connect(args.db)
+        try:
+            picks = collect_score_today_picks(scored, score_date)
+            stats = write_picks_to_bet_ledger(
+                con_ledger, picks, score_date=score_date,
+            )
+            err_note = f", {stats['errors']} error(s)" if stats.get("errors") else ""
+            print(
+                f"[score_today] bet_ledger: {stats['written']} picks written, "
+                f"{stats['skipped']} skipped (already in ledger){err_note}"
+            )
+            if args.verify_ledger:
+                verify_bet_ledger_for_date(con_ledger, score_date)
+        finally:
+            con_ledger.close()
+    except Exception as exc:
+        print(f"[score_today] bet_ledger write failed (non-fatal): {exc}")
 
     report = build_report(
         scored,

@@ -390,6 +390,76 @@ def _first_fire_odds_taken(
     return None
 
 
+def _norm_ledger_bet(bet: str) -> str:
+    return " ".join(str(bet or "").upper().split())
+
+
+def _dedupe_ledger_rows_for_prior_display(rows: list[dict]) -> list[dict]:
+    """
+    One graded/display row per equivalent staked pick.
+    When brief and score_today logged the same bet, keep the brief row.
+    """
+    by_key: dict[tuple[int, str, str], dict] = {}
+    for r in rows:
+        if (r.get("signal_at_time") or "").lower() == "avoid":
+            continue
+        if float(r.get("stake_units") or 0) <= 0:
+            continue
+        try:
+            gpk = int(r["game_pk"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        key = (gpk, str(r.get("market_type") or ""), _norm_ledger_bet(r.get("bet")))
+        prev = by_key.get(key)
+        if prev is None:
+            by_key[key] = r
+            continue
+        prev_src = (prev.get("source") or "brief").strip().lower()
+        new_src = (r.get("source") or "brief").strip().lower()
+        if prev_src != "brief" and new_src == "brief":
+            by_key[key] = r
+    out = list(by_key.values())
+    avoid_rows = [
+        r for r in rows
+        if (r.get("signal_at_time") or "").lower() == "avoid"
+        or float(r.get("stake_units") or 0) <= 0
+    ]
+    return out + [r for r in avoid_rows if r not in out]
+
+
+def _ledger_summary_group_key(row: dict) -> str:
+    st = (row.get("signal_type") or "").strip().upper()
+    if st == "AWAY_DOG_RL":
+        return "away_dog_rl"
+    if st == "OWM":
+        return "owm"
+    if st == "UNDER":
+        return "total"
+    if st == "RL":
+        return "spread"
+    if st == "ML":
+        return "moneyline"
+    sat = str(row.get("signal_at_time") or "")
+    if sat.startswith("score_today:"):
+        tag = sat.split(":", 1)[1].strip().upper()
+        if tag == "AWAY_DOG_RL":
+            return "away_dog_rl"
+        if tag == "OWM":
+            return "owm"
+        if tag == "UNDER":
+            return "total"
+        if tag == "RL":
+            return "spread"
+        if tag == "ML":
+            return "moneyline"
+    mt = (row.get("market_type") or "unknown").strip().lower()
+    if mt == "total":
+        return "total"
+    if mt in ("spread", "runline"):
+        return "spread"
+    return "moneyline"
+
+
 def _prior_report_ledger_hygiene(conn: sqlite3.Connection, game_date: str) -> None:
     """Backfill diagnostics, grade via grading agent, and duplicate detection."""
     import logging
@@ -441,12 +511,13 @@ def _prior_report_ledger_hygiene(conn: sqlite3.Connection, game_date: str) -> No
     try:
         dupes = conn.execute(
             """
-            SELECT game_pk, market_type, COUNT(*) AS cnt
+            SELECT game_pk, market_type, COALESCE(signal_type, bet) AS sig_key,
+                   COUNT(*) AS cnt
             FROM bet_ledger
             WHERE game_date = ?
               AND stake_units > 0
               AND lower(trim(coalesce(signal_at_time,''))) != 'avoid'
-            GROUP BY game_pk, market_type
+            GROUP BY game_pk, market_type, COALESCE(signal_type, bet)
             HAVING COUNT(*) > 1
             """,
             (game_date,),
@@ -1751,55 +1822,12 @@ def ensure_bet_ledger(conn: sqlite3.Connection) -> None:
     """Create bet_ledger table if it does not exist and enforce idempotency."""
     if not PERSIST_WRITES:
         return
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS bet_ledger (
-            id            INTEGER PRIMARY KEY,
-            game_date     TEXT,
-            game_pk       INTEGER,
-            market_type   TEXT,
-            bet           TEXT,
-            odds_taken    INTEGER,
-            stake_units   REAL,
-            signal_at_time TEXT,  -- 'top','next','avoid'
-            session       TEXT,
-            placed_at     TEXT,
-            total_line_at_bet REAL,
-            late_signal   INTEGER DEFAULT 0,
-            model_version TEXT NOT NULL DEFAULT 'legacy',
-            result        TEXT,   -- 'win','loss','push'
-            pnl_units     REAL
-        )
-    """)
-    # Allow top / next / avoid on the same (game_pk, market_type) as separate rows.
-    try:
-        conn.execute("DROP INDEX IF EXISTS idx_bet_ledger_game_market")
-    except Exception:
-        pass
-    conn.execute("""
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_bet_ledger_game_market_signal
-        ON bet_ledger (game_pk, market_type, IFNULL(signal_at_time, ''))
-    """)
+    from batch.pipeline.bet_ledger_schema import ensure_bet_ledger_extended
+
+    ensure_bet_ledger_extended(conn)
     try:
         ledger_cols = [r[1] for r in conn.execute("PRAGMA table_info(bet_ledger)").fetchall()]
         if ledger_cols:
-            if "total_line_at_bet" not in ledger_cols:
-                conn.execute("ALTER TABLE bet_ledger ADD COLUMN total_line_at_bet REAL")
-            if "late_signal" not in ledger_cols:
-                conn.execute(
-                    "ALTER TABLE bet_ledger ADD COLUMN late_signal INTEGER NOT NULL DEFAULT 0"
-                )
-            if "model_version" not in ledger_cols:
-                try:
-                    conn.execute(
-                        "ALTER TABLE bet_ledger ADD COLUMN model_version TEXT NOT NULL DEFAULT 'legacy'"
-                    )
-                except sqlite3.OperationalError:
-                    try:
-                        conn.execute(
-                            "ALTER TABLE bet_ledger ADD COLUMN model_version TEXT DEFAULT 'legacy'"
-                        )
-                    except sqlite3.OperationalError:
-                        pass
             conn.commit()
     except Exception:
         pass
@@ -5814,24 +5842,39 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
         bet_rows = conn.execute("""
             SELECT
                 id, game_pk, market_type, bet, odds_taken, stake_units,
-                signal_at_time, session, placed_at, result, pnl_units
+                signal_at_time, session, placed_at, result, pnl_units,
+                source, signal_type, pick_side
             FROM bet_ledger
             WHERE game_date = ?
             ORDER BY placed_at
         """, (game_date,)).fetchall()
         bet_rows = [dict(r) for r in bet_rows]
+        bet_rows = _dedupe_ledger_rows_for_prior_display(bet_rows)
     except Exception:
         bet_rows = []
 
-    def _ledger_signal_label(sig: str | None) -> str:
-        s = (sig or "").strip().lower()
+    def _ledger_signal_label(sig: str | None, row: dict | None = None) -> str:
+        sat = str(sig or "").strip()
+        if sat.startswith("score_today:"):
+            tag = sat.split(":", 1)[1].strip().upper()
+            if tag == "AWAY_DOG_RL":
+                return "AWAY DOG RL"
+            if tag == "OWM":
+                return "OWM"
+            return tag or "SCORE TODAY"
+        if row and (row.get("signal_type") or "").strip():
+            st = str(row["signal_type"]).strip().upper()
+            if st == "AWAY_DOG_RL":
+                return "AWAY DOG RL"
+            return st
+        s = sat.lower()
         if s == "top":
             return "TOP PICK"
         if s == "next":
             return "NEXT (additional)"
         if s == "avoid":
             return "AVOID (do not bet)"
-        return (sig or "").upper() or "—"
+        return sat.upper() or "—"
 
     def _summarise_bets(rows: list) -> dict:
         stake_rows = [
@@ -6174,6 +6217,58 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
         lines.append("")
 
     # ════════════════════════════════════════════════════════════════════
+    # STAKED PICKS — bet_ledger (score_today + brief)
+    # ════════════════════════════════════════════════════════════════════
+    gpk_to_matchup: dict[int, str] = {}
+    for e in evaluated:
+        g = e["game"]
+        try:
+            gpk_to_matchup[int(g["game_pk"])] = (
+                f"{g['away_abbr']} @ {g['home_abbr']}"
+            )
+        except (TypeError, ValueError, KeyError):
+            pass
+
+    staked_ledger = [
+        r for r in bet_rows
+        if float(r.get("stake_units") or 0) > 0
+        and (r.get("signal_at_time") or "").lower() != "avoid"
+    ]
+    if staked_ledger:
+        lines.append(section("📌  STAKED PICKS  (bet_ledger)"))
+        lines.append(
+            "  All staked rows for this date (brief + score_today). "
+            "Duplicate brief/score_today picks are collapsed.\n"
+        )
+        for r in sorted(
+            staked_ledger,
+            key=lambda x: (gpk_to_matchup.get(int(x.get("game_pk") or 0), ""), x.get("bet") or ""),
+        ):
+            try:
+                gpk = int(r["game_pk"])
+            except (TypeError, ValueError, KeyError):
+                continue
+            matchup = gpk_to_matchup.get(gpk, f"game_pk={gpk}")
+            sig_lbl = _ledger_signal_label(r.get("signal_at_time"), r)
+            src = (r.get("source") or "brief").strip()
+            res = (r.get("result") or "pending").strip()
+            pnl = r.get("pnl_units")
+            pnl_s = (
+                f"{float(pnl):+.2f}u"
+                if pnl is not None and res in ("win", "loss", "push")
+                else "—"
+            )
+            odds = r.get("odds_taken")
+            odds_s = fmt_odds(int(odds)) if odds is not None else "n/a"
+            stake = float(r.get("stake_units") or 0)
+            lines.append(
+                f"  {matchup:<14}  {str(r.get('bet') or ''):<16}  "
+                f"[{sig_lbl}]  src={src}  stake={stake:.2f}u  "
+                f"odds={odds_s}  {res.upper()}  P&L: {pnl_s}"
+            )
+        lines.append("")
+
+    # ════════════════════════════════════════════════════════════════════
     # BET LEDGER SUMMARY (P&L source of truth)
     # ════════════════════════════════════════════════════════════════════
     lines.append(color_text("\n📈  BET LEDGER SUMMARY", "bold") + color_text("\n" + ("─" * 72), "underline"))
@@ -6186,8 +6281,33 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
         )
     )
 
-    # Optional grouping by market_type
+    # Group by market_type (legacy) and signal_type (2026-06+)
+    summary_labels = {
+        "moneyline": "moneyline",
+        "spread": "spread",
+        "total": "total",
+        "away_dog_rl": "away_dog_rl",
+        "owm": "owm",
+    }
+    by_signal: dict[str, list] = {}
+    for r in bet_rows:
+        gk = _ledger_summary_group_key(r)
+        by_signal.setdefault(gk, []).append(r)
+    for gk in ("moneyline", "spread", "total", "away_dog_rl", "owm"):
+        rows_g = by_signal.get(gk) or []
+        if not rows_g:
+            continue
+        s = _summarise_bets(rows_g)
+        if s["bets"]:
+            lbl = summary_labels.get(gk, gk)
+            lines.append(
+                f"\n  {lbl:<12} {s['bets']} bet(s)  "
+                f"{s['wins']}W {s['losses']}L {s['pushes']}P   "
+                f"Units: {s['units']:+.2f}u   ROI: {s['roi']:.1f}%"
+            )
     for m, rows_m in sorted(by_market.items(), key=lambda x: x[0]):
+        if _ledger_summary_group_key(rows_m[0]) in summary_labels:
+            continue
         s = _summarise_bets(rows_m)
         if s["bets"]:
             lines.append(

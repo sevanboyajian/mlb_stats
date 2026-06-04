@@ -511,7 +511,10 @@ def grade_bet_ledger(
             )
             if graded is None:
                 continue
+            stake_mult = float(r["stake_units"] or 1.0)
             res, pnl = graded
+            if pnl is not None:
+                pnl = float(pnl) * stake_mult
         elif market == "total":
             side, parsed_line = parse_total_bet(bet_text)
             if side is None:
@@ -519,12 +522,18 @@ def grade_bet_ledger(
             line = total_line_used if total_line_used is not None else parsed_line
             if line is None:
                 continue
-            res, pnl = grade_total_side(
+            graded_total = grade_total_side(
                 side=side,
                 line=float(line),
                 runs=int(hs) + int(as_),
                 odds=r["odds_taken"],
             )
+            stake_mult = float(r["stake_units"] or 1.0)
+            if graded_total is not None:
+                res, pnl = graded_total
+                pnl = float(pnl) * stake_mult
+            else:
+                res, pnl = None, None
         elif market in ("spread", "runline"):
             team, line = parse_runline_bet(bet_text)
             if team is None or line is None:
@@ -540,7 +549,9 @@ def grade_bet_ledger(
             )
             if graded is None:
                 continue
+            stake_mult = float(r["stake_units"] or 1.0)
             res, pnl = graded
+            pnl = float(pnl) * stake_mult
         else:
             continue
 
