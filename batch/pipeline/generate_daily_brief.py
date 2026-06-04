@@ -460,6 +460,100 @@ def _ledger_summary_group_key(row: dict) -> str:
     return "moneyline"
 
 
+_PRIOR_SIGNAL_TYPE_LABELS: dict[str, str] = {
+    "AWAY_DOG_RL": "Away Dog RL",
+    "UNDER": "Under",
+    "OWM": "OWM",
+    "ML": "Moneyline",
+    "RL": "Run Line",
+}
+
+
+def _resolve_signal_label(
+    brief_pick: dict | None,
+    ledger_row: dict | None,
+) -> str:
+    """Display label for prior-report staked rows (brief pick, then bet_ledger)."""
+    if brief_pick:
+        raw = (brief_pick.get("signal_name") or brief_pick.get("signal_type") or "").strip()
+        if raw:
+            key = raw.upper()
+            return _PRIOR_SIGNAL_TYPE_LABELS.get(key, raw)
+    if ledger_row:
+        st = (ledger_row.get("signal_type") or "").strip().upper()
+        if st:
+            return _PRIOR_SIGNAL_TYPE_LABELS.get(st, st.replace("_", " ").title())
+        sat = str(ledger_row.get("signal_at_time") or "").strip()
+        if sat.startswith("score_today:"):
+            tag = sat.split(":", 1)[1].strip().upper()
+            return _PRIOR_SIGNAL_TYPE_LABELS.get(tag, tag.replace("_", " ").title())
+        sig_at = sat.lower()
+        if sig_at == "top":
+            return "TOP PICK"
+        if sig_at == "next":
+            return "NEXT (additional)"
+        if sig_at == "avoid":
+            return "AVOID (do not bet)"
+        if sat:
+            return sat.upper()
+    return "Unknown Signal"
+
+
+def _prior_snap_market_to_ledger_type(snap_market: str) -> str:
+    sm = (snap_market or "").strip().upper()
+    if sm == "ML":
+        return "moneyline"
+    if sm == "TOTAL":
+        return "total"
+    if sm == "RL":
+        return "spread"
+    return ""
+
+
+def _prior_ledger_type_to_snap_market(ledger_market: str) -> str:
+    mt = (ledger_market or "").strip().lower()
+    if mt == "moneyline":
+        return "ML"
+    if mt == "total":
+        return "TOTAL"
+    if mt in ("spread", "runline"):
+        return "RL"
+    return ""
+
+
+def _ledger_row_for_prior_snapshot(
+    game_pk: int,
+    snap_market: str,
+    bet_text: str,
+    bet_rows: list[dict],
+) -> dict | None:
+    """Match a snapshot BET line to a bet_ledger row (score_today / brief)."""
+    mt = _prior_snap_market_to_ledger_type(snap_market)
+    if not mt:
+        return None
+    bet_n = _norm_ledger_bet(bet_text)
+    candidates: list[dict] = []
+    for r in bet_rows:
+        try:
+            if int(r["game_pk"]) != int(game_pk):
+                continue
+        except (TypeError, ValueError, KeyError):
+            continue
+        if (r.get("market_type") or "").strip().lower() != mt:
+            continue
+        if float(r.get("stake_units") or 0) <= 0:
+            continue
+        if (r.get("signal_at_time") or "").lower() == "avoid":
+            continue
+        candidates.append(r)
+    for r in candidates:
+        if _norm_ledger_bet(r.get("bet")) == bet_n:
+            return r
+    if len(candidates) == 1:
+        return candidates[0]
+    return None
+
+
 def _prior_report_ledger_hygiene(conn: sqlite3.Connection, game_date: str) -> None:
     """Backfill diagnostics, grade via grading agent, and duplicate detection."""
     import logging
@@ -5957,28 +6051,7 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
     except Exception:
         bet_rows = []
 
-    def _ledger_signal_label(sig: str | None, row: dict | None = None) -> str:
-        sat = str(sig or "").strip()
-        if sat.startswith("score_today:"):
-            tag = sat.split(":", 1)[1].strip().upper()
-            if tag == "AWAY_DOG_RL":
-                return "AWAY DOG RL"
-            if tag == "OWM":
-                return "OWM"
-            return tag or "SCORE TODAY"
-        if row and (row.get("signal_type") or "").strip():
-            st = str(row["signal_type"]).strip().upper()
-            if st == "AWAY_DOG_RL":
-                return "AWAY DOG RL"
-            return st
-        s = sat.lower()
-        if s == "top":
-            return "TOP PICK"
-        if s == "next":
-            return "NEXT (additional)"
-        if s == "avoid":
-            return "AVOID (do not bet)"
-        return sat.upper() or "—"
+    shown_ledger_ids: set[int] = set()
 
     def _summarise_bets(rows: list) -> dict:
         stake_rows = [
@@ -6095,7 +6168,10 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
         if ol:
             lines.append(ol)
 
-        def _signal_display_for_snapshot(snap: dict | None) -> str:
+        def _signal_display_for_snapshot(
+            snap: dict | None,
+            ledger_row: dict | None = None,
+        ) -> str:
             if not snap:
                 return "No Signal"
             status = _snap_status(snap)
@@ -6105,9 +6181,15 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
                     import json
                     raw = snap.get("signals_used") or "[]"
                     sigs = json.loads(raw) if isinstance(raw, str) else list(raw)
-                    return ", ".join(str(x) for x in sigs) if sigs else "Signal Missing (BUG)"
+                    if sigs:
+                        parts = [
+                            _PRIOR_SIGNAL_TYPE_LABELS.get(str(x).upper(), str(x))
+                            for x in sigs
+                        ]
+                        return ", ".join(parts)
                 except Exception:
-                    return "Signal Missing (BUG)"
+                    pass
+                return _resolve_signal_label(None, ledger_row)
             if status == "SKIPPED_EDGE":
                 try:
                     return f"Weak Edge (+{float(edge)*100:.1f}%)" if edge is not None else "Weak Edge (+?.?%)"
@@ -6119,7 +6201,14 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
 
         # ML line
         ml_snap = (e.get("snapshots") or {}).get("ML")
-        ml_sig = _signal_display_for_snapshot(ml_snap)
+        ml_ledger_row = None
+        if ml_snap and _snap_status(ml_snap) == "BET":
+            ml_ledger_row = _ledger_row_for_prior_snapshot(
+                int(g["game_pk"]), "ML", str(ml_snap.get("bet") or ""), bet_rows,
+            )
+            if ml_ledger_row and ml_ledger_row.get("id") is not None:
+                shown_ledger_ids.add(int(ml_ledger_row["id"]))
+        ml_sig = _signal_display_for_snapshot(ml_snap, ml_ledger_row)
         if ml_snap and _snap_status(ml_snap) == "BET":
             bet_txt = str(ml_snap.get("bet") or "")
             odds = ml_snap.get("odds_taken")
@@ -6179,7 +6268,14 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
                 outcome_res = "PUSH"
 
             tot_snap = (e.get("snapshots") or {}).get("TOTAL")
-            tot_sig = _signal_display_for_snapshot(tot_snap)
+            tot_ledger_row = None
+            if tot_snap and _snap_status(tot_snap) == "BET":
+                tot_ledger_row = _ledger_row_for_prior_snapshot(
+                    int(g["game_pk"]), "TOTAL", str(tot_snap.get("bet") or ""), bet_rows,
+                )
+                if tot_ledger_row and tot_ledger_row.get("id") is not None:
+                    shown_ledger_ids.add(int(tot_ledger_row["id"]))
+            tot_sig = _signal_display_for_snapshot(tot_snap, tot_ledger_row)
             if tot_snap and _snap_status(tot_snap) == "BET":
                 bet_txt = str(tot_snap.get("bet") or "")
                 odds = tot_snap.get("odds_taken")
@@ -6259,7 +6355,14 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
         as_ = g.get("away_score")
 
         rl_snap = (e.get("snapshots") or {}).get("RL")
-        rl_sig = _signal_display_for_snapshot(rl_snap)
+        rl_ledger_row = None
+        if rl_snap and _snap_status(rl_snap) == "BET":
+            rl_ledger_row = _ledger_row_for_prior_snapshot(
+                int(g["game_pk"]), "RL", str(rl_snap.get("bet") or ""), bet_rows,
+            )
+            if rl_ledger_row and rl_ledger_row.get("id") is not None:
+                shown_ledger_ids.add(int(rl_ledger_row["id"]))
+        rl_sig = _signal_display_for_snapshot(rl_snap, rl_ledger_row)
         if rl_snap and _snap_status(rl_snap) == "BET":
             bet_txt = str(rl_snap.get("bet") or "")
             odds = rl_snap.get("odds_taken")
@@ -6317,6 +6420,53 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
             line = f"  NO BET  RUNLINE N/A   | SIGNAL: {rl_sig:<22} | RESULT: —         | P&L: N/A"
             lines.append(color_text(line, "dim"))
 
+        # bet_ledger rows not shown via snapshots (e.g. score_today-only picks)
+        try:
+            gpk_i = int(g["game_pk"])
+        except (TypeError, ValueError, KeyError):
+            gpk_i = None
+        if gpk_i is not None:
+            for lr in bet_rows:
+                try:
+                    lid = int(lr["id"])
+                except (TypeError, ValueError, KeyError):
+                    continue
+                if lid in shown_ledger_ids:
+                    continue
+                try:
+                    if int(lr["game_pk"]) != gpk_i:
+                        continue
+                except (TypeError, ValueError, KeyError):
+                    continue
+                if float(lr.get("stake_units") or 0) <= 0:
+                    continue
+                if (lr.get("signal_at_time") or "").lower() == "avoid":
+                    continue
+                shown_ledger_ids.add(lid)
+                bet_txt = str(lr.get("bet") or "")
+                sig_lbl = _resolve_signal_label(None, lr)
+                res_raw = (lr.get("result") or "pending").strip().lower()
+                pnl_v = lr.get("pnl_units")
+                if pnl_v is not None and res_raw in ("win", "loss", "push"):
+                    pnl_disp = pnl_str(float(pnl_v))
+                else:
+                    pnl_disp = "—"
+                res_disp = _clean_result(res_raw) if res_raw in ("win", "loss", "push") else "—"
+                snap_mkt = _prior_ledger_type_to_snap_market(str(lr.get("market_type") or ""))
+                suffix = _prior_actionable_suffix(gpk_i, snap_mkt) if snap_mkt else ""
+                lines.append("  ────────────────────────────")
+                lines.append(color_text("  🔥 ACTIONABLE BET", "bold"))
+                if res_disp == "WIN":
+                    prefix = color_text("✔ BET", "green")
+                elif res_disp == "LOSS":
+                    prefix = color_text("✘ BET", "red")
+                else:
+                    prefix = color_text("• BET", "bold")
+                lines.append(
+                    f"  {prefix}  {bet_txt:<12} | SIGNAL: {sig_lbl:<22} | "
+                    f"RESULT: {res_disp:<10} | P&L: {pnl_disp}{suffix}"
+                )
+
         # Snapshot-driven: no recomputed data_flags in PRIOR.
         lines.append("")
 
@@ -6353,7 +6503,7 @@ def build_prior_day_report(conn: sqlite3.Connection, game_date: str,
             except (TypeError, ValueError, KeyError):
                 continue
             matchup = gpk_to_matchup.get(gpk, f"game_pk={gpk}")
-            sig_lbl = _ledger_signal_label(r.get("signal_at_time"), r)
+            sig_lbl = _resolve_signal_label(None, r)
             src = (r.get("source") or "brief").strip()
             res = (r.get("result") or "pending").strip()
             pnl = r.get("pnl_units")
