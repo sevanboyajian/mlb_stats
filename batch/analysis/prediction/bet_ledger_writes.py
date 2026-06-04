@@ -212,7 +212,7 @@ def _should_skip_pick(conn: sqlite3.Connection, pick: dict[str, Any]) -> str | N
                   AND market_type = 'spread'
                   AND stake_units > 0
                   AND lower(trim(coalesce(signal_at_time, ''))) != 'avoid'
-                  AND COALESCE(source, 'brief') = 'brief'
+                  AND COALESCE(source, 'brief') IN ('brief', 'brief_late')
                   AND COALESCE(signal_type, '') IN ('RL', 'AWAY_DOG_RL')
                   AND upper(trim(bet)) = ?
                 LIMIT 1

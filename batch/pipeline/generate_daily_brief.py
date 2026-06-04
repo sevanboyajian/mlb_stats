@@ -414,9 +414,19 @@ def _dedupe_ledger_rows_for_prior_display(rows: list[dict]) -> list[dict]:
         if prev is None:
             by_key[key] = r
             continue
-        prev_src = (prev.get("source") or "brief").strip().lower()
-        new_src = (r.get("source") or "brief").strip().lower()
-        if prev_src != "brief" and new_src == "brief":
+        def _src_rank(src: str) -> int:
+            s = (src or "brief").strip().lower()
+            if s == "brief":
+                return 0
+            if s == "brief_late":
+                return 1
+            if s == "score_today":
+                return 2
+            return 3
+
+        if _src_rank((r.get("source") or "brief").strip().lower()) < _src_rank(
+            (prev.get("source") or "brief").strip().lower()
+        ):
             by_key[key] = r
     out = list(by_key.values())
     avoid_rows = [
@@ -2815,10 +2825,48 @@ def _get_scored_game_for_signal_row(
     return sigs.get("_scored_game")
 
 
+def _ledger_source_for_session(session: str | None) -> str:
+    s = (session or "").strip().lower()
+    if s == "late":
+        return "brief_late"
+    return "brief"
+
+
+def _brief_pick_confirms_staked_signal(
+    conn: sqlite3.Connection,
+    game_date: str,
+    r: sqlite3.Row,
+) -> bool:
+    """True when brief_picks records this session's staked row (late / retroactive parity)."""
+    try:
+        row = conn.execute(
+            """
+            SELECT 1 FROM brief_picks
+            WHERE game_date = ?
+              AND game_pk = ?
+              AND session = ?
+              AND trim(COALESCE(bet, '')) = trim(COALESCE(?, ''))
+              AND pick_rank >= 1
+            LIMIT 1
+            """,
+            (
+                game_date,
+                int(r["game_pk"]),
+                str(r["session"] or ""),
+                str(r["bet"] or ""),
+            ),
+        ).fetchone()
+        return row is not None
+    except Exception:
+        return False
+
+
 def _ledger_signal_row_is_actionable(conn: sqlite3.Connection, game_date: str, r: sqlite3.Row) -> bool:
     """Re-score at the row's recorded_at and require ScoredGame.pick_is_actionable (ledger/brief parity)."""
     st = (r["signal_type"] or "").strip()
     if st not in ("top", "next"):
+        return True
+    if _brief_pick_confirms_staked_signal(conn, game_date, r):
         return True
     sg = _get_scored_game_for_signal_row(conn, game_date, r)
     if sg is None:
@@ -3224,7 +3272,7 @@ def _insert_bet_ledger_from_latest(
                     ledger_mv,
                     None,
                     None,
-                    "brief",
+                    _ledger_source_for_session(str(r["session"] or "")),
                     ledger_signal_type,
                 ),
             )
@@ -3241,6 +3289,185 @@ def _insert_bet_ledger_from_latest(
                 )
         except sqlite3.OperationalError:
             continue
+    return inserted
+
+
+def _brief_pick_market_to_ledger_type(market: str | None) -> str | None:
+    m = (market or "").strip().upper()
+    if m in ("ML", "MONEYLINE"):
+        return "moneyline"
+    if m in ("TOTAL", "OU", "O/U"):
+        return "total"
+    if m in ("RL", "RUNLINE", "SPREAD"):
+        return "spread"
+    return None
+
+
+def _signal_type_from_brief_pick_signal(signal_text: str | None, market: str | None) -> str | None:
+    s = (signal_text or "").strip().upper()
+    if "AWAY DOG" in s:
+        return "AWAY_DOG_RL"
+    if s == "UNDER" or "UNDER" in s:
+        return "UNDER"
+    if s == "OWM":
+        return "OWM"
+    if m := (market or "").strip().upper():
+        if m == "RL":
+            return "RL"
+        if m == "ML":
+            return "ML"
+    return None
+
+
+def _stake_units_from_brief_pick_row(
+    conn: sqlite3.Connection,
+    game_date: str,
+    *,
+    game_pk: int,
+    market: str | None,
+    bet: str,
+    signal_text: str | None,
+) -> float:
+    from batch.pipeline.score_game import AWAY_DOG_RL_STAKE
+
+    st = _signal_type_from_brief_pick_signal(signal_text, market)
+    if st == "AWAY_DOG_RL":
+        return AWAY_DOG_RL_STAKE
+    mt = _brief_pick_market_to_ledger_type(market)
+    if mt:
+        try:
+            row = conn.execute(
+                """
+                SELECT signal_type, bet, market_type, session, recorded_at
+                FROM signal_state
+                WHERE game_date = ? AND game_pk = ?
+                  AND market_type = ?
+                  AND signal_type IN ('top', 'next')
+                ORDER BY recorded_at DESC
+                LIMIT 1
+                """,
+                (game_date, int(game_pk), mt),
+            ).fetchone()
+            if row is not None:
+                return _ledger_stake_units_for_signal_row(conn, game_date, row)
+        except Exception:
+            pass
+    return 1.0
+
+
+def materialize_bet_ledger_from_brief_picks(
+    conn: sqlite3.Connection,
+    game_date: str,
+    session: str,
+) -> int:
+    """
+    Write staked brief_picks rows to bet_ledger (no T−30 window).
+
+    Late-session picks are often recorded inside T−30 but materialized after first pitch;
+    this path mirrors what the brief already showed as staked.
+    """
+    if not PERSIST_WRITES or not session:
+        return 0
+    try:
+        ensure_bet_ledger(conn)
+    except Exception:
+        return 0
+
+    if conn.row_factory is not sqlite3.Row:
+        conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            """
+            SELECT game_pk, market, bet, odds, recorded_at, late_signal, signal
+            FROM brief_picks
+            WHERE game_date = ?
+              AND session = ?
+              AND pick_rank >= 1
+            ORDER BY pick_rank
+            """,
+            (game_date, session),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return 0
+
+    if not rows:
+        return 0
+
+    inserted = 0
+    src = _ledger_source_for_session(session)
+    ledger_mv = model_version_for_brief_pick_date(game_date)
+
+    for r in rows:
+        mt = _brief_pick_market_to_ledger_type(r["market"])
+        if not mt:
+            continue
+        try:
+            gpk = int(r["game_pk"])
+        except (TypeError, ValueError):
+            continue
+        bet = str(r["bet"] or "")
+        stake = _stake_units_from_brief_pick_row(
+            conn,
+            game_date,
+            game_pk=gpk,
+            market=r["market"],
+            bet=bet,
+            signal_text=r["signal"],
+        )
+        if stake <= 0:
+            continue
+        sig_type = _signal_type_from_brief_pick_signal(r["signal"], r["market"])
+        odds_val = r["odds"]
+        try:
+            odds_val = int(odds_val) if odds_val is not None else None
+        except (TypeError, ValueError):
+            odds_val = None
+        tlb = _ledger_total_line_at_bet(mt, bet)
+        late_sig = int(r["late_signal"] or 0)
+        pick_side = None
+        if sig_type == "AWAY_DOG_RL":
+            pick_side = "away_rl"
+        elif sig_type == "UNDER":
+            pick_side = "under_total"
+        try:
+            cur = conn.execute(
+                """
+                INSERT OR IGNORE INTO bet_ledger
+                    (game_date, game_pk, market_type, bet, odds_taken, stake_units,
+                     signal_at_time, session, placed_at, total_line_at_bet, late_signal,
+                     model_version, result, pnl_units, source, signal_type, pick_side)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    game_date,
+                    gpk,
+                    mt,
+                    bet,
+                    odds_val,
+                    float(stake),
+                    "top",
+                    session,
+                    str(r["recorded_at"] or ""),
+                    tlb,
+                    late_sig,
+                    ledger_mv,
+                    None,
+                    None,
+                    src,
+                    sig_type,
+                    pick_side,
+                ),
+            )
+            if getattr(cur, "rowcount", 0) == 1:
+                inserted += 1
+        except sqlite3.OperationalError:
+            continue
+
+    if inserted:
+        try:
+            conn.commit()
+        except Exception:
+            pass
     return inserted
 
 
@@ -9227,19 +9454,32 @@ def main():
         if args.verbose:
             print(f"  [verbose] brief_log entry written: {today} / {session} / {picks_count} picks")
 
-        # Materialize bet_ledger from signal_state inside the 30-minute pregame window.
+        # Materialize bet_ledger from signal_state (T−30 window) + brief_picks (session-wide).
         if session != "prior":
             try:
                 n_bets = generate_bets_from_signal_state(conn, today, now=now)
                 if n_bets:
-                    print(f"  ✓ bet_ledger: inserted {n_bets} row(s) from signal_state (pregame window).")
+                    print(
+                        f"  ✓ bet_ledger: inserted {n_bets} row(s) "
+                        "from signal_state (pregame window)."
+                    )
                 elif args.verbose:
                     print(
-                        "  [verbose] bet_ledger: no new rows "
-                        "(outside 30m window, duplicate game_pk+market_type, or no top/next signals)."
+                        "  [verbose] bet_ledger: no new rows from signal_state "
+                        "(outside 30m window, duplicate game_pk+market_type, or no top/next)."
                     )
             except Exception as e:
                 print(f"  ⚠  bet_ledger sync failed (non-fatal): {e}")
+            if session in ("primary", "early", "afternoon", "late"):
+                try:
+                    n_bp = materialize_bet_ledger_from_brief_picks(conn, today, session)
+                    if n_bp:
+                        print(
+                            f"  ✓ bet_ledger: inserted {n_bp} row(s) "
+                            f"from brief_picks ({session})."
+                        )
+                except Exception as e:
+                    print(f"  ⚠  bet_ledger brief_picks sync failed (non-fatal): {e}")
 
     conn.close()
     print(f"\n  Done.\n")
