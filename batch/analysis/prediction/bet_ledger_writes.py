@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from batch.pipeline.bet_ledger_schema import ensure_bet_ledger_extended
-from batch.pipeline.score_game import AWAY_DOG_RL_STAKE, OWM_STAKE
+from batch.pipeline.score_game import AWAY_DOG_RL_STAKE, BRIEF_FLAT_STAKE
 
 ET = ZoneInfo("America/New_York")
 
@@ -25,10 +25,10 @@ SIGNAL_TO_MARKET = {
 }
 
 DEFAULT_STAKE = {
-    "ML": 1.0,
-    "RL": 1.0,
-    "UNDER": 1.0,
-    "OWM": OWM_STAKE,
+    "ML": BRIEF_FLAT_STAKE,
+    "RL": BRIEF_FLAT_STAKE,
+    "UNDER": BRIEF_FLAT_STAKE,
+    "OWM": BRIEF_FLAT_STAKE,
     "AWAY_DOG_RL": AWAY_DOG_RL_STAKE,
 }
 

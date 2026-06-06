@@ -28,7 +28,6 @@ from batch.pipeline.edge_utils import (
     MV_F_CLV_GATE,
     american_to_implied_prob,
     compute_edge,
-    fractional_kelly,
     score_to_model_prob,
 )
 
@@ -128,7 +127,8 @@ AWAY_DOG_RL_ML_NEXT_TIER_MAX = 160
 AWAY_DOG_RL_MAX_JUICE = -190
 AWAY_DOG_RL_DAILY_CAP = 4
 AWAY_DOG_RL_STAKE = 0.10  # unit stake per backtest / score_today calibration
-OWM_STAKE = 1.00  # flat unit — backtest_owm assumes flat 1u per pick (not Kelly)
+BRIEF_FLAT_STAKE = 1.00  # standard brief ML/RL/total edge-gated pick (backtests use flat 1u)
+OWM_STAKE = BRIEF_FLAT_STAKE  # alias — backtest_owm assumes flat 1u per pick
 
 # Edge thresholds by session — primary raised after timing analysis (2026-06-05)
 # Backtest: primary TOP 44.4% win / -13.8% ROI vs afternoon TOP 78.6% / +42.5% ROI
@@ -1845,27 +1845,17 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
     else:
         eval_status = "NO_EDGE"
 
-    # 4) Size the bet (fractional Kelly)
-    stake_frac = 0.0
-    if edge_ok and odds is not None:
-        stake_frac = fractional_kelly(model_p, int(odds), fraction=0.25)
-
-    # 5) Override tier / stake based on edge (caps are unit-sized for now)
+    # 4) Size the bet — flat 1.00u for brief edge-gated picks (backtests use flat 1u, not Kelly).
+    # Away Dog RL uses AWAY_DOG_RL_STAKE (0.10u) via slate limits after score_game returns.
     if not edge_ok:
         tier = None
         stake = 0.0
     else:
         if edge >= EDGE_STRONG:
             tier = "Tier1"
-            stake = min(0.5, stake_frac)
         else:
             tier = "Tier2"
-            stake = min(0.25, stake_frac)
-
-    # OWM stakes flat 1.00u (backtest_owm ROI uses flat 1u wins/losses, not Kelly).
-    if edge_ok and owm_standalone_ok and not diversity_ok:
-        tier = "Tier1"
-        stake = OWM_STAKE
+        stake = BRIEF_FLAT_STAKE
 
     # Temporary debug: lower tier thresholds so we can confirm scoring is non-zero
     # even when the edge gate prevents a bet. Does not change stake sizing.
