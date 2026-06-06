@@ -129,6 +129,175 @@ AWAY_DOG_RL_MAX_JUICE = -190
 AWAY_DOG_RL_DAILY_CAP = 4
 AWAY_DOG_RL_STAKE = 0.10  # unit stake per backtest / score_today calibration
 
+# Edge thresholds by session — primary raised after timing analysis (2026-06-05)
+# Backtest: primary TOP 44.4% win / -13.8% ROI vs afternoon TOP 78.6% / +42.5% ROI
+# Closing line value erosion on 6-7 PM ET games drives the gap
+EDGE_THRESHOLD_DEFAULT = 0.10  # all sessions except primary
+EDGE_THRESHOLD_PRIMARY = 0.12  # primary session only — raised from 0.10
+PRIMARY_SESSION_NAME = "primary"
+EDGE_THRESHOLD_NEXT_DEFAULT = 0.06  # existing threshold (Clear tier)
+EDGE_THRESHOLD_NEXT_PRIMARY = 0.08  # raised for primary session
+# VALIDATION: After 30 primary session picks under new threshold,
+# compare win rate to pre-change baseline (44.4%).
+# Target: ≥ 55% win rate under new gate.
+# Revisit if primary n reaches 30 without improvement.
+
+
+def _normalize_brief_session(session: str | None) -> str:
+    return (session or "").strip().lower()
+
+
+def _edge_threshold_for_session(session: str | None) -> float:
+    """
+    Minimum edge for a TOP-tier staked pick (brief ML/RL edge-gated picks only).
+
+    Primary session uses a higher bar due to closing line value erosion.
+    Analysis (2026-06-05): primary TOP 44.4% / -13.8% ROI vs
+    afternoon TOP 78.6% / +42.5% ROI on 18 vs 14 picks.
+    """
+    if _normalize_brief_session(session) == PRIMARY_SESSION_NAME:
+        return EDGE_THRESHOLD_PRIMARY
+    return EDGE_THRESHOLD_DEFAULT
+
+
+def _next_edge_threshold_for_session(session: str | None) -> float:
+    """Minimum edge for a NEXT-tier staked pick (brief ML/RL edge-gated picks only)."""
+    if _normalize_brief_session(session) == PRIMARY_SESSION_NAME:
+        return EDGE_THRESHOLD_NEXT_PRIMARY
+    return EDGE_THRESHOLD_NEXT_DEFAULT
+
+
+def session_gate_applies_to_scored_game(sg: ScoredGame | object) -> bool:
+    """
+    True when session edge gate applies (brief-generated ML/RL where edge is primary gate).
+
+    Exempt: Away Dog RL, Under (ERA-based), OWM standalone, wind totals.
+    """
+    if bool(getattr(sg, "away_dog_rl_actionable", False)):
+        return False
+    best_side = str(getattr(sg, "best_side", "") or "")
+    if best_side == "away_rl":
+        active = list(getattr(sg, "active_bets", []) or [])
+        if any(
+            str(getattr(s, "signal_id", "") or "") == "AWAY_DOG_RL"
+            and bool(getattr(s, "fires", False))
+            for s in active
+        ):
+            return False
+    tier_basis = str(getattr(sg, "tier_basis", "") or "")
+    if "OWM signal" in tier_basis or "Staking independently" in tier_basis:
+        return False
+    if best_side == "under_total":
+        return False
+    if best_side == "over_total" and (
+        "MV-B" in tier_basis or "Wind" in tier_basis or "H3b" in tier_basis
+    ):
+        return False
+    return best_side in ("home_ml", "away_ml", "home_rl", "away_rl", "over_total")
+
+
+def evaluate_session_edge_gate(
+    sg: ScoredGame | object,
+    session: str | None,
+    rank: str,
+) -> tuple[bool, float, str | None]:
+    """
+    Returns (passes, threshold_used, block_reason).
+    rank: 'top' or 'next'
+    """
+    if not session_gate_applies_to_scored_game(sg):
+        return True, 0.0, None
+
+    edge = getattr(sg, "edge", None)
+    if edge is None:
+        return False, 0.0, None
+
+    e = float(edge)
+    sess = _normalize_brief_session(session)
+    top_thr = _edge_threshold_for_session(sess)
+    next_thr = _next_edge_threshold_for_session(sess)
+
+    if sess == PRIMARY_SESSION_NAME and EDGE_THRESHOLD_DEFAULT <= e < EDGE_THRESHOLD_PRIMARY:
+        reason = (
+            f"[Primary session gate — edge {e:.1%} below {top_thr:.0%} threshold "
+            f"(primary requires ≥12% for TOP, ≥8% for NEXT due to CLV erosion)]"
+        )
+        return False, top_thr, reason
+
+    thr = top_thr if str(rank).strip().lower() == "top" else next_thr
+    if e >= thr:
+        return True, thr, None
+
+    if sess == PRIMARY_SESSION_NAME:
+        reason = (
+            f"[Primary session gate — edge {e:.1%} below {thr:.0%} threshold "
+            f"(primary requires ≥12% for TOP, ≥8% for NEXT due to CLV erosion)]"
+        )
+    else:
+        label = "TOP" if str(rank).strip().lower() == "top" else "NEXT"
+        reason = f"[Session gate — edge {e:.1%} below {thr:.0%} threshold for {label}]"
+    return False, thr, reason
+
+
+def format_session_gate_model_line(
+    *,
+    signal_label: str,
+    score_label: str,
+    edge: float | None,
+    session: str | None,
+    threshold: float,
+    outcome: str,
+) -> str:
+    """Brief-visible MODEL line with session threshold and STAKED/DEMOTED outcome."""
+    sess = _normalize_brief_session(session) or "?"
+    edge_pct = f"{float(edge) * 100:+.1f}%" if edge is not None else "N/A"
+    thr_pct = f"{threshold * 100:.0f}%"
+    gate_note = " (primary gate)" if sess == PRIMARY_SESSION_NAME else ""
+    return (
+        f"MODEL: {signal_label} {score_label} | edge={edge_pct} | "
+        f"session={sess} | threshold={thr_pct}{gate_note} | {outcome}"
+    )
+
+
+def patch_scored_game_model_session_line(
+    sg: ScoredGame,
+    *,
+    session: str | None,
+    threshold: float,
+    outcome: str,
+) -> ScoredGame:
+    """Replace or append the MODEL: data_flags line with session gate annotation."""
+    edge = getattr(sg, "edge", None)
+    best_score_i = int(getattr(sg, "best_aggregate_score", 0) or 0)
+    fired = list(getattr(sg, "signals_fired", []) or [])
+    best_signal_id = None
+    if fired:
+        try:
+            best_sig = max(fired, key=lambda s: int(getattr(s, "confidence_score", 0) or 0))
+            best_signal_id = str(getattr(best_sig, "signal_id", "") or "").strip() or None
+        except Exception:
+            best_signal_id = None
+    signal_label = str(best_signal_id or "signal").strip() if best_score_i >= 5 else "No signal"
+    score_label = f"score={best_score_i}" if best_score_i else "score=0"
+    new_line = format_session_gate_model_line(
+        signal_label=signal_label,
+        score_label=score_label,
+        edge=float(edge) if edge is not None else None,
+        session=session,
+        threshold=threshold,
+        outcome=outcome,
+    )
+    flags = list(getattr(sg, "data_flags", []) or [])
+    replaced = False
+    for i, fl in enumerate(flags):
+        if str(fl).strip().startswith("MODEL:") or "\u26a0 MODEL:" in str(fl):
+            flags[i] = new_line
+            replaced = True
+            break
+    if not replaced:
+        flags.append(new_line)
+    return replace(sg, data_flags=flags)
+
 
 def _mvb_starter_eras(fdg: FullyDressedGame) -> tuple[float | None, float | None]:
     home_sp = fdg.matchup.home_sp

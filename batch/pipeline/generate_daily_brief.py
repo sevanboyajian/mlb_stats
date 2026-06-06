@@ -2875,7 +2875,13 @@ def _ledger_signal_row_is_actionable(conn: sqlite3.Connection, game_date: str, r
         bet_u = str(r["bet"] or "").upper()
         if str(r["market_type"] or "").lower() in ("spread", "runline") and "+1.5" in bet_u:
             return True
-    return bool(getattr(sg, "pick_is_actionable", False))
+    if not bool(getattr(sg, "pick_is_actionable", False)):
+        return False
+    from batch.pipeline.score_game import evaluate_session_edge_gate
+
+    rank = "top" if st == "top" else "next"
+    passes, _, _ = evaluate_session_edge_gate(sg, str(r["session"] or ""), rank)
+    return passes
 
 
 def _snapshot_has_away_dog_rl_signal(
@@ -3892,6 +3898,134 @@ def _scored_pick_stake_units(entry: dict) -> float:
             return float(sigs.get("away_dog_rl_stake") or AWAY_DOG_RL_STAKE)
         return 0.0
     return _effective_stake_for_scored_game(sigs.get("_scored_game"))
+
+
+def _entry_session_gate_exempt(entry: dict) -> bool:
+    """Away Dog RL supplementary cards skip session edge gate."""
+    return bool((entry.get("sigs") or {}).get("_away_dog_rl_card"))
+
+
+def _demote_entry_for_session_gate(
+    entry: dict,
+    reason: str,
+    session: str | None,
+    threshold: float,
+) -> None:
+    """Zero stake and annotate MODEL line for a session-gated demotion."""
+    from dataclasses import replace
+
+    from batch.pipeline.score_game import patch_scored_game_model_session_line
+
+    sigs = entry.setdefault("sigs", {})
+    sg = sigs.get("_scored_game")
+    if sg is None:
+        sigs["session_gate_reason"] = reason
+        return
+    new_sg = replace(sg, stake_multiplier=0.0, pick_is_actionable=False)
+    new_sg = patch_scored_game_model_session_line(
+        new_sg, session=session, threshold=threshold, outcome="DEMOTED",
+    )
+    flags = list(getattr(new_sg, "data_flags", []) or [])
+    if reason and reason not in flags:
+        flags.append(reason)
+        new_sg = replace(new_sg, data_flags=flags)
+    sigs["_scored_game"] = new_sg
+    sigs["session_gate_reason"] = reason
+
+
+def _annotate_entry_session_gate_staked(
+    entry: dict,
+    session: str | None,
+    threshold: float,
+    rank: str,
+) -> None:
+    from batch.pipeline.score_game import (
+        evaluate_session_edge_gate,
+        patch_scored_game_model_session_line,
+        session_gate_applies_to_scored_game,
+    )
+
+    sigs = entry.get("sigs") or {}
+    sg = sigs.get("_scored_game")
+    if sg is None or _entry_session_gate_exempt(entry):
+        return
+    if not session_gate_applies_to_scored_game(sg):
+        return
+    passes, thr, _ = evaluate_session_edge_gate(sg, session, rank)
+    if not passes:
+        return
+    use_thr = thr if thr > 0 else threshold
+    sigs["_scored_game"] = patch_scored_game_model_session_line(
+        sigs["_scored_game"],
+        session=session,
+        threshold=use_thr,
+        outcome="STAKED",
+    )
+
+
+def apply_session_edge_gates_to_slate(
+    all_picks: list[dict],
+    session: str | None,
+    no_signal: list[dict],
+) -> list[dict]:
+    """
+    Assign TOP/NEXT ranks with session-aware edge thresholds; demote failures to no_signal.
+
+    Only brief ML/RL edge-gated picks are gated (see score_game.session_gate_applies_to_scored_game).
+    """
+    from batch.pipeline.score_game import evaluate_session_edge_gate
+
+    staked = [e for e in all_picks if _scored_pick_stake_units(e) > 0]
+    lean = [e for e in all_picks if _scored_pick_stake_units(e) <= 0]
+    if not staked:
+        return all_picks
+
+    final_staked: list[dict] = []
+    demoted: list[dict] = []
+    remaining = list(staked)
+
+    # TOP — first remaining pick that passes the TOP threshold
+    while remaining:
+        candidate = remaining[0]
+        remaining = remaining[1:]
+        if _entry_session_gate_exempt(candidate):
+            _annotate_entry_session_gate_staked(candidate, session, 0.0, "top")
+            final_staked.append(candidate)
+            break
+        sg = (candidate.get("sigs") or {}).get("_scored_game")
+        passes, thr, reason = evaluate_session_edge_gate(sg, session, "top")
+        if passes:
+            _annotate_entry_session_gate_staked(candidate, session, thr, "top")
+            final_staked.append(candidate)
+            break
+        _demote_entry_for_session_gate(candidate, reason or "", session, thr)
+        demoted.append(candidate)
+
+    # NEXT — up to 4 additional staked picks (daily cap 5 = 1 TOP + 4 NEXT)
+    next_slots = 4
+    for candidate in remaining:
+        if next_slots <= 0:
+            break
+        if _entry_session_gate_exempt(candidate):
+            _annotate_entry_session_gate_staked(candidate, session, 0.0, "next")
+            final_staked.append(candidate)
+            next_slots -= 1
+            continue
+        sg = (candidate.get("sigs") or {}).get("_scored_game")
+        passes, thr, reason = evaluate_session_edge_gate(sg, session, "next")
+        if passes:
+            _annotate_entry_session_gate_staked(candidate, session, thr, "next")
+            final_staked.append(candidate)
+            next_slots -= 1
+        else:
+            _demote_entry_for_session_gate(candidate, reason or "", session, thr)
+            demoted.append(candidate)
+
+    gated = final_staked + lean
+    for d in demoted:
+        if d not in no_signal:
+            no_signal.append(d)
+    return gated
 
 
 def save_brief_picks(
@@ -7413,6 +7547,9 @@ def build_primary_brief(games, streaks, starters, game_date,
 
     # We'll still show lean/no-bet games, but only keep the top N actual bets.
     all_picks = kept_bets + lean_entries
+
+    # ── Session edge gate (primary TOP 12% / NEXT 8%; other sessions 10% / 6%) ─
+    all_picks = apply_session_edge_gates_to_slate(all_picks, sess_key, no_signal)
 
     # ── ACTION SUMMARY (stake > 0 only) ──────────────────────────────────
     bets_list: list[str] = []
