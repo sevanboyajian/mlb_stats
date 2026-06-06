@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from batch.pipeline.bet_ledger_schema import ensure_bet_ledger_extended
-from batch.pipeline.score_game import AWAY_DOG_RL_STAKE
+from batch.pipeline.score_game import AWAY_DOG_RL_STAKE, OWM_STAKE
 
 ET = ZoneInfo("America/New_York")
 
@@ -28,7 +28,7 @@ DEFAULT_STAKE = {
     "ML": 1.0,
     "RL": 1.0,
     "UNDER": 1.0,
-    "OWM": 1.0,
+    "OWM": OWM_STAKE,
     "AWAY_DOG_RL": AWAY_DOG_RL_STAKE,
 }
 

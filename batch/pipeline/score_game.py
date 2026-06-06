@@ -128,6 +128,7 @@ AWAY_DOG_RL_ML_NEXT_TIER_MAX = 160
 AWAY_DOG_RL_MAX_JUICE = -190
 AWAY_DOG_RL_DAILY_CAP = 4
 AWAY_DOG_RL_STAKE = 0.10  # unit stake per backtest / score_today calibration
+OWM_STAKE = 1.00  # flat unit — backtest_owm assumes flat 1u per pick (not Kelly)
 
 # Edge thresholds by session — primary raised after timing analysis (2026-06-05)
 # Backtest: primary TOP 44.4% win / -13.8% ROI vs afternoon TOP 78.6% / +42.5% ROI
@@ -1860,6 +1861,11 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
         else:
             tier = "Tier2"
             stake = min(0.25, stake_frac)
+
+    # OWM stakes flat 1.00u (backtest_owm ROI uses flat 1u wins/losses, not Kelly).
+    if edge_ok and owm_standalone_ok and not diversity_ok:
+        tier = "Tier1"
+        stake = OWM_STAKE
 
     # Temporary debug: lower tier thresholds so we can confirm scoring is non-zero
     # even when the edge gate prevents a bet. Does not change stake sizing.
