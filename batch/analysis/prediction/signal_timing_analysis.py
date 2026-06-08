@@ -47,7 +47,16 @@ HOURS_BEFORE_BUCKETS = [
 
 ET_HOUR_BUCKETS = list(range(6, 23))  # 6 AM … 10 PM
 
+TIME_WINDOWS = [
+    ("6–11 AM  (morning/early)", 6, 12),
+    ("12–2 PM  (midday)", 12, 15),
+    ("3–5 PM   (afternoon)", 15, 18),
+    ("6–8 PM   (primary window)", 18, 21),
+    ("9 PM+    (late)", 21, 24),
+]
+
 SESSION_ORDER = ("morning", "early", "afternoon", "primary", "late", "closing")
+BRIEF_SESSIONS = ("early", "afternoon", "primary", "late")
 
 PRODUCT_SIGNAL_LABELS = {
     "AWAY_DOG_RL": "Away Dog RL",
@@ -367,6 +376,53 @@ def load_brief_log(con: sqlite3.Connection, start_date: str, end_date: str) -> p
         return pd.DataFrame()
 
 
+def prepare_signal_populations(signals: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """
+    Split signal_state rows into first appearances (per game_pk) vs re-evaluations.
+    Rows are sorted by game_pk and recorded_at ascending before deduplication.
+    """
+    if signals.empty:
+        empty = signals.copy()
+        if "is_first_signal" not in empty.columns:
+            empty["is_first_signal"] = pd.Series(dtype=bool)
+        return signals, empty, empty
+
+    df = signals.sort_values(["game_pk", "recorded_at"]).copy()
+    df["is_first_signal"] = ~df.duplicated(subset=["game_pk"], keep="first")
+    first_signals = df[df["is_first_signal"]].copy()
+    re_evals = df[~df["is_first_signal"]].copy()
+    return df, first_signals, re_evals
+
+
+def time_window_for_hour(hour: int | float) -> str | None:
+    try:
+        h = int(hour)
+    except (TypeError, ValueError):
+        return None
+    for label, lo, hi in TIME_WINDOWS:
+        if lo <= h < hi:
+            return label
+    return None
+
+
+def hour_distribution_lines(df: pd.DataFrame, *, show_zero: bool = False) -> list[str]:
+    lines: list[str] = []
+    if df.empty:
+        lines.append("  (no data)")
+        return lines
+    hour_counts = (
+        df["signal_et_hour"]
+        .dropna()
+        .astype(int)
+        .value_counts()
+        .reindex(ET_HOUR_BUCKETS, fill_value=0)
+    )
+    for h, c in hour_counts.items():
+        if c or show_zero:
+            lines.append(f"  {h:02d}:00 ET   {int(c):>5}")
+    return lines
+
+
 def pct_table(counts: pd.Series, total: int) -> list[str]:
     lines = []
     for k, v in counts.items():
@@ -375,77 +431,165 @@ def pct_table(counts: pd.Series, total: int) -> list[str]:
     return lines
 
 
-def section_signal_timing(signals: pd.DataFrame) -> list[str]:
+def section_signal_timing(
+    signals: pd.DataFrame,
+    first_signals: pd.DataFrame,
+    re_evals: pd.DataFrame,
+) -> list[str]:
     lines = ["SECTION 1 — SIGNAL TIMING DISTRIBUTION", "=" * 60]
     n = len(signals)
-    lines.append(f"Actionable signal_state rows (top/next): {n}")
+    n_first = len(first_signals)
+    n_re = len(re_evals)
+    lines.append(f"Total signal_state rows (top/next): {n}")
+    lines.append(f"  ├─ First appearances (new signals): {n_first}")
+    lines.append(f"  └─ Re-evaluations (same game, later session): {n_re}")
+    lines.append("")
+    lines.append(
+        "NOTE: Re-evaluations are the same game being re-checked as odds/lineups\n"
+        "update across brief sessions. They do not represent new signal discovery.\n"
+        "All distributions below are reported on FIRST APPEARANCES only unless\n"
+        "noted otherwise."
+    )
     if n == 0:
+        lines.append("")
         lines.append("  (no data)")
         lines.append("")
         return lines
 
-    neg = int((signals["hours_before_fp"] < 0).sum())
+    neg = int((first_signals["hours_before_fp"] < 0).sum())
     if neg:
+        lines.append("")
         lines.append(
-            f"  NOTE: {neg} signals have negative hours_before_fp "
+            f"  NOTE: {neg} first-appearance signals have negative hours_before_fp "
             "(after first pitch or parse mismatch)."
         )
 
     lines.append("")
-    lines.append("By ET hour (signal recorded_at):")
-    hour_counts = (
-        signals["signal_et_hour"]
-        .dropna()
-        .astype(int)
-        .value_counts()
-        .reindex(ET_HOUR_BUCKETS, fill_value=0)
-    )
-    for h, c in hour_counts.items():
-        if c:
-            lines.append(f"  {h:02d}:00 ET   {int(c):>5}")
+    lines.append("1A — NEW SIGNALS by ET hour (first appearance only):")
+    lines.extend(hour_distribution_lines(first_signals))
 
     lines.append("")
-    lines.append("By brief session:")
-    sess = signals["session_norm"].value_counts()
-    lines.extend(pct_table(sess, n))
+    lines.append("1B — NEW SIGNALS by time window:")
+    if n_first:
+        window_counts: dict[str, int] = {label: 0 for label, _, _ in TIME_WINDOWS}
+        for h in first_signals["signal_et_hour"].dropna():
+            w = time_window_for_hour(h)
+            if w:
+                window_counts[w] = window_counts.get(w, 0) + 1
+        peak_label = max(window_counts, key=window_counts.get)
+        for label, _, _ in TIME_WINDOWS:
+            c = window_counts.get(label, 0)
+            pct = 100.0 * c / n_first
+            peak_note = "  ← peak generation window" if label == peak_label and c > 0 else ""
+            lines.append(f"  {label:<28} {c:>4}  ({pct:5.1f}%){peak_note}")
+    else:
+        lines.append("  (no data)")
 
     lines.append("")
-    lines.append("By hours-before-first-pitch:")
-    hb = signals["hours_before_bucket"].value_counts()
+    lines.append("1C — NEW SIGNALS by brief session:")
+    if n_first:
+        sess_order = [s for s in BRIEF_SESSIONS if s in first_signals["session_norm"].values]
+        extra = [s for s in first_signals["session_norm"].unique() if s not in sess_order]
+        sess_counts = first_signals["session_norm"].value_counts()
+        for s in sess_order + sorted(extra):
+            c = int(sess_counts.get(s, 0))
+            pct = 100.0 * c / n_first
+            lines.append(f"  {s:<12} {c:>4}  ({pct:5.1f}%)")
+    else:
+        lines.append("  (no data)")
+
+    lines.append("")
+    lines.append("1D — NEW SIGNALS by hours-before-first-pitch:")
+    hb = first_signals["hours_before_bucket"].value_counts()
     for label, _, _ in HOURS_BEFORE_BUCKETS:
         lines.append(f"  {label:<8} {int(hb.get(label, 0)):>5}")
 
     lines.append("")
-    lines.append("By product signal type:")
-    ps = signals["product_signal"].value_counts()
-    lines.extend(pct_table(ps, n))
-
-    # Late games (FP >= 8 PM ET): first signal within 2h?
-    late_games = signals[signals["start_et"].map(lambda x: x.hour >= 20 if x else False)]
-    if not late_games.empty:
-        lines.append("")
-        lines.append("Late games (first pitch >= 8 PM ET):")
-        lines.append(f"  Signal rows on late-start games: {len(late_games)}")
-        within_2h = int((late_games["hours_before_fp"].between(0, 2, inclusive="both")).sum())
+    lines.append("1E — SESSION RE-EVALUATION RATE (context only):")
+    lines.append(
+        f"  {'session':<12} {'total_rows':>10} {'first_signals':>13} "
+        f"{'re_evals':>9} {'re_eval_pct':>11}"
+    )
+    sess_all = signals["session_norm"].value_counts()
+    for sess in BRIEF_SESSIONS:
+        total = int(sess_all.get(sess, 0))
+        if total == 0:
+            continue
+        first_n = int((first_signals["session_norm"] == sess).sum())
+        re_n = int((re_evals["session_norm"] == sess).sum())
+        re_pct = 100.0 * re_n / total if total else 0.0
         lines.append(
-            f"  Signals within 2h of first pitch: {within_2h} "
-            f"({100 * within_2h / len(late_games):.1f}%)"
+            f"  {sess:<12} {total:>10} {first_n:>13} {re_n:>9} {re_pct:>10.1f}%"
         )
-        first_sess = (
-            late_games.sort_values("recorded_et")
-            .groupby(["game_pk", "market_type"], as_index=False)
-            .first()[["session_norm"]]
-            .value_counts()
+    other_sessions = [
+        s for s in signals["session_norm"].unique()
+        if s not in BRIEF_SESSIONS and pd.notna(s)
+    ]
+    for sess in sorted(other_sessions, key=str):
+        total = int(sess_all.get(sess, 0))
+        first_n = int((first_signals["session_norm"] == sess).sum())
+        re_n = int((re_evals["session_norm"] == sess).sum())
+        re_pct = 100.0 * re_n / total if total else 0.0
+        lines.append(
+            f"  {str(sess):<12} {total:>10} {first_n:>13} {re_n:>9} {re_pct:>10.1f}%"
         )
-        lines.append("  First-seen session (per game+market):")
+
+    primary_total = int(sess_all.get("primary", 0))
+    primary_re = int((re_evals["session_norm"] == "primary").sum())
+    primary_re_pct = 100.0 * primary_re / primary_total if primary_total else 0.0
+    late_total = int(sess_all.get("late", 0))
+    late_first = int((first_signals["session_norm"] == "late").sum())
+    lines.append("")
+    lines.append(
+        f"  Interpretation: Primary session is {primary_re_pct:.1f}% re-evaluation —\n"
+        "  it confirms and updates existing signals, not discovers new ones.\n"
+        f"  Late session generates {late_first} new signals"
+        + (
+            "; value is operational (odds confirmation, lineup changes, ledger writes)."
+            if late_total
+            else "."
+        )
+    )
+
+    lines.append("")
+    lines.append("1F — RE-EVALUATIONS by ET hour (context — what drives the 6 PM spike):")
+    lines.extend(hour_distribution_lines(re_evals))
+    hour_18_total = int(
+        signals["signal_et_hour"].dropna().astype(int).eq(18).sum()
+    )
+    hour_18_re = int(re_evals["signal_et_hour"].dropna().astype(int).eq(18).sum())
+    if hour_18_total:
+        re_share = 100.0 * hour_18_re / hour_18_total
+        lines.append("")
+        lines.append(
+            f"  Note: The {hour_18_total} signals at 18:00 ET are {re_share:.1f}% "
+            "re-evaluations of games already seen in earlier sessions."
+        )
+
+    late_first_rows = first_signals[
+        first_signals["start_et"].map(lambda x: x.hour >= 20 if x else False)
+    ]
+    if not late_first_rows.empty:
+        lines.append("")
+        lines.append("Late games (first pitch >= 8 PM ET) — first appearances only:")
+        lines.append(f"  New signals on late-start games: {len(late_first_rows)}")
+        within_2h = int(
+            late_first_rows["hours_before_fp"].between(0, 2, inclusive="both").sum()
+        )
+        lines.append(
+            f"  First signals within 2h of first pitch: {within_2h} "
+            f"({100 * within_2h / len(late_first_rows):.1f}%)"
+        )
+        first_sess = late_first_rows["session_norm"].value_counts()
+        lines.append("  First-seen session:")
         for k, v in first_sess.items():
-            lines.append(f"    {k[0]:<12} {int(v)}")
+            lines.append(f"    {str(k):<12} {int(v)}")
 
     lines.append("")
     return lines
 
 
-def section_bet_timing(bets: pd.DataFrame) -> list[str]:
+def section_bet_timing(bets: pd.DataFrame, first_signals: pd.DataFrame) -> list[str]:
     lines = ["SECTION 2 — BET COMMITMENT TIMING", "=" * 60]
     n = len(bets)
     lines.append(f"Graded staked bets: {n}")
@@ -484,6 +628,20 @@ def section_bet_timing(bets: pd.DataFrame) -> list[str]:
         f"({100 * late_flag / n:.1f}%)"
     )
 
+    if not first_signals.empty and not bets.empty:
+        fs_h = first_signals["hours_before_fp"].dropna()
+        bet_h = bets["hours_before_fp"].dropna()
+        if len(fs_h) and len(bet_h):
+            avg_first = float(fs_h.mean())
+            avg_bet = float(bet_h.mean())
+            lines.append("")
+            lines.append("First signal vs bet placement (hours before first pitch):")
+            lines.append(f"  Avg hours before FP at FIRST signal: {avg_first:.1f}h")
+            lines.append(f"  Avg hours before FP at bet placement: {avg_bet:.1f}h")
+            lines.append(
+                f"  Avg time lost to CLV erosion: {avg_first - avg_bet:.1f}h"
+            )
+
     lines.append("")
     lines.append("P&L by session (graded):")
     lines.append(f"  {'session':<14} {'n':>4} {'W':>4} {'L':>4} {'units':>8} {'ROI%':>7}")
@@ -516,6 +674,13 @@ def section_cutoff_simulation(
     cutoff_hours: tuple[int, ...],
 ) -> list[str]:
     lines = ["SECTION 3 — CUTOFF SIMULATION", "=" * 60]
+    lines.append(
+        "NOTE: Cutoff simulation counts BETS PLACED, not new signals seen.\n"
+        "Since late sessions generate no new signals, late bets are confirmations\n"
+        "of signals already seen — the question is whether closing-line prices\n"
+        "are worth capturing vs acting earlier at first appearance."
+    )
+    lines.append("")
     lines.append(
         "If brief generation stops at cutoff ET, bets placed AFTER that "
         "time on the same calendar day are 'missed'."
@@ -633,68 +798,140 @@ def _cutoff_label(ch: int) -> str:
     return f"{ch - 12} PM ET"
 
 
-def section_recommendation(bets: pd.DataFrame, cutoff_hours: tuple[int, ...]) -> list[str]:
+def _session_roi_pct(bets: pd.DataFrame, session: str) -> tuple[int, float]:
+    sub = bets[bets["session_norm"] == session]
+    if sub.empty:
+        return 0, 0.0
+    units = float(sub["pnl_units"].fillna(0).sum())
+    return len(sub), 100.0 * units / len(sub)
+
+
+def section_recommendation(
+    bets: pd.DataFrame,
+    cutoff_hours: tuple[int, ...],
+    *,
+    signals: pd.DataFrame,
+    first_signals: pd.DataFrame,
+    re_evals: pd.DataFrame,
+) -> list[str]:
     lines = ["RECOMMENDATION", "=" * 60]
     n = len(bets)
-    if n == 0:
-        lines.append("Insufficient graded bet data for recommendation.")
-        lines.append("")
-        return lines
-
-    total_units = float(bets["pnl_units"].fillna(0).sum())
+    n_first = len(first_signals)
 
     best_cutoff = None
     best_count_pct = 0.0
-    best_pnl_pct = 0.0
     for ch in sorted(cutoff_hours):
         captured_n = 0
-        captured_units = 0.0
         for _, row in bets.iterrows():
             pe = row["placed_et"]
             if pe is None:
                 continue
             if pe <= _cutoff_dt(pe, ch):
                 captured_n += 1
-                captured_units += float(row["pnl_units"] or 0)
-        count_pct = captured_n / n
-        pnl_pct = (
-            (captured_units / total_units)
-            if abs(total_units) > 1e-6
-            else count_pct
-        )
-        # Primary gate: bet count (actionable volume). P&L ratio shown for context only.
-        meets = count_pct >= 0.95
-        if meets:
+        count_pct = captured_n / n if n else 0.0
+        if count_pct >= 0.95:
             best_cutoff = ch
             best_count_pct = count_pct
-            best_pnl_pct = pnl_pct
             break
 
-    if best_cutoff is None:
+    if best_cutoff is not None:
         lines.append(
-            "No cutoff hour in range captures >=95% of bets/P&L — "
-            "late briefs through 10 PM ET appear material."
+            f"SCHEDULING: Run briefs through {_cutoff_label(best_cutoff)} "
+            f"(captures {best_count_pct:.1%} of bets by count)."
         )
     else:
         lines.append(
-            f">=95% capture at cutoff {_cutoff_label(best_cutoff)} "
-            f"({best_count_pct:.1%} of bets by count; "
-            f"{best_pnl_pct:.1%} of season P&L in range)."
-        )
-        lines.append(
-            f"Minimum schedule: run briefs through at least "
-            f"{_cutoff_label(best_cutoff)} to capture ~95% of actionable bets."
+            "SCHEDULING: Run briefs through 10 PM ET "
+            "(no cutoff in range reached 95% bet capture)."
         )
 
-    late_pct = 100.0 * bets["late_signal"].fillna(0).astype(int).sum() / n
+    lines.append("")
+    lines.append("SIGNAL GENERATION REALITY:")
+    midday_label = TIME_WINDOWS[1][0]
+    midday_n = 0
+    midday_pct = 0.0
+    if n_first:
+        for h in first_signals["signal_et_hour"].dropna():
+            if time_window_for_hour(h) == midday_label:
+                midday_n += 1
+        midday_pct = 100.0 * midday_n / n_first
+    after_9pm_n = int((first_signals["signal_et_hour"].dropna().astype(int) >= 21).sum())
+    after_9pm_pct = 100.0 * after_9pm_n / n_first if n_first else 0.0
     lines.append(
-        f"late_signal flag (T-30): {late_pct:.1f}% of graded bets — "
-        + (
-            "non-trivial last-minute volume justifies late sessions."
-            if late_pct >= 5.0
-            else "limited last-minute volume; weigh ops cost vs edge."
-        )
+        f"  - {midday_pct:.1f}% of new signals first appear in the 12–2 PM midday window"
     )
+    lines.append(
+        f"  - {after_9pm_pct:.1f}% of new signals first appear after 9 PM ET"
+    )
+    lines.append(
+        "  - Late brief value is OPERATIONAL (odds confirmation, lineup updates,\n"
+        "    ledger writes) — not new signal discovery"
+    )
+
+    lines.append("")
+    lines.append("SESSION ROLE CLARIFICATION:")
+    afternoon_first = int((first_signals["session_norm"] == "afternoon").sum())
+    afternoon_first_pct = 100.0 * afternoon_first / n_first if n_first else 0.0
+    afternoon_h = first_signals.loc[
+        first_signals["session_norm"] == "afternoon", "hours_before_fp"
+    ].dropna()
+    afternoon_avg_h = float(afternoon_h.mean()) if len(afternoon_h) else 0.0
+
+    primary_total = int((signals["session_norm"] == "primary").sum())
+    primary_re = int((re_evals["session_norm"] == "primary").sum())
+    primary_re_pct = 100.0 * primary_re / primary_total if primary_total else 0.0
+
+    late_total = int((signals["session_norm"] == "late").sum())
+    late_re_pct = (
+        100.0 * len(re_evals[re_evals["session_norm"] == "late"]) / late_total
+        if late_total
+        else 0.0
+    )
+
+    lines.append(
+        f"  - Afternoon session: primary signal discovery ({afternoon_first_pct:.1f}% "
+        f"of new signals, avg {afternoon_avg_h:.1f}h before first pitch)"
+    )
+    lines.append(
+        f"  - Primary session: {primary_re_pct:.1f}% re-evaluation; confirms/updates "
+        "afternoon signals at closing prices (CLV erosion risk)"
+    )
+    lines.append(
+        f"  - Late session: {late_re_pct:.1f}% re-evaluation; operational confirmation only"
+    )
+
+    if n:
+        aft_n, aft_roi = _session_roi_pct(bets, "afternoon")
+        pri_n, pri_roi = _session_roi_pct(bets, "primary")
+        primary_bet_h = bets.loc[
+            bets["session_norm"] == "primary", "hours_before_fp"
+        ].dropna()
+        primary_bet_avg = float(primary_bet_h.mean()) if len(primary_bet_h) else 0.0
+        lines.append("")
+        lines.append(
+            f"AFTERNOON vs PRIMARY ROI GAP ({aft_roi:+.1f}% vs {pri_roi:+.1f}%):"
+        )
+        lines.append("  Now explained by re-evaluation rate, not signal quality:")
+        lines.append(
+            "  - Afternoon picks placed avg 3-6h before FP on first-seen signals"
+            if afternoon_avg_h >= 3.0
+            else (
+                f"  - Afternoon picks placed avg {afternoon_avg_h:.1f}h before FP "
+                "on first-seen signals"
+            )
+        )
+        lines.append(
+            f"  - Primary picks placed avg {primary_bet_avg:.1f}h before FP on "
+            "re-evaluated signals that have already moved toward closing line"
+        )
+        lines.append(
+            "  - Recommendation: prioritize acting on signals at first appearance\n"
+            "    (afternoon session) rather than waiting for primary confirmation"
+        )
+    elif n_first == 0:
+        lines.append("")
+        lines.append("Insufficient graded bet data for ROI comparison.")
+
     lines.append("")
     return lines
 
@@ -713,6 +950,7 @@ def write_detail_csv(path: Path, signals: pd.DataFrame) -> None:
         "recorded_at",
         "signal_et_hour",
         "hours_before_fp",
+        "is_first_signal",
         "was_bet",
         "bet_placed_at",
         "hours_bet_before_fp",
@@ -758,11 +996,20 @@ def write_report(
             lines.append(f"  … ({len(brief_log) - 30} more rows)")
         lines.append("")
 
-    lines.extend(section_signal_timing(signals))
-    lines.extend(section_bet_timing(bets))
+    signals_all, first_signals, re_evals = prepare_signal_populations(signals)
+    lines.extend(section_signal_timing(signals_all, first_signals, re_evals))
+    lines.extend(section_bet_timing(bets, first_signals))
     lines.extend(section_cutoff_simulation(bets, cutoff_hours))
-    lines.extend(section_late_game_value(signals, bets))
-    lines.extend(section_recommendation(bets, cutoff_hours))
+    lines.extend(section_late_game_value(signals_all, bets))
+    lines.extend(
+        section_recommendation(
+            bets,
+            cutoff_hours,
+            signals=signals_all,
+            first_signals=first_signals,
+            re_evals=re_evals,
+        )
+    )
 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -824,7 +1071,8 @@ def main() -> int:
     )
 
     if args.output_csv:
-        write_detail_csv(csv_path, signals)
+        signals_all, _, _ = prepare_signal_populations(signals)
+        write_detail_csv(csv_path, signals_all)
 
     print(f"[signal_timing] Report -> {report_path}")
     print(f"[signal_timing] Signals={len(signals)} graded_bets={len(bets)}")

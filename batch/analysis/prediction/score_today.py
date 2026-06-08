@@ -1229,23 +1229,66 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _resolve_score_today_recipients() -> list[str]:
+    """
+    Recipients for score_today / prediction_engine emails.
+
+    Priority: SCORE_TODAY_EMAIL_TO → DB score_today subscription → group_brief
+    → BRIEF_EMAIL_TO / SMTP_TO (same order as run_pipeline._resolve_score_today_recipients).
+    """
+    import os
+
+    explicit = (os.getenv("SCORE_TODAY_EMAIL_TO") or "").strip()
+    if explicit:
+        return [p.strip() for p in explicit.replace(";", ",").split(",") if p.strip()]
+    try:
+        from delivery.recipient_resolver import get_recipients
+
+        rec = get_recipients("score_today") or get_recipients("group_brief")
+        if rec:
+            return rec
+    except ImportError:
+        pass
+    fallback = (os.getenv("BRIEF_EMAIL_TO") or os.getenv("SMTP_TO") or "").strip()
+    if fallback:
+        return [p.strip() for p in fallback.replace(";", ",").split(",") if p.strip()]
+    return []
+
+
 def _maybe_email_prediction_report(
     *,
-    attach_path: Path,
+    prediction_engine_path: Path,
+    score_today_path: Path,
+    csv_path: Path,
     subject: str,
     body: str,
     score_date: str,
 ) -> tuple[bool, str]:
-    """Email prediction report using the same stack as generate_daily_brief.py."""
+    """Email prediction engine report on creation; attach score_today txt + csv."""
     try:
-        from delivery.recipient_resolver import get_recipients
         from delivery.email_sender import send_report_email
 
-        recipients = get_recipients("group_brief")
+        recipients = _resolve_score_today_recipients()
         if not recipients:
-            return False, "no recipients (group_brief)"
-        print(f"[score_today] Email recipients(group_brief)={recipients}")
-        ok, msg = send_report_email(str(attach_path), subject, recipients, body=body)
+            return False, (
+                "no recipients (SCORE_TODAY_EMAIL_TO / score_today / "
+                "group_brief / BRIEF_EMAIL_TO)"
+            )
+        print(f"[score_today] Email recipients={recipients}")
+
+        extra: list[Path] = []
+        if score_today_path.is_file():
+            extra.append(score_today_path)
+        if csv_path.is_file():
+            extra.append(csv_path)
+
+        ok, msg = send_report_email(
+            str(prediction_engine_path) if prediction_engine_path.is_file() else None,
+            subject,
+            recipients,
+            body=body,
+            extra_attachment_paths=extra,
+        )
         return ok, msg
     except Exception as exc:
         return False, str(exc)
@@ -1366,7 +1409,9 @@ def main() -> int:
     if not args.no_email:
         try:
             ok, msg = _maybe_email_prediction_report(
-                attach_path=formatted_path,
+                prediction_engine_path=formatted_path,
+                score_today_path=report_path,
+                csv_path=csv_path,
                 subject=subject,
                 body=formatted_body,
                 score_date=score_date,
