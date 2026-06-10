@@ -2908,7 +2908,7 @@ def _ledger_stake_units_for_signal_row(
     conn: sqlite3.Connection, game_date: str, r: sqlite3.Row,
 ) -> float:
     """Stake for bet_ledger materialization from signal_state (top/next/avoid)."""
-    from batch.pipeline.score_game import AWAY_DOG_RL_STAKE
+    from batch.pipeline.score_game import AWAY_DOG_RL_STAKE, BRIEF_FLAT_STAKE
 
     sig_type = (r["signal_type"] or "").strip()
     if sig_type == "avoid":
@@ -2916,13 +2916,17 @@ def _ledger_stake_units_for_signal_row(
     mt = str(r["market_type"] or "").lower()
     bet_u = str(r["bet"] or "").upper()
     is_away_rl_bet = mt in ("spread", "runline") and "+1.5" in bet_u
+    is_ml_bet = mt == "moneyline" and " ML" in bet_u and "+1.5" not in bet_u
+
+    sg = _get_scored_game_for_signal_row(conn, game_date, r)
+    if is_ml_bet and sg is not None and _scored_game_is_owm_pick(sg):
+        return BRIEF_FLAT_STAKE
+
     if is_away_rl_bet:
         if _snapshot_has_away_dog_rl_signal(conn, game_date, int(r["game_pk"])):
             return AWAY_DOG_RL_STAKE
-        sg = _get_scored_game_for_signal_row(conn, game_date, r)
         if sg is not None and bool(getattr(sg, "away_dog_rl_actionable", False)):
             return float(getattr(sg, "away_dog_rl_stake", 0.0) or AWAY_DOG_RL_STAKE)
-    sg = _get_scored_game_for_signal_row(conn, game_date, r)
     if sg is not None:
         if bool(getattr(sg, "away_dog_rl_actionable", False)) and is_away_rl_bet:
             return float(getattr(sg, "away_dog_rl_stake", 0.0) or AWAY_DOG_RL_STAKE)
@@ -2930,7 +2934,7 @@ def _ledger_stake_units_for_signal_row(
             sm = float(getattr(sg, "stake_multiplier", 0.0) or 0.0)
             if sm > 0:
                 return sm
-    return 1.0 if sig_type in ("top", "next") else 0.0
+    return BRIEF_FLAT_STAKE if sig_type in ("top", "next") else 0.0
 
 
 def _ledger_signal_type_for_row(
@@ -2942,13 +2946,42 @@ def _ledger_signal_type_for_row(
         return None
     mt = str(r["market_type"] or "").lower()
     bet_u = str(r["bet"] or "").upper()
-    if mt in ("spread", "runline") and "+1.5" in bet_u:
-        if stake <= AWAY_DOG_RL_STAKE + 1e-9:
-            if _snapshot_has_away_dog_rl_signal(conn, game_date, int(r["game_pk"])):
-                return "AWAY_DOG_RL"
-            sg = _get_scored_game_for_signal_row(conn, game_date, r)
-            if sg is not None and bool(getattr(sg, "away_dog_rl_actionable", False)):
-                return "AWAY_DOG_RL"
+    is_away_rl_bet = mt in ("spread", "runline") and "+1.5" in bet_u
+    is_ml_bet = mt == "moneyline" and " ML" in bet_u and "+1.5" not in bet_u
+
+    if is_ml_bet:
+        sg = _get_scored_game_for_signal_row(conn, game_date, r)
+        if sg is not None and _scored_game_is_owm_pick(sg):
+            return "OWM"
+        try:
+            bp = conn.execute(
+                """
+                SELECT signal FROM brief_picks
+                WHERE game_date = ? AND game_pk = ?
+                  AND TRIM(COALESCE(bet, '')) = TRIM(COALESCE(?, ''))
+                  AND pick_rank >= 1
+                ORDER BY recorded_at DESC
+                LIMIT 1
+                """,
+                (game_date, int(r["game_pk"]), str(r["bet"] or "")),
+            ).fetchone()
+            if bp is not None:
+                inferred = _signal_type_from_brief_pick_signal(
+                    bp[0] if not hasattr(bp, "keys") else bp["signal"],
+                    "ML",
+                    str(r["bet"] or ""),
+                )
+                if inferred:
+                    return inferred
+        except Exception:
+            pass
+
+    if is_away_rl_bet and stake <= AWAY_DOG_RL_STAKE + 1e-9:
+        if _snapshot_has_away_dog_rl_signal(conn, game_date, int(r["game_pk"])):
+            return "AWAY_DOG_RL"
+        sg = _get_scored_game_for_signal_row(conn, game_date, r)
+        if sg is not None and bool(getattr(sg, "away_dog_rl_actionable", False)):
+            return "AWAY_DOG_RL"
     return None
 
 
@@ -3041,8 +3074,21 @@ def _insert_bet_ledger_from_snapshots(
             and "+1.5" in bet_u
             and "AWAY_DOG_RL" in str(sigs_raw or "").upper()
         )
-        snap_stake = AWAY_DOG_RL_STAKE if is_away_dog else 1.0
-        snap_signal_type = "AWAY_DOG_RL" if is_away_dog else None
+        is_owm_ml = (
+            snap_mt == "ML"
+            and " ML" in bet_u
+            and "+1.5" not in bet_u
+            and "OWM" in str(sigs_raw or "").upper()
+        )
+        if is_away_dog:
+            snap_stake = AWAY_DOG_RL_STAKE
+            snap_signal_type = "AWAY_DOG_RL"
+        elif is_owm_ml:
+            snap_stake = 1.0
+            snap_signal_type = "OWM"
+        else:
+            snap_stake = 1.0
+            snap_signal_type = None
         try:
             cur = conn.execute(
                 """
@@ -3309,20 +3355,54 @@ def _brief_pick_market_to_ledger_type(market: str | None) -> str | None:
     return None
 
 
-def _signal_type_from_brief_pick_signal(signal_text: str | None, market: str | None) -> str | None:
+def _signal_type_from_brief_pick_signal(
+    signal_text: str | None,
+    market: str | None,
+    bet: str | None = None,
+) -> str | None:
+    """
+    Map brief_picks.signal text to bet_ledger signal_type.
+
+    Co-listed signals (e.g. ``OWM, Away Dog RL``) must follow the actual bet:
+    ML home picks are OWM; only ``+1.5`` / RL market rows are Away Dog RL.
+    """
     s = (signal_text or "").strip().upper()
-    if "AWAY DOG" in s:
+    bet_u = (bet or "").strip().upper()
+    m = (market or "").strip().upper()
+    is_rl_bet = "+1.5" in bet_u or m in ("RL", "RUNLINE", "SPREAD")
+    is_ml_bet = m in ("ML", "MONEYLINE") or (" ML" in bet_u and not is_rl_bet)
+
+    if is_ml_bet and "OWM" in s:
+        return "OWM"
+    if is_rl_bet and ("AWAY DOG" in s or "AWAY_DOG_RL" in s):
         return "AWAY_DOG_RL"
     if s == "UNDER" or "UNDER" in s:
         return "UNDER"
-    if s == "OWM":
+    if "OWM" in s:
         return "OWM"
-    if m := (market or "").strip().upper():
-        if m == "RL":
-            return "RL"
-        if m == "ML":
-            return "ML"
+    if "AWAY DOG" in s:
+        return "AWAY_DOG_RL"
+    if m == "RL":
+        return "RL"
+    if m == "ML":
+        return "ML"
     return None
+
+
+def _scored_game_is_owm_pick(sg: object) -> bool:
+    """True when the staked brief pick is an OWM standalone home ML card."""
+    tier_basis = str(getattr(sg, "tier_basis", "") or "")
+    if "OWM signal" in tier_basis:
+        return True
+    if str(getattr(sg, "best_side", "") or "") != "home_ml":
+        return False
+    for s in getattr(sg, "active_bets", []) or []:
+        if (
+            str(getattr(s, "signal_id", "") or "") == "OWM"
+            and bool(getattr(s, "fires", False))
+        ):
+            return True
+    return False
 
 
 def _stake_units_from_brief_pick_row(
@@ -3336,7 +3416,11 @@ def _stake_units_from_brief_pick_row(
 ) -> float:
     from batch.pipeline.score_game import AWAY_DOG_RL_STAKE
 
-    st = _signal_type_from_brief_pick_signal(signal_text, market)
+    st = _signal_type_from_brief_pick_signal(signal_text, market, bet)
+    if st == "OWM":
+        from batch.pipeline.score_game import BRIEF_FLAT_STAKE
+
+        return BRIEF_FLAT_STAKE
     if st == "AWAY_DOG_RL":
         return AWAY_DOG_RL_STAKE
     mt = _brief_pick_market_to_ledger_type(market)
@@ -3422,7 +3506,7 @@ def materialize_bet_ledger_from_brief_picks(
         )
         if stake <= 0:
             continue
-        sig_type = _signal_type_from_brief_pick_signal(r["signal"], r["market"])
+        sig_type = _signal_type_from_brief_pick_signal(r["signal"], r["market"], bet)
         odds_val = r["odds"]
         try:
             odds_val = int(odds_val) if odds_val is not None else None
@@ -3431,7 +3515,9 @@ def materialize_bet_ledger_from_brief_picks(
         tlb = _ledger_total_line_at_bet(mt, bet)
         late_sig = int(r["late_signal"] or 0)
         pick_side = None
-        if sig_type == "AWAY_DOG_RL":
+        if sig_type == "OWM":
+            pick_side = "home_ml"
+        elif sig_type == "AWAY_DOG_RL":
             pick_side = "away_rl"
         elif sig_type == "UNDER":
             pick_side = "under_total"

@@ -72,7 +72,52 @@ def ensure_bet_ledger_extended(conn: sqlite3.Connection) -> None:
     except sqlite3.OperationalError:
         pass
     repair_away_dog_rl_stake_units(conn)
+    repair_owm_ledger_classification(conn)
     conn.commit()
+
+
+def repair_owm_ledger_classification(conn: sqlite3.Connection) -> int:
+    """
+    Fix OWM home-ML picks misclassified as AWAY_DOG_RL at 0.10u.
+
+    True Away Dog RL: ``+1.5`` run line, away underdog band. OWM: home ``TEAM ML``.
+    Co-listed brief signals (``OWM, Away Dog RL``) must not route ML rows to RL stake.
+    """
+    from batch.pipeline.score_game import AWAY_DOG_RL_STAKE, BRIEF_FLAT_STAKE
+
+    try:
+        cur = conn.execute(
+            """
+            UPDATE bet_ledger
+            SET signal_type = 'OWM',
+                pick_side = CASE
+                    WHEN pick_side IN ('home_ml', 'away_ml') THEN pick_side
+                    ELSE 'home_ml'
+                END,
+                stake_units = ?,
+                pnl_units = CASE
+                    WHEN lower(trim(coalesce(result, ''))) = 'loss' THEN -1.0
+                    WHEN lower(trim(coalesce(result, ''))) = 'push' THEN 0.0
+                    WHEN lower(trim(coalesce(result, ''))) = 'win'
+                         AND pnl_units IS NOT NULL
+                         AND stake_units > 0
+                    THEN ROUND(pnl_units * (? / stake_units), 4)
+                    ELSE pnl_units
+                END
+            WHERE signal_type = 'AWAY_DOG_RL'
+              AND stake_units <= ?
+              AND upper(trim(bet)) LIKE '% ML'
+              AND upper(trim(bet)) NOT LIKE '%+1.5%'
+            """,
+            (
+                BRIEF_FLAT_STAKE,
+                BRIEF_FLAT_STAKE,
+                AWAY_DOG_RL_STAKE + 1e-9,
+            ),
+        )
+        return int(getattr(cur, "rowcount", 0) or 0)
+    except sqlite3.OperationalError:
+        return 0
 
 
 def repair_away_dog_rl_stake_units(conn: sqlite3.Connection) -> int:
@@ -122,3 +167,46 @@ def repair_away_dog_rl_stake_units(conn: sqlite3.Connection) -> int:
         return int(getattr(cur, "rowcount", 0) or 0)
     except sqlite3.OperationalError:
         return 0
+
+
+def run_repairs(conn: sqlite3.Connection) -> dict[str, int]:
+    """Run all idempotent bet_ledger repairs."""
+    ensure_bet_ledger_extended(conn)
+    away = repair_away_dog_rl_stake_units(conn)
+    owm = repair_owm_ledger_classification(conn)
+    conn.commit()
+    return {"away_dog_rl": away, "owm": owm}
+
+
+if __name__ == "__main__":
+    import argparse
+    import sys
+    from pathlib import Path
+
+    _root = Path(__file__).resolve().parents[2]
+    if str(_root) not in sys.path:
+        sys.path.insert(0, str(_root))
+
+    from core.db.connection import connect as db_connect, get_db_path
+
+    parser = argparse.ArgumentParser(description="bet_ledger schema migrations and repairs")
+    parser.add_argument("--db", default=get_db_path())
+    parser.add_argument(
+        "--repair",
+        action="store_true",
+        help="Run stake/classification repairs on bet_ledger",
+    )
+    args = parser.parse_args()
+    con = db_connect(args.db)
+    try:
+        if args.repair:
+            stats = run_repairs(con)
+            print(
+                f"[bet_ledger_schema] repair complete: "
+                f"away_dog_rl={stats['away_dog_rl']} owm={stats['owm']}"
+            )
+        else:
+            ensure_bet_ledger_extended(con)
+            print("[bet_ledger_schema] schema ensured")
+    finally:
+        con.close()
