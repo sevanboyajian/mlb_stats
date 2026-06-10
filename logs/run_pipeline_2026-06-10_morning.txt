@@ -66,5 +66,3 @@
 [job] id=2950 type=email_runlog_morning job_date_et=2026-06-10 game_group_id=0 scheduled_time=2026-06-10 06:22 ET
 [job] command='python batch/jobs/email_run_log.py --date 2026-06-10 --kind morning'
 [job] start_et=2026-06-10 06:22:07 ET (claimed)
-[job] end_et=2026-06-10 06:22:08 ET status=complete rc=0
-[run_pipeline] sleep-until-due: next pending at 2026-06-10 10:00 ET (~13080s)
