@@ -331,9 +331,3 @@ Today: 1 staked / 3 qualified / 2 juice-blocked
 [job] id=2938 type=email_runlog_eod job_date_et=2026-06-09 game_group_id=0 scheduled_time=2026-06-09 21:45 ET
 [job] command='python batch/jobs/email_run_log.py --date 2026-06-09 --kind eod'
 [job] start_et=2026-06-09 21:46:21 ET (claimed)
-[job] end_et=2026-06-09 21:46:23 ET status=complete rc=0
-[run_pipeline] no pending pipeline_jobs; exiting (--exit-when-no-pending).
-[run_pipeline] force-unlock: runner_lock not present (nothing to clear)
-[run_pipeline] db=C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\data\mlb_stats.db
-[run_pipeline] mode=loop poll_seconds=60 ghost=False stale_minutes=30 timeout_minutes=30 sleep_until_due=True scope_job_date_et='2026-06-09' exit_when_no_pending=True
-[run_pipeline] no pending pipeline_jobs; exiting (--exit-when-no-pending).
