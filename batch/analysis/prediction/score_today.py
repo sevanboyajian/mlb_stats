@@ -1311,7 +1311,8 @@ def main() -> int:
     )
     medians = meta.get("feature_medians", {})
 
-    print(f"[score_today] Model trained on: {meta.get('trained_on_season')}")
+    train_label = meta.get("trained_on_seasons") or [meta.get("trained_on_season")]
+    print(f"[score_today] Model trained on: {train_label}")
     print(f"[score_today] Features: {len(features)}")
     print(f"[score_today] Min games filter: {min_games}")
     print(f"[score_today] Confidence threshold: {confidence_threshold:.0%}")

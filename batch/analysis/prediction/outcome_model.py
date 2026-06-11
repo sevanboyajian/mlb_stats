@@ -5,11 +5,12 @@ outcome_model.py
 Pure outcome prediction model: home team win probability from pre-game
 matchup features only (no odds / market lines).
 
-Train: 2024 regular season  |  Test: 2025 + 2026 YTD
+Train: 2024+2025 regular season (combined)  |  Test: 2026 YTD
 
 USAGE:
   python batch/analysis/prediction/outcome_model.py --db data/mlb_stats.db
   python batch/analysis/prediction/outcome_model.py --seasons 2024 2025 2026
+  python batch/analysis/prediction/outcome_model.py --seasons 2024 2025 --min-games 20
   python batch/analysis/prediction/outcome_model.py --output-dir outputs/reports
   python batch/analysis/prediction/outcome_model.py --min-games 20
 """
@@ -41,8 +42,9 @@ if str(_REPO_ROOT) not in sys.path:
 from core.db.connection import connect as db_connect, get_db_path
 
 DEFAULT_SEASONS = [2024, 2025, 2026]
-TRAIN_SEASON = 2024
-TEST_SEASONS = [2025, 2026]
+TRAIN_SEASONS = [2024, 2025]
+TEST_SEASONS = [2026]
+TRAIN_SEASON = TRAIN_SEASONS[0]  # legacy alias for score_today display
 
 FEATURES = [
     "ops_diff",
@@ -454,16 +456,44 @@ def build_predictions_csv(test_df: pd.DataFrame, probs: np.ndarray) -> pd.DataFr
     )
 
 
+def resolve_train_test_splits(
+    seasons_present: list[int],
+) -> tuple[list[int], list[int]]:
+    """
+    Train on 2024+2025 combined when both are available; hold out 2026 for test.
+    Falls back to train=2024 / test=2025 when 2026 is not in the DB.
+    """
+    present = sorted(set(int(s) for s in seasons_present))
+    train_pool = [s for s in TRAIN_SEASONS if s in present]
+    if not train_pool:
+        raise ValueError(f"No training seasons from {TRAIN_SEASONS} in loaded data: {present}")
+
+    if 2026 in present and len(train_pool) >= 2:
+        return train_pool, [2026]
+    if 2026 in present:
+        return train_pool, [2026]
+    if 2025 in present and 2024 in present:
+        return [2024], [2025]
+    if len(present) >= 2:
+        return present[:-1], [present[-1]]
+    raise ValueError(f"Need at least one train and one test season; got {present}")
+
+
 def filter_summary_lines(
     filter_stats: dict[str, int],
     min_games: int,
     train_n: int,
     test_n: int,
+    *,
+    train_seasons: list[int],
+    test_seasons: list[int],
 ) -> list[str]:
     loaded = filter_stats["loaded_n"]
     dropped = filter_stats["dropped_n"]
     retained = filter_stats["retained_n"]
     pct = (dropped / loaded * 100.0) if loaded else 0.0
+    train_label = "+".join(str(s) for s in train_seasons)
+    test_label = "+".join(str(s) for s in test_seasons)
     return [
         "EARLY-SEASON FILTER",
         "══════════════════════════════════════════════════════",
@@ -471,8 +501,8 @@ def filter_summary_lines(
         f"Total games loaded:         {loaded}",
         f"Games dropped (early szn):  {dropped} ({pct:.1f}%)",
         f"Games retained:             {retained}",
-        f"Train (2024, filtered):     {train_n} games",
-        f"Test  (2025+, filtered):    {test_n} games",
+        f"Train ({train_label}, filtered): {train_n} games",
+        f"Test  ({test_label}, filtered):  {test_n} games",
         "",
     ]
 
@@ -482,7 +512,7 @@ def format_model_report(
     *,
     train: pd.DataFrame,
     test: pd.DataFrame,
-    train_season: int,
+    train_seasons: list[int],
     test_seasons: list[int],
     y_test: np.ndarray,
     probs: np.ndarray,
@@ -511,7 +541,7 @@ def format_model_report(
         "══════════════════════════════════════════════",
         f"MODEL: {model_name}",
         "══════════════════════════════════════════════",
-        f"Train: {train_season}  |  N={len(train)} games "
+        f"Train: {'+'.join(str(s) for s in train_seasons)}  |  N={len(train)} games "
         f"({train_complete} with complete SP, {train_imputed} imputed)",
         f"Test:  {'+'.join(str(s) for s in test_seasons)}  |  N={len(test)} games "
         f"({test_complete} with complete SP, {test_imputed} imputed)",
@@ -569,17 +599,22 @@ def save_model_artifacts(
 def run_backtest(
     df: pd.DataFrame,
     *,
-    train_season: int = TRAIN_SEASON,
+    train_seasons: list[int] | None = None,
     test_seasons: list[int] | None = None,
     min_games: int = 20,
     filter_stats: dict[str, int] | None = None,
 ) -> tuple[str, dict[str, pd.DataFrame], dict]:
-    if test_seasons is None:
-        test_seasons = TEST_SEASONS
     if filter_stats is None:
         filter_stats = {"loaded_n": len(df), "dropped_n": 0, "retained_n": len(df)}
 
     df = df.copy()
+    if train_seasons is None or test_seasons is None:
+        resolved_train, resolved_test = resolve_train_test_splits(
+            sorted(df["season"].unique().tolist())
+        )
+        train_seasons = train_seasons or resolved_train
+        test_seasons = test_seasons or resolved_test
+
     df["sp_data_missing"] = compute_sp_data_missing(df)
     imputed_count = int(df["sp_data_missing"].sum())
     complete_count = int(len(df) - imputed_count)
@@ -590,11 +625,11 @@ def run_backtest(
 
     df = engineer_features(df)
 
-    train = df[df["season"] == train_season].copy()
+    train = df[df["season"].isin(train_seasons)].copy()
     test = df[df["season"].isin(test_seasons)].copy()
 
     if train.empty:
-        raise ValueError(f"No training games for season {train_season}")
+        raise ValueError(f"No training games for seasons {train_seasons}")
     if test.empty:
         raise ValueError(f"No test games for seasons {test_seasons}")
 
@@ -622,7 +657,14 @@ def run_backtest(
         "OUTCOME PREDICTION MODEL — BACKTEST REPORT",
         "==========================================",
         "",
-        *filter_summary_lines(filter_stats, min_games, len(train), len(test)),
+        *filter_summary_lines(
+            filter_stats,
+            min_games,
+            len(train),
+            len(test),
+            train_seasons=train_seasons,
+            test_seasons=test_seasons,
+        ),
     ]
     predictions_by_slug: dict[str, pd.DataFrame] = {}
     fitted_models: dict[str, object] = {}
@@ -658,7 +700,7 @@ def run_backtest(
                 model_name,
                 train=train,
                 test=test,
-                train_season=train_season,
+                train_seasons=train_seasons,
                 test_seasons=test_seasons,
                 y_test=y_test,
                 probs=probs,
@@ -669,7 +711,8 @@ def run_backtest(
         predictions_by_slug[slug] = build_predictions_csv(test, probs)
 
     artifact_meta = {
-        "trained_on_season": train_season,
+        "trained_on_season": train_seasons[0],
+        "trained_on_seasons": train_seasons,
         "min_games_filter": min_games,
         "confidence_threshold": 0.65,
         "feature_list": FEATURES,
@@ -725,11 +768,10 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     seasons = sorted(set(args.seasons))
-
-    train_season = TRAIN_SEASON if TRAIN_SEASON in seasons else seasons[0]
-    test_seasons = [s for s in seasons if s != train_season]
-    if TRAIN_SEASON in seasons:
-        test_seasons = [s for s in TEST_SEASONS if s in seasons]
+    # Ensure 2026 is loaded for holdout when training on 2024+2025
+    if any(s in seasons for s in TRAIN_SEASONS) and 2026 not in seasons:
+        seasons.append(2026)
+        seasons = sorted(set(seasons))
 
     output_dir = Path(args.output_dir)
     if not output_dir.is_absolute():
@@ -753,9 +795,16 @@ def main() -> int:
 
     df, filter_stats = apply_early_season_filter(df, args.min_games)
 
+    train_seasons, test_seasons = resolve_train_test_splits(
+        sorted(df["season"].unique().tolist())
+    )
+    print(
+        f"[outcome_model] Split: train={train_seasons} test={test_seasons}"
+    )
+
     report, predictions_by_slug, artifacts = run_backtest(
         df,
-        train_season=train_season,
+        train_seasons=train_seasons,
         test_seasons=test_seasons,
         min_games=args.min_games,
         filter_stats=filter_stats,
