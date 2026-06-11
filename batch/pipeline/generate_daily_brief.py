@@ -3080,12 +3080,15 @@ def _insert_bet_ledger_from_snapshots(
             and "+1.5" not in bet_u
             and "OWM" in str(sigs_raw or "").upper()
         )
+        snap_pick_side = None
         if is_away_dog:
             snap_stake = AWAY_DOG_RL_STAKE
             snap_signal_type = "AWAY_DOG_RL"
+            snap_pick_side = "away_rl"
         elif is_owm_ml:
             snap_stake = 1.0
             snap_signal_type = "OWM"
+            snap_pick_side = "home_ml"  # OWM always bets home team ML
         else:
             snap_stake = 1.0
             snap_signal_type = None
@@ -3095,8 +3098,8 @@ def _insert_bet_ledger_from_snapshots(
                 INSERT OR IGNORE INTO bet_ledger
                     (game_date, game_pk, market_type, bet, odds_taken, stake_units,
                      signal_at_time, session, placed_at, total_line_at_bet, late_signal,
-                     model_version, result, pnl_units, source, signal_type)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                     model_version, result, pnl_units, source, signal_type, pick_side)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     game_date,
@@ -3115,6 +3118,7 @@ def _insert_bet_ledger_from_snapshots(
                     None,
                     "brief",
                     snap_signal_type,
+                    snap_pick_side,
                 ),
             )
             if getattr(cur, "rowcount", 0) == 1:

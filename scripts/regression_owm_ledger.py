@@ -311,12 +311,11 @@ def test_insert_from_snapshots(report: Report) -> None:
     con = _mem_conn()
     gd = "2026-06-09"
     cases = [
-        # snapshot path sets signal_type + stake; pick_side is optional (brief/score_today set it)
-        (823858, "ML", "MIA ML", -132, '["OWM", "Away Dog RL"]', "OWM", 1.0),
-        (777002, "RL", "AZ +1.5", 115, '["AWAY_DOG_RL"]', "AWAY_DOG_RL", 0.10),
-        (777003, "ML", "NYY ML", -120, '["MV-F"]', None, 1.0),
+        (823858, "ML", "MIA ML", -132, '["OWM", "Away Dog RL"]', "OWM", 1.0, "home_ml"),
+        (777002, "RL", "AZ +1.5", 115, '["AWAY_DOG_RL"]', "AWAY_DOG_RL", 0.10, "away_rl"),
+        (777003, "ML", "NYY ML", -120, '["MV-F"]', None, 1.0, None),
     ]
-    for gpk, mt, bet, odds, sigs, exp_sig, exp_stake in cases:
+    for gpk, mt, bet, odds, sigs, exp_sig, exp_stake, _exp_pick_side in cases:
         con.execute(
             """
             INSERT INTO bet_snapshots
@@ -330,12 +329,14 @@ def test_insert_from_snapshots(report: Report) -> None:
     n = _insert_bet_ledger_from_snapshots(con, gd)
     report.add("snapshot_insert:count", n == len(cases), f"inserted={n}")
 
-    for gpk, mt, bet, _, _, exp_sig, exp_stake in cases:
+    for gpk, mt, bet, _, _, exp_sig, exp_stake, exp_pick_side in cases:
         ledger_mt = {"ML": "moneyline", "RL": "spread", "TOTAL": "total"}[mt]
         row = _ledger_row(con, gpk, ledger_mt)
         ok = row is not None and abs(float(row["stake_units"]) - exp_stake) < 1e-6
         if exp_sig:
             ok = ok and row["signal_type"] == exp_sig
+        if exp_pick_side:
+            ok = ok and row["pick_side"] == exp_pick_side
         report.add(f"snapshot_insert:{bet}", ok, "none" if row is None else dict(row))
     con.close()
 

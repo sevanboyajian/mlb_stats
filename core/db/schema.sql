@@ -33,6 +33,7 @@
 -- ============================================================
 -- # CHANGE LOG (latest first)
 -- # -------------------------
+-- # 2026-06-10  bet_ledger: signal_type, pick_side, source columns (classification + write path).
 -- # 2026-05-16  game_signal_log: one row per game per day (upsert); all scored games.
 -- # 2026-05-02  bet_snapshots: prior-report source of truth (matches ensure_bet_snapshots /
 -- #              generate_daily_brief.save_bet_snapshot).
@@ -875,6 +876,18 @@ CREATE INDEX IF NOT EXISTS idx_shadow_filter_b_watch_date ON shadow_filter_b_wat
 -- bet_ledger
 -- Source of truth for P&L: append-only record of actual bets taken
 -- (separate from signal generation).
+--
+-- signal_type  : signal that generated the pick (OWM, AWAY_DOG_RL, UNDER, ML,
+--                RL, MV-B, MV-F, LHP, STREAK). NULL = pre-classification legacy row.
+--                Use LEGACY for rows that cannot be retrospectively classified.
+-- pick_side    : which side of the market was taken (home_ml, away_ml, away_rl,
+--                under, over)
+-- source       : which system wrote the row (brief, brief_late, score_today)
+--
+-- MIGRATION 2026-06-10: ALTER TABLE bet_ledger ADD COLUMN signal_type TEXT;
+-- MIGRATION 2026-06-10: ALTER TABLE bet_ledger ADD COLUMN pick_side TEXT;
+-- MIGRATION 2026-06-10: ALTER TABLE bet_ledger ADD COLUMN source TEXT;
+-- Applied via ensure_bet_ledger_extended() on first run after schema update.
 -- ------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS bet_ledger (
     id              INTEGER PRIMARY KEY,
@@ -891,7 +904,13 @@ CREATE TABLE IF NOT EXISTS bet_ledger (
     late_signal     INTEGER NOT NULL DEFAULT 0,  -- 1 if recorded in last 30m before first pitch
     model_version   TEXT NOT NULL DEFAULT 'legacy', -- 'legacy' | 'v2' (MODEL_V2_START_DATE in generator)
     result          TEXT,     -- 'win','loss','push'
-    pnl_units        REAL
+    pnl_units        REAL,
+    -- ── added 2026-06-10 ──────────────────────────────────────
+    signal_type     TEXT,     -- 'OWM','AWAY_DOG_RL','UNDER','ML','RL','MV-B',
+                              --   'MV-F','LHP','STREAK','LEGACY'
+    pick_side       TEXT,     -- 'home_ml','away_ml','away_rl','under','over'
+    source          TEXT      -- 'brief','brief_late','score_today'
+    -- ─────────────────────────────────────────────────────────
 );
 
 -- Enforce idempotent bet creation (one bet per game + market)
