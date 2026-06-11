@@ -14,49 +14,153 @@ from pathlib import Path
 from typing import Any
 
 MODEL_V2_START_DATE = "2026-04-28"
-SIGNAL_GROUP_ORDER = ("OWM", "MV-B", "MV-F", "LHP", "STREAK", "OTHER", "NON_OWM")
 
-ALERT_THRESHOLDS: dict[str, tuple[int, float, str]] = {
-    "OWM": (15, -10.0, "OWM underperforming: {roi:.1f}% ROI on {n} bets"),
-    "MV-B": (8, -25.0, "MV-B alert: {roi:.1f}% ROI on {n} bets — gate review"),
-    "MV-F": (8, -25.0, "MV-F alert: {roi:.1f}% ROI on {n} bets"),
-    "LHP": (8, -25.0, "LHP alert: {roi:.1f}% ROI on {n} bets"),
-    "STREAK": (8, -25.0, "Streak signal alert: {roi:.1f}% on {n} bets"),
+SIGNAL_DISPLAY_MAP: dict[str, str] = {
+    "OWM": "OWM",
+    "MV-B": "MV-B",
+    "MV-F": "MV-F",
+    "LHP": "LHP",
+    "STREAK": "STREAK",
+    "AWAY_DOG_RL": "Away Dog RL",
+    "ML": "ML (LogReg)",
+    "RL": "RL (favorite)",
+    "UNDER": "Under",
+    "LEGACY": "Legacy",
+    "UNCLASSIFIED": "Unclassified",
 }
 
+SIGNAL_DISPLAY_ORDER: list[str] = [
+    "OWM",
+    "AWAY_DOG_RL",
+    "ML",
+    "UNDER",
+    "RL",
+    "MV-B",
+    "MV-F",
+    "LHP",
+    "STREAK",
+    "LEGACY",
+    "UNCLASSIFIED",
+]
 
-def _normalize_signals_used(raw: str | None) -> str:
-    if not raw:
-        return ""
-    s = str(raw).strip()
-    if s.startswith("["):
-        try:
-            arr = json.loads(s)
-            if isinstance(arr, list):
-                return ", ".join(str(x) for x in arr)
-        except Exception:
-            pass
-    return s
+ROLLING_EXCLUDE = frozenset({"LEGACY", "UNCLASSIFIED"})
+STATIC_SIGNALS = frozenset({"LEGACY"})
+LIVE_SIGNALS_EXCLUDE = frozenset({"LEGACY", "MV-B"})
+
+ALERT_THRESHOLDS: dict[str, dict[str, float | int]] = {
+    "OWM": {"min_n": 10, "min_win_pct": 50.0},
+    "MV-B": {"min_n": 10, "min_win_pct": 50.0},
+    "AWAY_DOG_RL": {"min_n": 15, "min_win_pct": 55.0},
+    "ML": {"min_n": 10, "min_win_pct": 65.0},
+    "UNDER": {"min_n": 15, "min_win_pct": 48.0},
+    "LHP": {"min_n": 5, "min_win_pct": 45.0},
+    "STREAK": {"min_n": 5, "min_win_pct": 45.0},
+}
+
+# Back-compat alias for weekly alert ordering
+SIGNAL_GROUP_ORDER = SIGNAL_DISPLAY_ORDER
 
 
-def _matches_signal_group(signals_text: str, group: str) -> bool:
-    su = _normalize_signals_used(signals_text).upper()
-    if group == "OWM":
-        return "OWM" in su or "OFFENSE MATCHUP" in su
-    if group == "MV-B":
-        return "WIND BOOST" in su or "WIND →" in su or "WIND->" in su
-    if group == "MV-F":
-        return "WIND FADE" in su
-    if group == "LHP":
-        return "LHP" in su
-    if group == "STREAK":
-        return "STREAK" in su
-    if group == "OTHER":
-        return not any(
-            _matches_signal_group(signals_text, g)
-            for g in ("OWM", "MV-B", "MV-F", "LHP", "STREAK")
+def _signal_label(signal_type: str | None) -> str:
+    key = (signal_type or "").strip().upper()
+    if not key:
+        return "Unknown"
+    return SIGNAL_DISPLAY_MAP.get(key, signal_type or "Unknown")
+
+
+def _norm_bet(bet: str | None) -> str:
+    return " ".join(str(bet or "").upper().split())
+
+
+def _src_rank(source: str | None) -> int:
+    s = (source or "brief").strip().lower()
+    if s == "brief":
+        return 0
+    if s == "brief_late":
+        return 1
+    if s == "score_today":
+        return 2
+    return 3
+
+
+def _ensure_row_factory(conn: sqlite3.Connection) -> None:
+    if conn.row_factory is not sqlite3.Row:
+        conn.row_factory = sqlite3.Row
+
+
+def _fetch_graded_bets(
+    conn: sqlite3.Connection,
+    through_date: str,
+    *,
+    season_year: int | None = None,
+) -> list[dict[str, Any]]:
+    """Graded staked bet_ledger rows through ``through_date`` (optionally one season)."""
+    _ensure_row_factory(conn)
+    params: list[Any] = [through_date]
+    season_clause = ""
+    if season_year is not None:
+        season_clause = " AND substr(bl.game_date, 1, 4) = ?"
+        params.append(str(season_year))
+
+    rows = conn.execute(
+        f"""
+        SELECT
+            bl.id,
+            bl.game_date,
+            bl.game_pk,
+            bl.market_type,
+            bl.bet,
+            bl.result,
+            bl.pnl_units,
+            bl.stake_units,
+            bl.signal_type,
+            bl.source,
+            bl.model_version
+        FROM bet_ledger bl
+        JOIN games g ON g.game_pk = bl.game_pk
+        WHERE bl.game_date <= ?
+          {season_clause}
+          AND bl.stake_units > 0
+          AND lower(trim(coalesce(bl.signal_at_time, ''))) != 'avoid'
+          AND lower(trim(coalesce(bl.result, ''))) IN ('win', 'loss', 'push')
+        ORDER BY bl.game_date DESC, bl.id DESC
+        """,
+        tuple(params),
+    ).fetchall()
+
+    bets: list[dict[str, Any]] = []
+    for row in rows:
+        sig = (row["signal_type"] or "").strip().upper() or None
+        bets.append(
+            {
+                "id": int(row["id"]),
+                "game_date": str(row["game_date"]),
+                "game_pk": int(row["game_pk"]),
+                "market_type": str(row["market_type"] or ""),
+                "bet": str(row["bet"] or ""),
+                "result": str(row["result"] or ""),
+                "pnl_units": float(row["pnl_units"] or 0.0),
+                "stake_units": float(row["stake_units"] or 0.0),
+                "signal_type": sig,
+                "source": str(row["source"] or "brief"),
+                "model_version": str(row["model_version"] or ""),
+            }
         )
-    return False
+    return bets
+
+
+def _dedupe_graded_bets(bets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    One row per equivalent staked pick (game_pk + market + bet text).
+    Prefer brief over score_today when both logged the same bet.
+    """
+    by_key: dict[tuple[int, str, str], dict[str, Any]] = {}
+    for b in bets:
+        key = (int(b["game_pk"]), str(b["market_type"]), _norm_bet(b["bet"]))
+        prev = by_key.get(key)
+        if prev is None or _src_rank(b["source"]) < _src_rank(prev["source"]):
+            by_key[key] = b
+    return list(by_key.values())
 
 
 def _stats_from_bets(bets: list[dict[str, Any]]) -> dict[str, Any]:
@@ -65,8 +169,9 @@ def _stats_from_bets(bets: list[dict[str, Any]]) -> dict[str, Any]:
     losses = sum(1 for b in bets if (b.get("result") or "").lower() == "loss")
     pushes = sum(1 for b in bets if (b.get("result") or "").lower() == "push")
     pnl = sum(float(b.get("pnl_units") or 0.0) for b in bets)
+    stake = sum(float(b.get("stake_units") or 0.0) for b in bets)
     win_rate = (100.0 * wins / n) if n else 0.0
-    roi_pct = (100.0 * pnl / n) if n else 0.0
+    roi_pct = (100.0 * pnl / stake) if stake else 0.0
     last_bet_date = bets[0]["game_date"] if bets else None
     return {
         "bets": n,
@@ -81,70 +186,37 @@ def _stats_from_bets(bets: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _apply_alert(group: str, stats: dict[str, Any]) -> dict[str, Any]:
-    cfg = ALERT_THRESHOLDS.get(group)
+def _apply_alert(signal_type: str, stats: dict[str, Any]) -> dict[str, Any]:
+    cfg = ALERT_THRESHOLDS.get(signal_type)
     if cfg is None:
         return stats
-    min_n, min_roi, tmpl = cfg
-    if stats["bets"] >= min_n and stats["roi_pct"] < min_roi:
+    min_n = int(cfg["min_n"])
+    min_win_pct = float(cfg["min_win_pct"])
+    if stats["bets"] >= min_n and stats["win_rate"] < min_win_pct:
         stats = dict(stats)
-        stats["alert"] = tmpl.format(
-            roi=stats["roi_pct"],
-            n=stats["bets"],
+        label = _signal_label(signal_type)
+        stats["alert"] = (
+            f"{label} underperforming: {stats['win_rate']:.1f}% win rate on "
+            f"{stats['bets']} bets (threshold {min_win_pct:.0f}%)"
         )
     return stats
 
 
-def _ensure_row_factory(conn: sqlite3.Connection) -> None:
-    if conn.row_factory is not sqlite3.Row:
-        conn.row_factory = sqlite3.Row
-
-
-def _fetch_graded_v2_bets(
-    conn: sqlite3.Connection,
-    through_date: str,
+def _bets_for_signal(
+    bets: list[dict[str, Any]],
+    signal_type: str,
+    *,
+    v2_only: bool = False,
 ) -> list[dict[str, Any]]:
-    _ensure_row_factory(conn)
-    rows = conn.execute(
-        """
-        SELECT
-            bl.game_date,
-            bl.result,
-            bl.pnl_units,
-            bs.signals_used
-        FROM bet_ledger bl
-        JOIN games g ON g.game_pk = bl.game_pk
-        LEFT JOIN bet_snapshots bs
-            ON bs.game_date = bl.game_date
-           AND bs.game_pk = bl.game_pk
-           AND bs.market_type = CASE lower(trim(coalesce(bl.market_type, '')))
-                WHEN 'moneyline' THEN 'ML'
-                WHEN 'total' THEN 'TOTAL'
-                WHEN 'spread' THEN 'RL'
-                WHEN 'runline' THEN 'RL'
-                ELSE upper(trim(coalesce(bl.market_type, '')))
-            END
-        WHERE bl.game_date <= ?
-          AND bl.game_date >= ?
-          AND g.status = 'Final'
-          AND bl.stake_units > 0
-          AND lower(trim(coalesce(bl.signal_at_time, ''))) != 'avoid'
-          AND lower(trim(coalesce(bl.result, ''))) IN ('win', 'loss', 'push')
-        ORDER BY bl.game_date DESC, bl.id DESC
-        """,
-        (through_date, MODEL_V2_START_DATE),
-    ).fetchall()
-    bets: list[dict[str, Any]] = []
-    for row in rows:
-        bets.append(
-            {
-                "game_date": str(row["game_date"]),
-                "result": str(row["result"] or ""),
-                "pnl_units": float(row["pnl_units"] or 0.0),
-                "signals_used": row["signals_used"],
-            }
-        )
-    return bets
+    st = signal_type.strip().upper()
+    out = [
+        b
+        for b in bets
+        if (b.get("signal_type") or "").upper() == st
+        and (not v2_only or str(b.get("game_date") or "") >= MODEL_V2_START_DATE)
+    ]
+    out.sort(key=lambda x: (x["game_date"], x["id"]), reverse=True)
+    return out
 
 
 def compute_rolling_signal_performance(
@@ -153,53 +225,173 @@ def compute_rolling_signal_performance(
     lookback_bets: int = 20,
 ) -> dict[str, dict[str, Any]]:
     """
-    Rolling performance per signal group over the last ``lookback_bets`` graded v2 bets.
+    Rolling performance per ``bet_ledger.signal_type`` (last N graded bets each).
+    LEGACY uses full history; LEGACY/UNCLASSIFIED excluded from rolling window sizing.
     """
-    all_bets = _fetch_graded_v2_bets(conn, through_date)
+    season_year = int(str(through_date)[:4])
+    all_bets = _dedupe_graded_bets(_fetch_graded_bets(conn, through_date, season_year=season_year))
     out: dict[str, dict[str, Any]] = {}
 
-    for group in ("OWM", "MV-B", "MV-F", "LHP", "STREAK", "OTHER"):
-        group_bets = [
-            b for b in all_bets if _matches_signal_group(str(b.get("signals_used") or ""), group)
-        ][:lookback_bets]
-        stats = _stats_from_bets(group_bets)
-        out[group] = _apply_alert(group, stats)
+    for signal_type in SIGNAL_DISPLAY_ORDER:
+        pool = _bets_for_signal(all_bets, signal_type, v2_only=False)
+        if signal_type in STATIC_SIGNALS:
+            window = pool
+        elif signal_type in ROLLING_EXCLUDE:
+            window = []
+        else:
+            window = pool[:lookback_bets]
+        stats = _stats_from_bets(window)
+        out[signal_type] = _apply_alert(signal_type, stats)
 
-    non_owm_bets = [
-        b for b in all_bets if not _matches_signal_group(str(b.get("signals_used") or ""), "OWM")
-    ][:lookback_bets]
-    non_owm_stats = _stats_from_bets(non_owm_bets)
-    if non_owm_stats["bets"] >= 10 and non_owm_stats["roi_pct"] < -30.0:
-        non_owm_stats = dict(non_owm_stats)
-        non_owm_stats["alert"] = (
-            f"Non-OWM composite: {non_owm_stats['roi_pct']:.1f}% ROI on "
-            f"{non_owm_stats['bets']} bets — moratorium review"
-        )
-    out["NON_OWM"] = non_owm_stats
+    # Any signal_type in data but not in display order (future types)
+    seen = {b.get("signal_type") for b in all_bets if b.get("signal_type")}
+    for raw in sorted(seen - set(SIGNAL_DISPLAY_ORDER)):
+        pool = _bets_for_signal(all_bets, str(raw))
+        if raw in STATIC_SIGNALS:
+            window = pool
+        elif raw in ROLLING_EXCLUDE:
+            window = []
+        else:
+            window = pool[:lookback_bets]
+        stats = _stats_from_bets(window)
+        out[str(raw)] = _apply_alert(str(raw), stats)
 
     return out
 
 
+def compute_season_signal_totals(
+    conn: sqlite3.Connection,
+    through_date: str,
+) -> dict[str, Any]:
+    """Cumulative graded P&L per signal_type for the season through ``through_date``."""
+    season_year = int(str(through_date)[:4])
+    all_bets = _dedupe_graded_bets(_fetch_graded_bets(conn, through_date, season_year=season_year))
+    by_signal: dict[str, dict[str, Any]] = {}
+
+    for signal_type in SIGNAL_DISPLAY_ORDER:
+        pool = _bets_for_signal(all_bets, signal_type)
+        by_signal[signal_type] = _stats_from_bets(pool)
+
+    seen = {b.get("signal_type") for b in all_bets if b.get("signal_type")}
+    for raw in sorted(seen - set(SIGNAL_DISPLAY_ORDER)):
+        by_signal[str(raw)] = _stats_from_bets(_bets_for_signal(all_bets, str(raw)))
+
+    live_bets = [
+        b
+        for b in all_bets
+        if (b.get("signal_type") or "") not in LIVE_SIGNALS_EXCLUDE
+    ]
+    live_stats = _stats_from_bets(live_bets)
+
+    return {"by_signal": by_signal, "live_signals": live_stats}
+
+
 def collect_alert_messages(signal_performance: dict[str, dict[str, Any]]) -> list[str]:
     alerts: list[str] = []
-    for group in SIGNAL_GROUP_ORDER:
-        msg = (signal_performance.get(group) or {}).get("alert")
+    for signal_type in SIGNAL_DISPLAY_ORDER:
+        msg = (signal_performance.get(signal_type) or {}).get("alert")
+        if msg:
+            alerts.append(str(msg))
+    for key, stats in signal_performance.items():
+        if key in SIGNAL_DISPLAY_ORDER:
+            continue
+        msg = (stats or {}).get("alert")
         if msg:
             alerts.append(str(msg))
     return alerts
 
 
-def _status_icon(stats: dict[str, Any], group: str) -> str:
+def _status_icon(stats: dict[str, Any], signal_type: str) -> str:
     n = int(stats.get("bets", 0))
-    threshold = ALERT_THRESHOLDS.get(group, (8, 0.0, ""))[0]
-    roi_pct = float(stats.get("roi_pct", 0.0))
-    if n < threshold:
+    cfg = ALERT_THRESHOLDS.get(signal_type)
+    if cfg is None or n < int(cfg["min_n"]):
         return "—"
     if stats.get("alert"):
         return "❌"
-    if roi_pct >= 0:
+    win_rate = float(stats.get("win_rate", 0.0))
+    min_win = float(cfg["min_win_pct"])
+    if win_rate >= min_win:
         return "✅"
     return "⚠"
+
+
+def _format_signal_table_rows(
+    signal_performance: dict[str, dict[str, Any]],
+    *,
+    label_width: int = 18,
+) -> list[str]:
+    lines: list[str] = []
+    rendered: set[str] = set()
+
+    def _row(signal_type: str, stats: dict[str, Any]) -> str:
+        label = _signal_label(signal_type)
+        icon = _status_icon(stats, signal_type)
+        return (
+            f"{label:<{label_width}}"
+            f"{int(stats.get('bets', 0)):>4}"
+            f"{int(stats.get('wins', 0)):>5}"
+            f"{int(stats.get('losses', 0)):>5}"
+            f"{float(stats.get('win_rate', 0.0)):>6.1f}%"
+            f"{float(stats.get('pnl_units', 0.0)):>+7.2f}u"
+            f"{float(stats.get('roi_pct', 0.0)):>+7.1f}%"
+            f"   {icon}"
+        )
+
+    for signal_type in SIGNAL_DISPLAY_ORDER:
+        stats = signal_performance.get(signal_type) or _stats_from_bets([])
+        lines.append(_row(signal_type, stats))
+        rendered.add(signal_type)
+
+    for signal_type in sorted(signal_performance.keys()):
+        if signal_type in rendered:
+            continue
+        stats = signal_performance[signal_type]
+        lines.append(_row(signal_type, stats))
+
+    return lines
+
+
+def _format_season_totals_section(season_totals: dict[str, Any]) -> list[str]:
+    dash = "─" * 54
+    by_signal = season_totals.get("by_signal") or {}
+    live = season_totals.get("live_signals") or _stats_from_bets([])
+
+    lines = [
+        "",
+        "SEASON TOTALS (all graded bets)",
+        dash,
+        f"{'Signal':<18}{'N':>4}{'W':>5}{'L':>5}{'Win%':>7}{'P&L':>8}{'ROI%':>8}",
+    ]
+
+    for signal_type in SIGNAL_DISPLAY_ORDER:
+        stats = by_signal.get(signal_type) or _stats_from_bets([])
+        label = _signal_label(signal_type)
+        lines.append(
+            f"{label:<18}"
+            f"{int(stats.get('bets', 0)):>4}"
+            f"{int(stats.get('wins', 0)):>5}"
+            f"{int(stats.get('losses', 0)):>5}"
+            f"{float(stats.get('win_rate', 0.0)):>6.1f}%"
+            f"{float(stats.get('pnl_units', 0.0)):>+7.2f}u"
+            f"{float(stats.get('roi_pct', 0.0)):>+7.1f}%"
+        )
+
+    lines.extend(
+        [
+            dash,
+            (
+                f"{'LIVE SIGNALS':<18}"
+                f"{int(live.get('bets', 0)):>4}"
+                f"{int(live.get('wins', 0)):>5}"
+                f"{int(live.get('losses', 0)):>5}"
+                f"{float(live.get('win_rate', 0.0)):>6.1f}%"
+                f"{float(live.get('pnl_units', 0.0)):>+7.2f}u"
+                f"{float(live.get('roi_pct', 0.0)):>+7.1f}%"
+            ),
+            "(excl. Legacy + MV-B)",
+        ]
+    )
+    return lines
 
 
 def _week_bet_ledger_summary(
@@ -258,18 +450,10 @@ def _week_slate_days(conn: sqlite3.Connection, week_start: str, as_of_date: str)
 def _alert_category_key(alert: str) -> str:
     """Stable key for deduplicating alert messages that differ only by rolling stats."""
     s = (alert or "").strip().lower()
-    if "owm underperforming" in s or s.startswith("owm"):
-        return "OWM"
-    if "mv-b alert" in s or s.startswith("mv-b"):
-        return "MV-B"
-    if "mv-f alert" in s or s.startswith("mv-f"):
-        return "MV-F"
-    if "lhp alert" in s or s.startswith("lhp"):
-        return "LHP"
-    if "streak signal alert" in s or s.startswith("streak"):
-        return "STREAK"
-    if "non-owm composite" in s:
-        return "NON_OWM"
+    for signal_type in SIGNAL_DISPLAY_ORDER:
+        label = _signal_label(signal_type).lower()
+        if label in s or signal_type.lower() in s:
+            return signal_type
     return s
 
 
@@ -300,12 +484,12 @@ def _collect_weekly_alerts_from_grading_log(
         except Exception:
             pass
     ordered: list[str] = []
-    for group in SIGNAL_GROUP_ORDER:
+    for group in SIGNAL_DISPLAY_ORDER:
         msg = latest_by_category.get(group)
         if msg:
             ordered.append(msg)
     for key, msg in latest_by_category.items():
-        if key not in SIGNAL_GROUP_ORDER and msg not in ordered:
+        if key not in SIGNAL_DISPLAY_ORDER and msg not in ordered:
             ordered.append(msg)
     return ordered
 
@@ -399,6 +583,7 @@ def format_email_report(
 ) -> tuple[str, str]:
     """Return (subject_line, plain_text_body) for the grading email."""
     season = record.get("season_stats") or {}
+    season_totals = record.get("season_signal_totals") or {}
     day = record.get("day_staked") or {}
     total = season.get("total") or {}
     v2 = season.get("v2") or {}
@@ -454,20 +639,10 @@ def format_email_report(
         "",
         "SIGNAL PERFORMANCE (rolling last 20 bets per signal)",
         dash,
-        "Signal    N    W    L   Win%    P&L     ROI%   Status",
+        f"{'Signal':<18}{'N':>4}{'W':>5}{'L':>5}{'Win%':>7}{'P&L':>8}{'ROI%':>8}  Status",
     ]
-
-    for group in ("OWM", "MV-B", "MV-F", "LHP", "STREAK", "OTHER"):
-        stats = signal_performance.get(group) or {}
-        icon = _status_icon(stats, group)
-        body_lines.append(
-            f"{group:<8}{int(stats.get('bets', 0)):>4}"
-            f"{int(stats.get('wins', 0)):>5}{int(stats.get('losses', 0)):>5}"
-            f"{float(stats.get('win_rate', 0.0)):>6.0f}%"
-            f"{float(stats.get('pnl_units', 0.0)):>+7.2f}u"
-            f"{float(stats.get('roi_pct', 0.0)):>+7.1f}%"
-            f"   {icon}"
-        )
+    body_lines.extend(_format_signal_table_rows(signal_performance))
+    body_lines.extend(_format_season_totals_section(season_totals))
 
     body_lines.extend(
         [
@@ -512,6 +687,7 @@ def build_report_context(
 ) -> dict[str, Any]:
     """Enrich a grading run record with stats used by format_email_report."""
     signal_performance = compute_rolling_signal_performance(conn, game_date)
+    season_signal_totals = compute_season_signal_totals(conn, game_date)
     alerts = collect_alert_messages(signal_performance)
     season_stats = _season_stats(conn, game_date)
     day_staked = _day_staked_summary(conn, game_date)
@@ -522,6 +698,7 @@ def build_report_context(
     enriched.update(
         {
             "signal_performance": signal_performance,
+            "season_signal_totals": season_signal_totals,
             "alerts": alerts,
             "alert_count": len(alerts),
             "alerts_json": json.dumps(alerts),
@@ -558,6 +735,7 @@ def build_weekly_signal_report(
     week_alerts = _active_alerts_for_week(conn, as_of_date, week_start=start_s)
 
     signal_performance = compute_rolling_signal_performance(conn, as_of_date)
+    season_totals = compute_season_signal_totals(conn, as_of_date)
     season = _season_stats(conn, as_of_date)
     v2_roi_today = float((season.get("v2") or {}).get("roi") or 0.0)
 
@@ -593,19 +771,10 @@ def build_weekly_signal_report(
         "",
         "SIGNAL PERFORMANCE (rolling last 20 bets per signal)",
         dash,
-        "Signal    N    W    L   Win%    P&L     ROI%   Status",
+        f"{'Signal':<18}{'N':>4}{'W':>5}{'L':>5}{'Win%':>7}{'P&L':>8}{'ROI%':>8}  Status",
     ]
-    for group in ("OWM", "MV-B", "MV-F", "LHP", "STREAK", "OTHER"):
-        stats = signal_performance.get(group) or {}
-        icon = _status_icon(stats, group)
-        lines.append(
-            f"{group:<8}{int(stats.get('bets', 0)):>4}"
-            f"{int(stats.get('wins', 0)):>5}{int(stats.get('losses', 0)):>5}"
-            f"{float(stats.get('win_rate', 0.0)):>6.0f}%"
-            f"{float(stats.get('pnl_units', 0.0)):>+7.2f}u"
-            f"{float(stats.get('roi_pct', 0.0)):>+7.1f}%"
-            f"   {icon}"
-        )
+    lines.extend(_format_signal_table_rows(signal_performance))
+    lines.extend(_format_season_totals_section(season_totals))
 
     lines.extend(["", f"ALERTS THIS WEEK ({len(week_alerts)})", dash])
     if week_alerts:
