@@ -60,7 +60,17 @@ UNDER_BACKTEST_ROI_ACTUAL = -2.7
 UNDER_STRONG_N = 99
 UNDER_STRONG_UNDER_RATE = 54.5
 UNDER_STRONG_ROI_MINUS110 = 4.1
+UNDER_STRONG_ROI_MINUS110 = 4.1
+UNDER_STRONG_ROI_ACTUAL = 8.9
 UNDER_BREAKEVEN_MINUS110 = 52.38
+UNDER_STANDARD_SKIP_REASON = (
+    "standard tier paused — combined ERA >= 5.0 or wind not IN"
+)
+UNDER_STANDARD_PAUSE_MSG = (
+    "Under signal (standard tier) — PAUSED: combined ERA >= 5.0 or wind not IN. "
+    "Only STRONG tier (combined ERA < 5.0 + wind IN) is staked."
+)
+UNDER_STAKE = 1.00
 
 # Venues where Under signals are suppressed regardless of ERA.
 # These parks structurally override pitcher quality for totals.
@@ -501,6 +511,19 @@ def compute_ou_rl_signals(df: pd.DataFrame) -> pd.DataFrame:
         out["under_signal_strong"] & ~out["under_venue_suppressed"]
     )
 
+    out["under_standard_tier_paused"] = (
+        out["under_signal"] & ~out["under_signal_strong"]
+    )
+    out["under_actionable"] = out["under_signal_strong"].astype(bool)
+    out["under_stake"] = np.where(out["under_actionable"], UNDER_STAKE, 0.0)
+    skip_reasons: list[str] = []
+    for i in out.index:
+        if bool(out.loc[i, "under_standard_tier_paused"]):
+            skip_reasons.append(UNDER_STANDARD_SKIP_REASON)
+        else:
+            skip_reasons.append("")
+    out["under_skip_reason"] = skip_reasons
+
     fav_cols = out.apply(
         lambda r: pd.Series(
             get_favorite_info(r),
@@ -825,6 +848,16 @@ def build_report(
     skipped = scored[~scored["actionable"]]
     eligible = scored[scored["rule_min_games"]]
     under_hits = scored[scored["under_signal"]]
+    under_staked_n = (
+        int(scored["under_actionable"].sum())
+        if "under_actionable" in scored.columns
+        else 0
+    )
+    under_paused_n = (
+        int(scored["under_standard_tier_paused"].fillna(False).sum())
+        if "under_standard_tier_paused" in scored.columns
+        else 0
+    )
     rl_hits = scored[scored["rl_signal"]]
     owm_hits = scored[scored["owm_signal"]] if "owm_signal" in scored.columns else scored.iloc[0:0]
     away_dog_hits = (
@@ -868,9 +901,8 @@ def build_report(
         f"Eligible (>={min_games} GP):       {len(eligible)}",
         f"── ML picks:                {len(actionable)}  "
         f"(>={confidence_threshold:.0%} conf, fav, tier -150/-199 or -300+)",
-        f"── Under signals:           {len(under_hits)}  "
-        f"(combined SP ERA WMA < 6.0; backtest {UNDER_BACKTEST_UNDER_RATE:.1f}% under "
-        f"vs posted total, {UNDER_BACKTEST_ROI_MINUS110:+.1f}% ROI at -110)",
+        f"── Under signals:           {under_staked_n} staked (strong tier only) / "
+        f"{under_paused_n} standard-tier paused",
         f"── Run line signals:        {len(rl_hits)}  (ML favorite <= -301)",
         f"── OWM signals:             {len(owm_hits)}  "
         f"(home OPS WMA >= {OWM_OPS_THRESHOLD}, away SP ERA >= {OWM_ERA_THRESHOLD}, "
@@ -921,15 +953,12 @@ def build_report(
         "",
         "── UNDER SIGNAL ──────────────────────────────────────────────",
         f"Both SP ERA WMA combined < 6.0  |  Min starts: {MIN_SP_STARTS}  |",
-        f"Backtest May-Aug 2019-2025: {UNDER_BACKTEST_N} games  |  "
-        f"Under rate {UNDER_BACKTEST_UNDER_RATE:.1f}% vs posted total  |  "
-        f"ROI {UNDER_BACKTEST_ROI_MINUS110:+.1f}% at -110 "
-        f"({UNDER_BACKTEST_ROI_ACTUAL:+.1f}% at avg closing under juice)",
-        f"Strong (combined <5.0 + wind in): {UNDER_STRONG_N} games  |  "
-        f"Under rate {UNDER_STRONG_UNDER_RATE:.1f}%  |  "
-        f"ROI {UNDER_STRONG_ROI_MINUS110:+.1f}% at -110",
-        f"Note: standard tier {UNDER_BACKTEST_UNDER_RATE:.1f}% < "
-        f"{UNDER_BREAKEVEN_MINUS110:.1f}% break-even at -110 — not +EV at standard juice",
+        "Backtest (posted total, 2019-2025): N=966 | Under rate: 48.7% | ROI: -7.1% at -110",
+        f"Strong (combined <5.0 + wind in):  N={UNDER_STRONG_N}  |  "
+        f"Under rate: {UNDER_STRONG_UNDER_RATE:.1f}% | ROI: "
+        f"+{UNDER_STRONG_ROI_MINUS110:.1f}% at -110 "
+        f"(+{UNDER_STRONG_ROI_ACTUAL:.1f}% at actual odds)",
+        "NOTE: Standard tier PAUSED (sub-breakeven). Only STRONG tier staked.",
         "Suppressed venues: Fenway Park, Oracle Park",
         "──────────────────────────────────────────────────────────────",
     ])
@@ -955,14 +984,18 @@ def build_report(
                 lines.append(
                     f"  ✅ GO — STRONG  [{matchup}]  →  UNDER {row['total_line']:.1f}\n"
                     f"{sp_block}\n"
-                    f"      Under odds: {under_odds}  |  Line: {row['total_line']:.1f}"
+                    f"      Under odds: {under_odds}  |  Line: {row['total_line']:.1f}  |  "
+                    f"STAKE: {UNDER_STAKE:.2f}u"
                 )
             else:
                 under_odds = int(row["under_odds"]) if pd.notna(row.get("under_odds")) else "n/a"
+                skip = (row.get("under_skip_reason") or UNDER_STANDARD_SKIP_REASON).strip()
                 lines.append(
-                    f"  ✅ GO  [{matchup}]  →  UNDER {row['total_line']:.1f}\n"
+                    f"  ⛔ NO BET — standard tier paused  [{matchup}]  →  "
+                    f"UNDER {row['total_line']:.1f}\n"
                     f"{sp_block}\n"
-                    f"      Under odds: {under_odds}  |  Line: {row['total_line']:.1f}"
+                    f"      Under odds: {under_odds}  |  Line: {row['total_line']:.1f}\n"
+                    f"      {skip}"
                 )
 
     lines.extend([
@@ -1177,6 +1210,10 @@ def build_output_csv(scored: pd.DataFrame) -> pd.DataFrame:
         "under_venue_suppressed",
         "under_signal",
         "under_signal_strong",
+        "under_actionable",
+        "under_standard_tier_paused",
+        "under_stake",
+        "under_skip_reason",
         "total_line",
         "over_odds",
         "under_odds",
@@ -1207,6 +1244,8 @@ def build_output_csv(scored: pd.DataFrame) -> pd.DataFrame:
     for flag_col in (
         "under_signal",
         "under_signal_strong",
+        "under_actionable",
+        "under_standard_tier_paused",
         "rl_signal",
         "owm_signal",
         "away_dog_rl_signal",

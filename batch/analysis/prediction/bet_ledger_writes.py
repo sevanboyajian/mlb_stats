@@ -119,12 +119,12 @@ def collect_score_today_picks(scored: pd.DataFrame, score_date: str) -> list[dic
                 pick_side = "home_ml"
             _add("ML", bet=bet, odds=odds, pick_side=pick_side)
 
-        if bool(row.get("under_signal")) and bool(row.get("both_sp_known")):
+        if bool(row.get("under_actionable")) and bool(row.get("both_sp_known")):
             tline = row.get("total_line")
             if pd.notna(tline):
                 uo = row.get("under_odds")
                 bet = f"UNDER {float(tline):g}"
-                _add("UNDER", bet=bet, odds=uo, pick_side="under_total")
+                _add("UNDER", bet=bet, odds=uo, pick_side="under_total", stake=UNDER_STAKE)
 
         if bool(row.get("rl_signal")) and pd.notna(row.get("favorite_ml")):
             fav = str(row.get("favorite_team") or "").strip()

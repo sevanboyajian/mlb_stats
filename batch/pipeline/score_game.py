@@ -60,6 +60,7 @@ SIGNAL_PRIORITY: dict[str, int] = {
     "LHP_FADE": 3,
     "LHP_FADE_RL": 4,
     "AWAY_DOG_RL": 4,
+    "UNDER": 5,
     "MV-B": 5,
     "S1": 6,
     "H3b": 7,
@@ -73,6 +74,7 @@ SIGNAL_STRENGTH: dict[str, str] = {
     "LHP_FADE": "moderate",
     "LHP_FADE_RL": "moderate",
     "AWAY_DOG_RL": "moderate",
+    "UNDER": "moderate",
     "OWM": "moderate",
     "S1": "weak",
 }
@@ -94,6 +96,7 @@ SIGNAL_BASE_SCORE: dict[str, int] = {
     "LHP_FADE": 7,
     "LHP_FADE_RL": 6,
     "AWAY_DOG_RL": 8,
+    "UNDER": 8,
     "OWM": 8,
     "S1": 5,
     "H3b": 3,
@@ -131,6 +134,20 @@ AWAY_DOG_RL_HOME_SP_ERA_MIN = 5.0  # Weak home SP required — backtest confirme
 AWAY_DOG_RL_MIN_HOME_SP_STARTS = 3  # min starts before SP ERA gate applies
 BRIEF_FLAT_STAKE = 1.00  # standard brief ML/RL/total edge-gated pick (backtests use flat 1u)
 OWM_STAKE = BRIEF_FLAT_STAKE  # alias — backtest_owm assumes flat 1u per pick
+
+# Under signal (ERA WMA combined) — standard tier paused 2026-06-16 (Open Item #26)
+UNDER_MIN_SP_STARTS = 3
+UNDER_SUPPRESSED_VENUES = frozenset({"Fenway Park", "Oracle Park"})
+UNDER_COMBINED_ERA_MAX = 6.0
+UNDER_STRONG_ERA_MAX = 5.0
+UNDER_STAKE = BRIEF_FLAT_STAKE
+UNDER_STANDARD_SKIP_REASON = (
+    "standard tier paused — combined ERA >= 5.0 or wind not IN"
+)
+UNDER_STANDARD_PAUSE_MSG = (
+    "Under signal (standard tier) — PAUSED: combined ERA >= 5.0 or wind not IN. "
+    "Only STRONG tier (combined ERA < 5.0 + wind IN) is staked."
+)
 
 # Edge thresholds by session — primary raised after timing analysis (2026-06-05)
 # Backtest: primary TOP 44.4% win / -13.8% ROI vs afternoon TOP 78.6% / +42.5% ROI
@@ -190,7 +207,11 @@ def session_gate_applies_to_scored_game(sg: ScoredGame | object) -> bool:
     tier_basis = str(getattr(sg, "tier_basis", "") or "")
     if "OWM signal" in tier_basis or "Staking independently" in tier_basis:
         return False
+    if "Under STRONG" in tier_basis:
+        return False
     if best_side == "under_total":
+        return False
+    if bool(getattr(sg, "under_era_actionable", False)):
         return False
     if best_side == "over_total" and (
         "MV-B" in tier_basis or "Wind" in tier_basis or "H3b" in tier_basis
@@ -322,6 +343,7 @@ SIGNAL_DEFAULT_BET_SIDE: dict[str, str] = {
     "LHP_FADE": "away_ml",
     "LHP_FADE_RL": "away_rl",
     "AWAY_DOG_RL": "away_rl",
+    "UNDER": "under_total",
     "NF4": "away_ml",
     "S1": "away_ml",
     "MV-B": "over_total",
@@ -338,6 +360,7 @@ SIGNAL_DISPLAY_NAME: dict[str, str] = {
     "LHP_FADE": "LHP Mismatch",
     "LHP_FADE_RL": "LHP RL Edge",
     "AWAY_DOG_RL": "Away Dog RL",
+    "UNDER": "Under (ERA)",
     "S1": "Streak Pressure",
     "NF4": "Pitching Edge",
     "JulyOVER": "July over boost",
@@ -900,6 +923,94 @@ def _eval_owm(g: FullyDressedGame, game_month: int) -> SignalFinding:
     )
 
 
+def _under_era_wind_in(g: FullyDressedGame) -> bool:
+    env = g.environment
+    if (env.wind_dir_label or "").upper() == "IN":
+        return True
+    wd = str(getattr(env, "wind_direction", "") or "").lower()
+    return "in" in wd
+
+
+def _under_era_both_sp_known(g: FullyDressedGame) -> bool:
+    home_sp = g.matchup.home_sp
+    away_sp = g.matchup.away_sp
+    if home_sp is None or away_sp is None:
+        return False
+    if home_sp.era_wma is None or away_sp.era_wma is None:
+        return False
+    h_st = int(getattr(home_sp, "starts_in_window", 0) or 0)
+    a_st = int(getattr(away_sp, "starts_in_window", 0) or 0)
+    return h_st >= UNDER_MIN_SP_STARTS and a_st >= UNDER_MIN_SP_STARTS
+
+
+def _under_era_combined(g: FullyDressedGame) -> float | None:
+    if not _under_era_both_sp_known(g):
+        return None
+    home_sp = g.matchup.home_sp
+    away_sp = g.matchup.away_sp
+    assert home_sp is not None and away_sp is not None
+    return float(home_sp.era_wma) + float(away_sp.era_wma)
+
+
+def _under_era_qualification(g: FullyDressedGame) -> tuple[bool, bool, str]:
+    venue = (g.identifiers.venue_name or "").strip()
+    if venue in UNDER_SUPPRESSED_VENUES:
+        return False, False, f"venue suppressed ({venue})"
+    if not _under_era_both_sp_known(g):
+        return False, False, "insufficient SP ERA WMA sample"
+    combined = _under_era_combined(g)
+    if combined is None:
+        return False, False, "SP ERA WMA unavailable"
+    standard_ok = combined < UNDER_COMBINED_ERA_MAX
+    if not standard_ok:
+        return (
+            False,
+            False,
+            f"combined ERA WMA {combined:.2f} >= {UNDER_COMBINED_ERA_MAX:.1f}",
+        )
+    wind_in = _under_era_wind_in(g)
+    strong_ok = combined < UNDER_STRONG_ERA_MAX and wind_in
+    return standard_ok, strong_ok, ""
+
+
+def _eval_under_era(g: FullyDressedGame) -> SignalFinding:
+    """
+    Under (ERA WMA combined) — standard tier (< 6.0) vs strong tier (< 5.0 + wind IN).
+    Standard tier is monitored only; strong tier stakes at 1.00u (Open Item #26).
+    """
+    standard_ok, strong_ok, block = _under_era_qualification(g)
+    mkt = g.market
+    combined = _under_era_combined(g)
+    fires = standard_ok
+
+    if fires:
+        wind_lbl = g.environment.wind_dir_label or "?"
+        combined_s = f"{combined:.2f}" if combined is not None else "?"
+        if strong_ok:
+            reason = (
+                f"Under STRONG — combined SP ERA WMA {combined_s} < "
+                f"{UNDER_STRONG_ERA_MAX:.1f}; wind {wind_lbl} IN. "
+                f"Staking 1.00u (standard tier paused)."
+            )
+        else:
+            reason = (
+                f"Under (standard tier) — combined SP ERA WMA {combined_s} < "
+                f"{UNDER_COMBINED_ERA_MAX:.1f}; wind {wind_lbl}. "
+                f"{UNDER_STANDARD_PAUSE_MSG}"
+            )
+    else:
+        reason = f"Under blocked: {block}" if block else "Under blocked: gates not met"
+
+    return SignalFinding(
+        signal_id="UNDER",
+        signal_strength=SIGNAL_STRENGTH["UNDER"],
+        bet_side="under_total",
+        odds=_fmt_odds(mkt.under_odds),
+        edge_basis=reason,
+        fires=fires,
+    )
+
+
 def _away_dog_rl_home_sp_gate_block_reason(home_sp: object | None) -> str | None:
     """Block when home SP ERA WMA is strong (< 5.0) with sufficient sample."""
     if home_sp is None:
@@ -1404,6 +1515,10 @@ class ScoredGame:
     away_dog_rl_cap_blocked: bool = False
     away_dog_rl_sp_gate_blocked: bool = False
     away_dog_rl_rank: int | None = None
+    under_era_actionable: bool = False
+    under_era_stake: float = 0.0
+    under_era_standard_paused: bool = False
+    under_era_block_reason: str | None = None
 
 
 def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> ScoredGame:
@@ -1480,10 +1595,22 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
     mvb = _eval_mv_b(g, game_month, extra_flags)
     s1 = _eval_s1(g, home_streak, s1h2_fired)
     h3b = _eval_h3b(g, mvb.fires)
+    under_era = _eval_under_era(g)
     away_dog_rl = _eval_away_dog_rl(g)
 
     incoming = list(getattr(g, "signals", None) or [])
-    all_signals = [*incoming, s1h2, mvf, *lhp_findings, owm, mvb, s1, h3b, away_dog_rl]
+    all_signals = [
+        *incoming,
+        s1h2,
+        mvf,
+        *lhp_findings,
+        owm,
+        mvb,
+        s1,
+        h3b,
+        under_era,
+        away_dog_rl,
+    ]
     avoids = _eval_avoids(g)
     blocked = [f for f in all_signals if not f.fires]
 
@@ -2117,6 +2244,105 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
             )
             aggregated_scores["away_rl"] = away_rl_score
 
+    under_era_sig = next(
+        (s for s in scored_signals if s.signal_id == "UNDER"),
+        None,
+    )
+    under_era_fires = bool(under_era_sig and under_era_sig.fires)
+    _, under_era_strong, _ = (
+        _under_era_qualification(g) if under_era_fires else (False, False, "")
+    )
+    under_era_standard_paused = bool(under_era_fires and not under_era_strong)
+    under_era_actionable = False
+    under_era_stake = 0.0
+    under_era_block_reason: str | None = None
+
+    if under_era_standard_paused:
+        under_era_block_reason = UNDER_STANDARD_SKIP_REASON
+        pause_flag = f"⚠ {UNDER_STANDARD_PAUSE_MSG}"
+        if pause_flag not in data_flags:
+            data_flags.append(pause_flag)
+        combined_paused = _under_era_combined(g)
+        if combined_paused is not None:
+            data_flags.append(
+                f"combined SP ERA WMA {combined_paused:.2f} "
+                f"(standard tier; strong needs < {UNDER_STRONG_ERA_MAX:.1f} + wind IN)"
+            )
+        if best_side == "under_total":
+            stake = 0.0
+            tier = None
+            pick_is_actionable = False
+            eval_status = "NO_BET"
+            tot_ev = market_evals.get("TOTAL")
+            if isinstance(tot_ev, dict) and tot_ev.get("evaluated"):
+                tot_ev["edge_ok"] = False
+                tot_ev["eval_status"] = "NO_BET"
+            _align_market_evals_with_actionability(
+                market_evals,
+                pick_is_actionable=False,
+                best_side=best_side,
+            )
+
+    if under_era_fires and under_era_strong and under_era_sig is not None:
+        under_era_actionable = True
+        under_era_stake = UNDER_STAKE
+        under_score = max(
+            8, int(aggregated_scores.get("under_total", 0) or 0)
+        )
+        aggregated_scores["under_total"] = under_score
+        combined_strong = _under_era_combined(g)
+        if combined_strong is not None:
+            data_flags.append(
+                f"combined SP ERA WMA {combined_strong:.2f} "
+                f"(strong tier < {UNDER_STRONG_ERA_MAX:.1f})"
+            )
+        data_flags.append("wind IN (strong tier gate)")
+
+        tot_ev = market_evals.get("TOTAL")
+        if isinstance(tot_ev, dict) and tot_ev.get("evaluated"):
+            tot_ev["edge_ok"] = True
+            tot_ev["eval_status"] = "BET"
+            tot_ev["best_side"] = "under_total"
+            tot_ev["score"] = under_score
+
+        ml_publishable_u = (
+            int(best_score) >= BETTING_THRESHOLD
+            and best_side in ("away_ml", "home_ml", "over_total", "under_total")
+        )
+        if not ml_publishable_u or best_side == "under_total":
+            best_side = "under_total"
+            best_score = under_score
+            active_bets = list(
+                buckets.get("under_total", []) or [under_era_sig]
+            )
+            if active_bets:
+                top_pick = max(
+                    active_bets,
+                    key=lambda s: int(getattr(s, "confidence_score", 0) or 0),
+                )
+            else:
+                top_pick = under_era_sig
+            stake = UNDER_STAKE
+            tier = "Tier1"
+            stake_basis = (
+                "Under STRONG — combined SP ERA WMA < 5.0 + wind IN. "
+                "Standard tier paused (sub-breakeven at -110). "
+                "Staking independently at 1.00u."
+            )
+            aggregated_scores["under_total"] = under_score
+            pick_is_actionable = _compute_pick_is_actionable(
+                float(stake),
+                best_side,
+                int(best_score),
+                market_evals,
+            )
+            eval_status = "BET" if pick_is_actionable else "NO_BET"
+            _align_market_evals_with_actionability(
+                market_evals,
+                pick_is_actionable=pick_is_actionable,
+                best_side=best_side,
+            )
+
     return ScoredGame(
         game=g,
         signals_fired=scored_signals,
@@ -2147,6 +2373,10 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
         away_dog_rl_cap_blocked=away_dog_rl_cap_blocked,
         away_dog_rl_sp_gate_blocked=away_dog_rl_sp_gate_blocked,
         away_dog_rl_rank=away_dog_rl_rank,
+        under_era_actionable=under_era_actionable,
+        under_era_stake=under_era_stake,
+        under_era_standard_paused=under_era_standard_paused,
+        under_era_block_reason=under_era_block_reason,
     )
 
 
@@ -2694,6 +2924,15 @@ def scored_game_to_eval_dict(scored: ScoredGame, session: str) -> dict[str, Any]
         "away_dog_rl_sp_gate_blocked": bool(getattr(scored, "away_dog_rl_sp_gate_blocked", False)),
         "away_dog_rl_rank": getattr(scored, "away_dog_rl_rank", None),
         "away_rl_odds": mkt.away_rl_odds,
+        "under_era_fires": any(
+            s.signal_id == "UNDER" and s.fires for s in scored.signals_fired
+        ),
+        "under_era_actionable": bool(getattr(scored, "under_era_actionable", False)),
+        "under_era_stake": float(getattr(scored, "under_era_stake", 0.0) or 0.0),
+        "under_era_standard_paused": bool(
+            getattr(scored, "under_era_standard_paused", False)
+        ),
+        "under_era_block_reason": getattr(scored, "under_era_block_reason", None),
     }
 
 
