@@ -249,3 +249,10 @@ Today: 3 staked / 3 qualified / 0 juice-blocked
 [job] start_et=2026-06-15 21:10:48 ET (claimed)
 [job] end_et=2026-06-15 21:10:51 ET status=complete rc=0
 [run_pipeline] sleep-until-due: next pending at 2026-06-15 21:12 ET (~120s)
+
+[job] id=3191 type=ledger_snapshot job_date_et=2026-06-15 game_group_id=3 scheduled_time=2026-06-15 21:12 ET
+[job] command='python batch/pipeline/daily_results_report.py --date 2026-06-15'
+[job] context: group_id=3 window=[2026-06-15 21:10 ET -> 2026-06-15 21:40 ET]
+[job] start_et=2026-06-15 21:12:51 ET (claimed)
+[job] end_et=2026-06-15 21:12:51 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-15 21:45 ET (~1980s)
