@@ -19,6 +19,13 @@ NO_SIGNAL_ML_ODDS_CONF = 63.0  # show ML odds in NO SIGNAL block at/above this c
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_ENGINE_LOG = _REPO_ROOT / "outputs" / "reports" / "prediction_engine_log.csv"
 
+from batch.analysis.prediction.score_today import (  # noqa: E402
+    UNDER_BACKTEST_ROI_MINUS110,
+    UNDER_BACKTEST_UNDER_RATE,
+    UNDER_STRONG_ROI_MINUS110,
+    UNDER_STRONG_UNDER_RATE,
+)
+
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
@@ -363,8 +370,12 @@ def format_prediction_report(
 
     lines.extend([
         "── UNDER PICKS ──────────────────────────────────",
-        "[Backtest: Combined ERA <6.0 → 44.6% under rate]",
-        "[Strong:   Combined ERA <5.0 + wind in → 41.6%]",
+        "[Backtest May-Aug 2019-2025: combined ERA WMA < 6.0 → "
+        f"{UNDER_BACKTEST_UNDER_RATE:.1f}% under vs posted total, "
+        f"{UNDER_BACKTEST_ROI_MINUS110:+.1f}% ROI at -110]",
+        "[Strong: combined < 5.0 + wind in → "
+        f"{UNDER_STRONG_UNDER_RATE:.1f}% under, {UNDER_STRONG_ROI_MINUS110:+.1f}% at -110]",
+        "[Note: standard tier below 52.4% break-even at -110 — not +EV at standard juice]",
         "[Suppressed venues: Fenway Park, Oracle Park]",
         "",
     ])

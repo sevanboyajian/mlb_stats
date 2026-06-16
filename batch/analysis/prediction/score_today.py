@@ -52,6 +52,16 @@ AWAY_DOG_RL_MAX_JUICE = -190
 AWAY_DOG_RL_DAILY_CAP = 4
 AWAY_DOG_RL_HOME_SP_ERA_MIN = 5.0  # Weak home SP required — backtest confirmed gate
 
+# Under signal backtest (recalc 2026-06-16 — see under_signal_backtest_audit.py)
+UNDER_BACKTEST_N = 966
+UNDER_BACKTEST_UNDER_RATE = 48.7
+UNDER_BACKTEST_ROI_MINUS110 = -7.1
+UNDER_BACKTEST_ROI_ACTUAL = -2.7
+UNDER_STRONG_N = 99
+UNDER_STRONG_UNDER_RATE = 54.5
+UNDER_STRONG_ROI_MINUS110 = 4.1
+UNDER_BREAKEVEN_MINUS110 = 52.38
+
 # Venues where Under signals are suppressed regardless of ERA.
 # These parks structurally override pitcher quality for totals.
 # Oracle Park: architecture neutralises wind (existing rule)
@@ -858,7 +868,9 @@ def build_report(
         f"Eligible (>={min_games} GP):       {len(eligible)}",
         f"── ML picks:                {len(actionable)}  "
         f"(>={confidence_threshold:.0%} conf, fav, tier -150/-199 or -300+)",
-        f"── Under signals:           {len(under_hits)}  (combined SP ERA WMA < 6.0)",
+        f"── Under signals:           {len(under_hits)}  "
+        f"(combined SP ERA WMA < 6.0; backtest {UNDER_BACKTEST_UNDER_RATE:.1f}% under "
+        f"vs posted total, {UNDER_BACKTEST_ROI_MINUS110:+.1f}% ROI at -110)",
         f"── Run line signals:        {len(rl_hits)}  (ML favorite <= -301)",
         f"── OWM signals:             {len(owm_hits)}  "
         f"(home OPS WMA >= {OWM_OPS_THRESHOLD}, away SP ERA >= {OWM_ERA_THRESHOLD}, "
@@ -909,8 +921,15 @@ def build_report(
         "",
         "── UNDER SIGNAL ──────────────────────────────────────────────",
         f"Both SP ERA WMA combined < 6.0  |  Min starts: {MIN_SP_STARTS}  |",
-        "Backtest: 652 games  |  Under rate: 44.6%  |  ROI: +14.8% at -110",
-        "Strong (combined <5.0 + wind in): Under rate 41.6%  |  ROI: +20.6%",
+        f"Backtest May-Aug 2019-2025: {UNDER_BACKTEST_N} games  |  "
+        f"Under rate {UNDER_BACKTEST_UNDER_RATE:.1f}% vs posted total  |  "
+        f"ROI {UNDER_BACKTEST_ROI_MINUS110:+.1f}% at -110 "
+        f"({UNDER_BACKTEST_ROI_ACTUAL:+.1f}% at avg closing under juice)",
+        f"Strong (combined <5.0 + wind in): {UNDER_STRONG_N} games  |  "
+        f"Under rate {UNDER_STRONG_UNDER_RATE:.1f}%  |  "
+        f"ROI {UNDER_STRONG_ROI_MINUS110:+.1f}% at -110",
+        f"Note: standard tier {UNDER_BACKTEST_UNDER_RATE:.1f}% < "
+        f"{UNDER_BREAKEVEN_MINUS110:.1f}% break-even at -110 — not +EV at standard juice",
         "Suppressed venues: Fenway Park, Oracle Park",
         "──────────────────────────────────────────────────────────────",
     ])
