@@ -1,0 +1,65 @@
+[run_pipeline] force-unlock: runner_lock not present (nothing to clear)
+[run_pipeline] db=C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\data\mlb_stats.db
+[run_pipeline] mode=loop poll_seconds=60 ghost=False stale_minutes=30 timeout_minutes=30 sleep_until_due=True scope_job_date_et='2026-06-16' exit_when_no_pending=True
+[run_pipeline] sleep-until-due: next pending at 2026-06-16 06:00 ET (~3900s)
+
+[job] id=3195 type=stats_pull job_date_et=2026-06-16 game_group_id=0 scheduled_time=2026-06-16 06:00 ET
+[job] command='python batch/ingestion/load_mlb_stats.py'
+[job] start_et=2026-06-16 06:00:57 ET (claimed)
+[job] end_et=2026-06-16 06:01:14 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-16 06:05 ET (~240s)
+
+[job] id=3196 type=load_today job_date_et=2026-06-16 game_group_id=0 scheduled_time=2026-06-16 06:05 ET
+[job] command='python batch/ingestion/load_today.py --date 2026-06-16'
+[job] start_et=2026-06-16 06:05:14 ET (claimed)
+[job] end_et=2026-06-16 06:05:16 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-16 06:07 ET (~120s)
+
+[job] id=3197 type=load_weather job_date_et=2026-06-16 game_group_id=0 scheduled_time=2026-06-16 06:07 ET
+[job] command='python batch/ingestion/load_weather.py --date 2026-06-16'
+[job] start_et=2026-06-16 06:07:16 ET (claimed)
+[job] end_et=2026-06-16 06:10:40 ET status=complete rc=0
+
+[job] id=3198 type=odds_pull job_date_et=2026-06-16 game_group_id=0 scheduled_time=2026-06-16 06:08 ET
+[job] command='python batch/ingestion/load_odds.py --pregame --markets game --date 2026-06-16'
+[job] start_et=2026-06-16 06:10:40 ET (claimed)
+[job] end_et=2026-06-16 06:10:41 ET status=complete rc=0
+
+[job] id=3199 type=build_team_wma job_date_et=2026-06-16 game_group_id=0 scheduled_time=2026-06-16 06:09 ET
+[job] command='python -m batch.pipeline.build_team_wma --seasons 2025 2026'
+[job] start_et=2026-06-16 06:10:41 ET (claimed)
+[job] end_et=2026-06-16 06:10:42 ET status=complete rc=0
+
+[job] id=3201 type=day_setup job_date_et=2026-06-16 game_group_id=0 scheduled_time=2026-06-16 06:10 ET
+[job] command='python batch/jobs/schedule_pipeline_day.py --groups-only --date-et 2026-06-16'
+[job] start_et=2026-06-16 06:10:42 ET (claimed)
+[job] end_et=2026-06-16 06:10:42 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-16 06:11 ET (~60s)
+
+[job] id=3200 type=build_pitcher_wma job_date_et=2026-06-16 game_group_id=0 scheduled_time=2026-06-16 06:11 ET
+[job] command='python -m batch.pipeline.build_pitcher_wma --seasons 2025 2026'
+[job] start_et=2026-06-16 06:11:42 ET (claimed)
+[job] end_et=2026-06-16 06:11:43 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-16 06:12 ET (~60s)
+
+[job] id=3202 type=grade_daily job_date_et=2026-06-16 game_group_id=0 scheduled_time=2026-06-16 06:12 ET
+[job] command='python batch/jobs/grade_daily.py --date 2026-06-15 --trigger scheduled_job'
+[job] start_et=2026-06-16 06:12:43 ET (claimed)
+[job] end_et=2026-06-16 06:12:46 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-16 06:15 ET (~180s)
+
+[job] id=3203 type=prior_report job_date_et=2026-06-16 game_group_id=0 scheduled_time=2026-06-16 06:15 ET
+[job] command='python batch/pipeline/generate_daily_brief.py --session prior --date 2026-06-16 --as-of "2026-06-16 06:15"'
+[job] start_et=2026-06-16 06:15:46 ET (claimed)
+[job] end_et=2026-06-16 06:15:49 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-16 06:20 ET (~300s)
+
+[job] id=3205 type=early_peek job_date_et=2026-06-16 game_group_id=0 scheduled_time=2026-06-16 06:20 ET
+[job] command='python batch/pipeline/generate_daily_brief.py --session morning --date 2026-06-16 --as-of "2026-06-16 06:20"'
+[job] start_et=2026-06-16 06:20:49 ET (claimed)
+[job] end_et=2026-06-16 06:20:53 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-16 06:22 ET (~120s)
+
+[job] id=3206 type=email_runlog_morning job_date_et=2026-06-16 game_group_id=0 scheduled_time=2026-06-16 06:22 ET
+[job] command='python batch/jobs/email_run_log.py --date 2026-06-16 --kind morning'
+[job] start_et=2026-06-16 06:22:53 ET (claimed)
