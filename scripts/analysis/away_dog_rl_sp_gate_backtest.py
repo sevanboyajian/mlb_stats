@@ -240,34 +240,58 @@ def gate_simulation(rows: list[sqlite3.Row]) -> dict[str, float | int]:
 def recommendation(stats: dict[str, TierStats], gate: dict[str, float | int]) -> str:
     elite = stats["Elite (<2.5)"]
     strong = stats["Strong (2.5-3.49)"]
+    average = stats["Average (3.5-4.99)"]
+    weak = stats["Weak (5.0+)"]
     combined_n = elite.wins + elite.losses + strong.wins + strong.losses
     combined_w = elite.wins + strong.wins
-    if combined_n < 5:
-        return (
-            "GATE NOT SUPPORTED: Elite+Strong sample too small "
-            f"(N={combined_n} graded, need >= 5) — insufficient data for SP gate"
-        )
-
-    combined_cover = 100.0 * combined_w / combined_n
     be = 65.5
     pnl_improve = float(gate["gated_pnl"]) - float(gate["ungated_pnl"])
 
-    if combined_cover < 58.0 and combined_cover < be - 3.0 and pnl_improve >= 0.5:
-        return (
-            f"GATE CONFIRMED: strong SP tier cover rate {combined_cover:.1f}% below "
-            f"breakeven {be:.1f}% — recommend adding hsp_era_wma >= 3.5 gate "
-            "to Away Dog RL signal"
+    lines: list[str] = []
+
+    if combined_n < 5:
+        lines.append(
+            "GATE NOT SUPPORTED: Elite+Strong sample too small "
+            f"(N={combined_n} graded, need >= 5) - insufficient data for SP gate"
         )
-    if combined_cover < be and pnl_improve >= 1.0:
-        return (
+        return "\n  ".join(lines)
+
+    combined_cover = 100.0 * combined_w / combined_n
+    avg_cover = average.cover_pct
+    weak_cover = weak.cover_pct
+
+    if combined_cover < 58.0 and pnl_improve >= 0.25:
+        lines.append(
+            f"GATE CONFIRMED: Elite+Strong cover rate {combined_cover:.1f}% below "
+            f"breakeven {be:.1f}% (N={combined_n}) - recommend adding "
+            "hsp_era_wma >= 3.5 gate to Away Dog RL signal"
+        )
+    elif combined_cover < be and pnl_improve >= 1.0:
+        lines.append(
             f"GATE CONFIRMED: Elite+Strong cover {combined_cover:.1f}% below breakeven "
-            f"{be:.1f}% and gate simulation improves P&L by {pnl_improve:+.2f}u — "
+            f"{be:.1f}% and gate simulation improves P&L by {pnl_improve:+.2f}u - "
             "recommend hsp_era_wma >= 3.5 gate"
         )
-    return (
-        "GATE NOT SUPPORTED: cover rates within normal variance across tiers — "
-        "no SP gate warranted at this sample size"
-    )
+    else:
+        lines.append(
+            "GATE NOT SUPPORTED: cover rates within normal variance across tiers - "
+            "no SP gate warranted at this sample size"
+        )
+
+    # Supplemental findings (always printed)
+    if avg_cover is not None and weak_cover is not None:
+        if weak_cover > 65.0 and (avg_cover or 0) < 55.0:
+            lines.append(
+                f"NOTE: Weak home SP tier ({weak_cover:.1f}% cover, N={weak.n}) "
+                f"outperforms Average ({avg_cover:.1f}%, N={average.n}) - "
+                "edge may concentrate vs weak SP, not vs average SP"
+            )
+    if pnl_improve > 0:
+        lines.append(
+            f"Gate simulation: skipping hsp_era_wma < 3.5 improves P&L by "
+            f"{pnl_improve:+.2f}u ({gate['ungated_pnl']:+.2f} -> {gate['gated_pnl']:+.2f})"
+        )
+    return "\n  ".join(lines)
 
 
 def build_report(rows: list[sqlite3.Row], raw_count: int) -> str:
@@ -283,16 +307,16 @@ def build_report(rows: list[sqlite3.Row], raw_count: int) -> str:
     join_pct = (100.0 * sp_joined / len(rows)) if rows else 0.0
 
     lines = [
-        "─────────────────────────────────────────────────────────────",
-        "AWAY DOG RL — HOME SP QUALITY GATE BACKTEST",
+        "------------------------------------------------------------",
+        "AWAY DOG RL - HOME SP QUALITY GATE BACKTEST",
         f"Generated: {ts}",
         f"Total Away Dog RL bets in sample: {len(rows)} "
         f"(raw graded rows: {raw_count}, deduped by game_pk+date)",
         f"SP data joined (era_wma + starts>=3): {sp_joined}/{len(rows)} ({join_pct:.1f}%)",
-        "─────────────────────────────────────────────────────────────",
+        "------------------------------------------------------------",
         "SP TIER BREAKDOWN",
         *format_tier_table(stats),
-        "─────────────────────────────────────────────────────────────",
+        "------------------------------------------------------------",
         "GATE SIMULATION (exclude hsp_era_wma < 3.5)",
         f"Bets removed: {gate['removed_n']}  |  P&L removed: {gate['removed_pnl']:+.2f} u",
         (
@@ -302,13 +326,13 @@ def build_report(rows: list[sqlite3.Row], raw_count: int) -> str:
             f"vs. Ungated P&L: {gate['ungated_pnl']:+.2f} u  |  "
             f"Ungated ROI: {gate['ungated_roi']:+.1f}%"
         ),
-        "─────────────────────────────────────────────────────────────",
+        "------------------------------------------------------------",
         "V2 MODEL BREAKDOWN BY TIER",
         *format_tier_table(v2_stats),
-        "─────────────────────────────────────────────────────────────",
+        "------------------------------------------------------------",
         "RECOMMENDATION:",
-        recommendation(stats, gate),
-        "─────────────────────────────────────────────────────────────",
+        *[f"  {ln}" for ln in recommendation(stats, gate).splitlines()],
+        "------------------------------------------------------------",
     ]
     return "\n".join(lines)
 
