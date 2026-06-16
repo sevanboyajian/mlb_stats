@@ -320,5 +320,3 @@ Today: 0 staked / 0 qualified / 0 juice-blocked
 [job] id=3032 type=email_runlog_eod job_date_et=2026-06-11 game_group_id=0 scheduled_time=2026-06-11 19:47 ET
 [job] command='python batch/jobs/email_run_log.py --date 2026-06-11 --kind eod'
 [job] start_et=2026-06-11 19:47:37 ET (claimed)
-[job] end_et=2026-06-11 19:47:38 ET status=complete rc=0
-[run_pipeline] no pending pipeline_jobs; exiting (--exit-when-no-pending).
