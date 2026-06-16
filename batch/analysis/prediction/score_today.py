@@ -50,6 +50,7 @@ AWAY_DOG_RL_ML_NEXT_TIER_MAX = 160
 # Strictly better than -190: -190 passes, -191 blocks.
 AWAY_DOG_RL_MAX_JUICE = -190
 AWAY_DOG_RL_DAILY_CAP = 4
+AWAY_DOG_RL_HOME_SP_ERA_MIN = 5.0  # Weak home SP required — backtest confirmed gate
 
 # Venues where Under signals are suppressed regardless of ERA.
 # These parks structurally override pitcher quality for totals.
@@ -551,15 +552,32 @@ def _apply_away_dog_rl_signal(df: pd.DataFrame) -> pd.DataFrame:
     away_ml = pd.to_numeric(out.get("away_ml"), errors="coerce")
     home_ml = pd.to_numeric(out.get("home_ml"), errors="coerce")
     total_line = pd.to_numeric(out.get("total_line"), errors="coerce")
+    home_era = pd.to_numeric(out.get("hsp_era_wma"), errors="coerce")
+    home_starts = pd.to_numeric(out.get("hsp_starts_in_window"), errors="coerce").fillna(0)
 
     away_dog = away_ml.notna() & home_ml.notna() & (away_ml > home_ml)
     band_ok = away_dog & (away_ml >= AWAY_DOG_RL_ML_MIN) & (away_ml <= AWAY_DOG_RL_ML_MAX)
     total_ok = total_line.notna() & (total_line <= AWAY_DOG_RL_TOTAL_MAX)
-    out["away_dog_rl_signal"] = band_ok & total_ok
+    band_qualifies = band_ok & total_ok
+    sp_blocks = (
+        home_era.notna()
+        & (home_starts >= MIN_SP_STARTS)
+        & (home_era < AWAY_DOG_RL_HOME_SP_ERA_MIN)
+    )
+    out["away_dog_rl_sp_gate_blocked"] = band_qualifies & sp_blocks
+    out["away_dog_rl_signal"] = band_qualifies & ~sp_blocks
     out["away_dog_rl_fires"] = out["away_dog_rl_signal"]
 
     block_reasons: list[str] = []
     for i in out.index:
+        if bool(out.loc[i, "away_dog_rl_sp_gate_blocked"]):
+            era_val = float(home_era.loc[i])
+            block_reasons.append(
+                f"Away Dog RL blocked — home SP ERA WMA {era_val:.2f} < "
+                f"{AWAY_DOG_RL_HOME_SP_ERA_MIN:.1f} "
+                f"(need Weak SP >= {AWAY_DOG_RL_HOME_SP_ERA_MIN:.1f})"
+            )
+            continue
         if bool(out.loc[i, "away_dog_rl_signal"]):
             block_reasons.append("")
             continue
@@ -598,6 +616,7 @@ def _finalize_away_dog_rl_slate(df: pd.DataFrame) -> pd.DataFrame:
         ("away_dog_rl_actionable", False),
         ("away_dog_rl_juice_blocked", False),
         ("away_dog_rl_cap_blocked", False),
+        ("away_dog_rl_sp_gate_blocked", False),
         ("away_dog_rl_rank", pd.NA),
         ("away_dog_rl_stake", 0.0),
     ):
@@ -799,8 +818,8 @@ def build_report(
     rl_hits = scored[scored["rl_signal"]]
     owm_hits = scored[scored["owm_signal"]] if "owm_signal" in scored.columns else scored.iloc[0:0]
     away_dog_hits = (
-        scored[scored["away_dog_rl_signal"]]
-        if "away_dog_rl_signal" in scored.columns
+        scored[scored["away_dog_rl_fires"].fillna(False)]
+        if "away_dog_rl_fires" in scored.columns
         else scored.iloc[0:0]
     )
     ad_fired_n = int(away_dog_hits.shape[0]) if not away_dog_hits.empty else 0
@@ -812,6 +831,16 @@ def build_report(
     ad_juice_n = (
         int(away_dog_hits["away_dog_rl_juice_blocked"].sum())
         if ad_fired_n and "away_dog_rl_juice_blocked" in away_dog_hits.columns
+        else 0
+    )
+    ad_sp_gate_n = (
+        int(scored["away_dog_rl_sp_gate_blocked"].fillna(False).sum())
+        if "away_dog_rl_sp_gate_blocked" in scored.columns
+        else 0
+    )
+    ad_cap_n = (
+        int(away_dog_hits["away_dog_rl_cap_blocked"].fillna(False).sum())
+        if ad_fired_n and "away_dog_rl_cap_blocked" in away_dog_hits.columns
         else 0
     )
 
@@ -835,7 +864,8 @@ def build_report(
         f"(home OPS WMA >= {OWM_OPS_THRESHOLD}, away SP ERA >= {OWM_ERA_THRESHOLD}, "
         f"home SP ERA < {OWM_HOME_SP_ERA_MAX})",
         f"── Away Dog RL signals:     {ad_fired_n} fired → {ad_staked_n} staked "
-        f"(juice blocked {ad_juice_n}, cap max {AWAY_DOG_RL_DAILY_CAP})",
+        f"(juice blocked {ad_juice_n}, sp_gate blocked {ad_sp_gate_n}, "
+        f"cap blocked {ad_cap_n})",
         "",
     ]
 
@@ -962,7 +992,8 @@ def build_report(
         "Backtest May–Aug 2019–2025: 66.1% cover, +2.2% edge vs implied, n=1,059",
         f"Cap: {AWAY_DOG_RL_DAILY_CAP} per day  |  "
         f"Juice gate: RL odds must be -190 or better (-190 passes)",
-        f"Today: {ad_staked_n} staked / {ad_fired_n} qualified / {ad_juice_n} juice-blocked",
+        f"Today: {ad_staked_n} staked / {ad_fired_n} qualified / {ad_juice_n} juice-blocked / "
+        f"{ad_sp_gate_n} sp-gate-blocked",
         "──────────────────────────────────────────────────────────────",
     ])
     if away_dog_hits.empty:
@@ -1025,12 +1056,30 @@ def build_report(
             reason = (row.get("away_dog_rl_block_reason") or "").strip()
             lines.append(f"  [{matchup}]  {reason}")
 
+    sp_gate_blocked = (
+        scored[scored["away_dog_rl_sp_gate_blocked"].fillna(False)]
+        if "away_dog_rl_sp_gate_blocked" in scored.columns
+        else scored.iloc[0:0]
+    )
+    if not sp_gate_blocked.empty:
+        lines.extend(["", "  Away Dog RL sp-gate-blocked (hsp_era_wma gate):"])
+        for _, row in sp_gate_blocked.sort_values("game_start_utc").iterrows():
+            matchup = f"{row['away_team']}@{row['home_team']}"
+            reason = (row.get("away_dog_rl_block_reason") or "").strip()
+            era = row.get("hsp_era_wma")
+            era_s = f"{float(era):.2f}" if pd.notna(era) else "n/a"
+            lines.append(
+                f"  [{matchup}]  hsp_era_wma={era_s}  {reason}"
+            )
+
     near_miss = scored[
         scored.get("away_dog_rl_block_reason", pd.Series("", index=scored.index))
         .astype(str)
         .str.len()
         > 0
     ] if "away_dog_rl_block_reason" in scored.columns else scored.iloc[0:0]
+    if "away_dog_rl_sp_gate_blocked" in scored.columns:
+        near_miss = near_miss[~near_miss["away_dog_rl_sp_gate_blocked"].fillna(False)]
     near_miss = near_miss[~near_miss.index.isin(away_dog_hits.index)]
     if not near_miss.empty:
         lines.extend(["", "  Away Dog RL near-miss:"])
@@ -1127,6 +1176,7 @@ def build_output_csv(scored: pd.DataFrame) -> pd.DataFrame:
         "away_dog_rl_rank",
         "away_dog_rl_juice_blocked",
         "away_dog_rl_cap_blocked",
+        "away_dog_rl_sp_gate_blocked",
         "away_dog_rl_stake",
         "away_dog_rl_block_reason",
         "wind_direction",

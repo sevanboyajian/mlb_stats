@@ -409,13 +409,16 @@ def format_prediction_report(
     ad_fired = len(away_dog_rows)
     ad_staked = sum(1 for r in away_dog_rows if _as_bool(r.get("away_dog_rl_actionable")))
     ad_juice = sum(1 for r in away_dog_rows if _as_bool(r.get("away_dog_rl_juice_blocked")))
+    ad_sp_gate = sum(1 for r in rows if _as_bool(r.get("away_dog_rl_sp_gate_blocked")))
     lines.extend([
         "",
         "── AWAY DOG RL PICKS ────────────────────────────",
         "[Away ML +101–+130 | total ≤ 8.5 | away underdog]",
+        "[Gate: home SP ERA WMA >= 5.0 (Weak SP) or insufficient SP data]",
         "[Backtest May–Aug 2019–2025: 66.1% cover, n=1,059]",
         f"[Cap {4} per day | Juice gate: -190 or better]",
-        f"Today: {ad_staked} staked / {ad_fired} qualified / {ad_juice} juice-blocked",
+        f"Today: {ad_staked} staked / {ad_fired} qualified / {ad_juice} juice-blocked / "
+        f"{ad_sp_gate} sp-gate-blocked",
         "",
     ])
     away_dog_rows.sort(
@@ -465,6 +468,19 @@ def format_prediction_report(
                     f"    {away} @ {home}  {(row.get('away_dog_rl_block_reason') or '').strip()}"
                 )
             lines.append("")
+    sp_gate = [r for r in rows if _as_bool(r.get("away_dog_rl_sp_gate_blocked"))]
+    if sp_gate:
+        lines.append("  SP-gate-blocked (hsp_era_wma gate):")
+        for row in sp_gate:
+            away = row.get("away_team", "???")
+            home = row.get("home_team", "???")
+            era = _as_float(row.get("hsp_era_wma"))
+            era_s = f"{era:.2f}" if era is not None else "n/a"
+            lines.append(
+                f"    {away} @ {home}  hsp_era_wma={era_s}  "
+                f"{(row.get('away_dog_rl_block_reason') or '').strip()}"
+            )
+        lines.append("")
 
     lines.extend([
         "",

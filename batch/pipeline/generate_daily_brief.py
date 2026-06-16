@@ -7667,11 +7667,12 @@ def build_primary_brief(games, streaks, starters, game_date,
     lines.append(section("🔥  ACTION SUMMARY", width=BW))
     lines.append(f"\n  Bets Today: {len(bets_list)}")
     lines.append(f"  Games Evaluated: {len(games)}")
-    if away_dog_slate_stats.get("fired", 0):
+    if away_dog_slate_stats.get("fired", 0) or away_dog_slate_stats.get("sp_gate_blocked", 0):
         ad = away_dog_slate_stats
         lines.append(
             f"  Away Dog RL signals: {ad['fired']} fired → {ad['staked']} staked "
             f"(juice gate blocked {ad['juice_blocked']}, "
+            f"sp_gate blocked {ad.get('sp_gate_blocked', 0)}, "
             f"cap blocked {ad['cap_blocked']})"
         )
     lines.append("")

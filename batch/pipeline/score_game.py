@@ -127,6 +127,8 @@ AWAY_DOG_RL_ML_NEXT_TIER_MAX = 160
 AWAY_DOG_RL_MAX_JUICE = -190
 AWAY_DOG_RL_DAILY_CAP = 4
 AWAY_DOG_RL_STAKE = 0.10  # unit stake per backtest / score_today calibration
+AWAY_DOG_RL_HOME_SP_ERA_MIN = 5.0  # Weak home SP required — backtest confirmed gate
+AWAY_DOG_RL_MIN_HOME_SP_STARTS = 3  # min starts before SP ERA gate applies
 BRIEF_FLAT_STAKE = 1.00  # standard brief ML/RL/total edge-gated pick (backtests use flat 1u)
 OWM_STAKE = BRIEF_FLAT_STAKE  # alias — backtest_owm assumes flat 1u per pick
 
@@ -898,6 +900,24 @@ def _eval_owm(g: FullyDressedGame, game_month: int) -> SignalFinding:
     )
 
 
+def _away_dog_rl_home_sp_gate_block_reason(home_sp: object | None) -> str | None:
+    """Block when home SP ERA WMA is strong (< 5.0) with sufficient sample."""
+    if home_sp is None:
+        return None
+    era = getattr(home_sp, "era_wma", None)
+    starts = int(getattr(home_sp, "starts_in_window", 0) or 0)
+    if era is None or starts < AWAY_DOG_RL_MIN_HOME_SP_STARTS:
+        return None
+    era_f = float(era)
+    if era_f < AWAY_DOG_RL_HOME_SP_ERA_MIN:
+        return (
+            f"Away Dog RL blocked — home SP ERA WMA {era_f:.2f} < "
+            f"{AWAY_DOG_RL_HOME_SP_ERA_MIN:.1f} "
+            f"(need Weak SP >= {AWAY_DOG_RL_HOME_SP_ERA_MIN:.1f})"
+        )
+    return None
+
+
 def _away_dog_rl_near_miss_note(
     away_ml: int | None,
     home_ml: int | None,
@@ -954,15 +974,19 @@ def _eval_away_dog_rl(g: FullyDressedGame) -> SignalFinding:
             f"total {float(total_line):g} above {AWAY_DOG_RL_TOTAL_MAX:g} threshold"
         )
     else:
-        fires = True
-        if away_rl_odds is None:
-            rl_note = "RL odds unavailable — verify juice before placing"
+        sp_block = _away_dog_rl_home_sp_gate_block_reason(g.matchup.home_sp)
+        if sp_block:
+            reason = sp_block
         else:
-            rl_note = _fmt_odds(away_rl_odds)
-        reason = (
-            f"Away Dog RL — {away_abbr} light underdog ({_fmt_odds(away_ml)}) "
-            f"in low-total game ({float(total_line):g}); away +1.5 @ {rl_note}."
-        )
+            fires = True
+            if away_rl_odds is None:
+                rl_note = "RL odds unavailable — verify juice before placing"
+            else:
+                rl_note = _fmt_odds(away_rl_odds)
+            reason = (
+                f"Away Dog RL — {away_abbr} light underdog ({_fmt_odds(away_ml)}) "
+                f"in low-total game ({float(total_line):g}); away +1.5 @ {rl_note}."
+            )
 
     odds_txt = (
         _fmt_odds(away_rl_odds)
@@ -1378,6 +1402,7 @@ class ScoredGame:
     away_dog_rl_block_reason: str | None = None
     away_dog_rl_juice_blocked: bool = False
     away_dog_rl_cap_blocked: bool = False
+    away_dog_rl_sp_gate_blocked: bool = False
     away_dog_rl_rank: int | None = None
 
 
@@ -1991,12 +2016,27 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
     away_dog_fired = any(
         s.signal_id == "AWAY_DOG_RL" and s.fires for s in scored_signals
     )
+    away_dog_rl_sig = next(
+        (s for s in scored_signals if s.signal_id == "AWAY_DOG_RL"), None
+    )
+    away_dog_rl_sp_gate_blocked = bool(
+        away_dog_rl_sig is not None
+        and not away_dog_fired
+        and (away_dog_rl_sig.edge_basis or "").startswith(
+            "Away Dog RL blocked — home SP ERA WMA"
+        )
+    )
     away_dog_rl_block_reason = _away_dog_rl_near_miss_note(
         mkt.away_ml_current,
         mkt.home_ml_current,
         mkt.total_current,
     )
-    if away_dog_rl_block_reason and not away_dog_fired:
+    if away_dog_rl_sp_gate_blocked and away_dog_rl_sig is not None:
+        sp_flag = f"⚠ {away_dog_rl_sig.edge_basis}"
+        if sp_flag not in data_flags and away_dog_rl_sig.edge_basis not in data_flags:
+            data_flags.append(sp_flag)
+        away_dog_rl_block_reason = away_dog_rl_sig.edge_basis
+    elif away_dog_rl_block_reason and not away_dog_fired:
         data_flags.append(away_dog_rl_block_reason)
 
     away_dog_rl_actionable = False
@@ -2105,6 +2145,7 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
         away_dog_rl_block_reason=away_dog_rl_block_reason,
         away_dog_rl_juice_blocked=away_dog_rl_juice_blocked,
         away_dog_rl_cap_blocked=away_dog_rl_cap_blocked,
+        away_dog_rl_sp_gate_blocked=away_dog_rl_sp_gate_blocked,
         away_dog_rl_rank=away_dog_rl_rank,
     )
 
@@ -2196,10 +2237,25 @@ def apply_away_dog_rl_slate_limits(entries: list[dict]) -> dict[str, int]:
     Mutates ``entry['sigs']`` and ``_scored_game`` on each row.
     """
     seen_pk: set[int] = set()
+    sp_seen_pk: set[int] = set()
     fired = 0
     juice_blocked_n = 0
+    sp_gate_blocked_n = 0
     cap_blocked_n = 0
     staked = 0
+
+    for entry in entries:
+        sigs = entry.get("sigs") or {}
+        if not sigs.get("away_dog_rl_sp_gate_blocked"):
+            continue
+        try:
+            gpk = int((entry.get("game") or {}).get("game_pk"))
+        except (TypeError, ValueError, KeyError):
+            gpk = id(entry)
+        if gpk in sp_seen_pk:
+            continue
+        sp_seen_pk.add(gpk)
+        sp_gate_blocked_n += 1
 
     candidates: list[dict] = []
     for entry in entries:
@@ -2274,6 +2330,7 @@ def apply_away_dog_rl_slate_limits(entries: list[dict]) -> dict[str, int]:
         "fired": fired,
         "staked": staked,
         "juice_blocked": juice_blocked_n,
+        "sp_gate_blocked": sp_gate_blocked_n,
         "cap_blocked": cap_blocked_n,
     }
 
@@ -2634,6 +2691,7 @@ def scored_game_to_eval_dict(scored: ScoredGame, session: str) -> dict[str, Any]
         "away_dog_rl_block_reason": getattr(scored, "away_dog_rl_block_reason", None),
         "away_dog_rl_juice_blocked": bool(getattr(scored, "away_dog_rl_juice_blocked", False)),
         "away_dog_rl_cap_blocked": bool(getattr(scored, "away_dog_rl_cap_blocked", False)),
+        "away_dog_rl_sp_gate_blocked": bool(getattr(scored, "away_dog_rl_sp_gate_blocked", False)),
         "away_dog_rl_rank": getattr(scored, "away_dog_rl_rank", None),
         "away_rl_odds": mkt.away_rl_odds,
     }
