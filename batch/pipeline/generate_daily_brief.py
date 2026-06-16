@@ -2166,7 +2166,72 @@ def _entry_pick_is_actionable(entry: dict) -> bool:
         return True
     if bool((entry.get("sigs") or {}).get("away_dog_rl_actionable")):
         return True
+    if sg is not None and bool(getattr(sg, "under_era_actionable", False)):
+        return True
     return False
+
+
+def _collect_under_era_paused_selections(
+    evaluated_entries: list[dict],
+    *,
+    session: str,
+) -> list[dict]:
+    """Build ADDITIONAL — NOT STAKED rows for standard-tier Under signals."""
+    from batch.pipeline.score_game import UNDER_STANDARD_PAUSE_MSG
+
+    results: list[dict] = []
+    for entry in evaluated_entries:
+        sg = (entry.get("sigs") or {}).get("_scored_game")
+        if sg is None or not bool(getattr(sg, "under_era_standard_paused", False)):
+            continue
+        game = entry.get("game") or {}
+        try:
+            game_pk = int(game.get("game_pk"))
+        except (TypeError, ValueError):
+            continue
+        home_team = str(game.get("home_abbr") or game.get("home_team") or "")
+        away_team = str(game.get("away_abbr") or game.get("away_team") or "")
+        mkt = sg.game.market
+        tot = mkt.total_current
+        tot_s = f"{float(tot):g}" if tot is not None else "?"
+        under_odds = mkt.under_odds
+        odds_str = (
+            f"+{under_odds}"
+            if under_odds is not None and int(under_odds) > 0
+            else str(under_odds)
+            if under_odds is not None
+            else "N/A"
+        )
+        edge = getattr(sg, "edge", None)
+        model_p = getattr(sg, "model_p", None)
+        implied_p = getattr(sg, "implied_p", None)
+        edge_str = f"{float(edge) * 100:+.1f}%" if edge is not None else "N/A"
+        model_pct = f"{float(model_p) * 100:.0f}%" if model_p is not None else "N/A"
+        implied_pct = f"{float(implied_p) * 100:.0f}%" if implied_p is not None else "N/A"
+        under_score = int((sg.aggregated_by_side or {}).get("under_total", 0) or 8)
+        results.append({
+            "game_pk": game_pk,
+            "home_team": home_team,
+            "away_team": away_team,
+            "score": under_score,
+            "best_side": "under_total",
+            "market_type": "TOTAL",
+            "eval_status": "NO_BET",
+            "edge": edge,
+            "edge_str": edge_str,
+            "model_p": model_p,
+            "model_pct": model_pct,
+            "implied_pct": implied_pct,
+            "odds": under_odds,
+            "odds_str": odds_str,
+            "bet_label": f"UNDER {tot_s}",
+            "signals_fired": [{"signal_id": "UNDER", "fires": True}],
+            "fired_names": ["Under (ERA)"],
+            "suppression_reasons": [UNDER_STANDARD_PAUSE_MSG],
+            "primary_suppression": UNDER_STANDARD_PAUSE_MSG[:120],
+            "session": session,
+        })
+    return results
 
 
 def _effective_stake_for_away_dog_rl_entry(entry: dict) -> float:
@@ -3967,6 +4032,12 @@ def _effective_stake_for_scored_game(sg: object | None) -> float:
                 from batch.pipeline.score_game import AWAY_DOG_RL_STAKE
 
                 return float(getattr(sg, "away_dog_rl_stake", 0.0) or AWAY_DOG_RL_STAKE)
+            return 0.0
+        if getattr(sg, "best_side", None) == "under_total":
+            if bool(getattr(sg, "under_era_actionable", False)):
+                from batch.pipeline.score_game import UNDER_STAKE
+
+                return float(getattr(sg, "under_era_stake", 0.0) or UNDER_STAKE)
             return 0.0
         sm = float(getattr(sg, "stake_multiplier", 0.0) or 0.0)
         pa = getattr(sg, "pick_is_actionable", None)
@@ -7660,9 +7731,27 @@ def build_primary_brief(games, streaks, starters, game_date,
             bet_lbl = f"{(g.get('away_abbr') or 'AWAY')} +1.5 RL"
         elif bet_side == "home_ml":
             bet_lbl = f"{(sg.game.identifiers.home_team_abbr or 'HOME')} ML"
+        elif bet_side == "under_total":
+            tot = sg.game.market.total_current
+            tot_s = f"{float(tot):g}" if tot is not None else "?"
+            bet_lbl = f"UNDER {tot_s} (strong tier only, 1.00u)"
         else:
             bet_lbl = bet_side.upper() if bet_side else "BET"
         bets_list.append(f"- {bet_lbl} ({st:.2f}u)")
+
+    under_staked_n = sum(
+        1
+        for e in all_picks
+        if (sg := (e.get("sigs") or {}).get("_scored_game")) is not None
+        and bool(getattr(sg, "under_era_actionable", False))
+        and _effective_stake_for_scored_game(sg) > 0
+    )
+    under_paused_n = sum(
+        1
+        for e in evaluated_entries
+        if (sg := (e.get("sigs") or {}).get("_scored_game")) is not None
+        and bool(getattr(sg, "under_era_standard_paused", False))
+    )
 
     lines.append(section("🔥  ACTION SUMMARY", width=BW))
     lines.append(f"\n  Bets Today: {len(bets_list)}")
@@ -7674,6 +7763,11 @@ def build_primary_brief(games, streaks, starters, game_date,
             f"(juice gate blocked {ad['juice_blocked']}, "
             f"sp_gate blocked {ad.get('sp_gate_blocked', 0)}, "
             f"cap blocked {ad['cap_blocked']})"
+        )
+    if under_staked_n or under_paused_n:
+        lines.append(
+            f"  Under signals: {under_staked_n} staked (strong tier only) / "
+            f"{under_paused_n} standard-tier paused"
         )
     lines.append("")
     if bets_list:
@@ -7838,6 +7932,17 @@ def build_primary_brief(games, streaks, starters, game_date,
         additional_selections = [
             a for a in raw_additional if a["game_pk"] not in overflow_pks
         ]
+
+    under_paused_cards = _collect_under_era_paused_selections(
+        evaluated_entries,
+        session=sess_key,
+    )
+    if under_paused_cards:
+        existing_pks = {a["game_pk"] for a in additional_selections}
+        for card in under_paused_cards:
+            if card["game_pk"] not in existing_pks:
+                additional_selections.append(card)
+                existing_pks.add(card["game_pk"])
 
     total_additional = len(bet_overflow_cards) + len(additional_selections)
     additional_pk_to_card = _collect_additional_selection_card_map(

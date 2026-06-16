@@ -20,10 +20,15 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_ENGINE_LOG = _REPO_ROOT / "outputs" / "reports" / "prediction_engine_log.csv"
 
 from batch.analysis.prediction.score_today import (  # noqa: E402
+    UNDER_BACKTEST_N,
     UNDER_BACKTEST_ROI_MINUS110,
     UNDER_BACKTEST_UNDER_RATE,
+    UNDER_STANDARD_SKIP_REASON,
+    UNDER_STRONG_N,
+    UNDER_STRONG_ROI_ACTUAL,
     UNDER_STRONG_ROI_MINUS110,
     UNDER_STRONG_UNDER_RATE,
+    UNDER_STAKE,
 )
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -370,12 +375,14 @@ def format_prediction_report(
 
     lines.extend([
         "── UNDER PICKS ──────────────────────────────────",
-        "[Backtest May-Aug 2019-2025: combined ERA WMA < 6.0 → "
-        f"{UNDER_BACKTEST_UNDER_RATE:.1f}% under vs posted total, "
-        f"{UNDER_BACKTEST_ROI_MINUS110:+.1f}% ROI at -110]",
-        "[Strong: combined < 5.0 + wind in → "
-        f"{UNDER_STRONG_UNDER_RATE:.1f}% under, {UNDER_STRONG_ROI_MINUS110:+.1f}% at -110]",
-        "[Note: standard tier below 52.4% break-even at -110 — not +EV at standard juice]",
+        f"Backtest (posted total, 2019-2025): N={UNDER_BACKTEST_N} | "
+        f"Under rate: {UNDER_BACKTEST_UNDER_RATE:.1f}% | "
+        f"ROI: {UNDER_BACKTEST_ROI_MINUS110:+.1f}% at -110",
+        f"Strong (combined <5.0 + wind in):  N={UNDER_STRONG_N}  |  "
+        f"Under rate: {UNDER_STRONG_UNDER_RATE:.1f}% | ROI: "
+        f"+{UNDER_STRONG_ROI_MINUS110:.1f}% at -110 "
+        f"(+{UNDER_STRONG_ROI_ACTUAL:.1f}% at actual odds)",
+        "NOTE: Standard tier PAUSED (sub-breakeven). Only STRONG tier staked.",
         "[Suppressed venues: Fenway Park, Oracle Park]",
         "",
     ])
@@ -393,6 +400,7 @@ def format_prediction_report(
             total = _as_float(row.get("total_line"))
             total_s = f"{total:.1f}" if total is not None else "?"
             strong = _as_bool(row.get("under_signal_strong"))
+            actionable = _as_bool(row.get("under_actionable"))
             combined_s = f"{combined:.2f}" if combined is not None else "?"
             tag = " STRONG" if strong else ""
             h_line = (
@@ -405,13 +413,23 @@ def format_prediction_report(
                 if a_era is not None
                 else f"  Away SP:    {away} — n/a ERA WMA"
             )
+            if actionable:
+                status = "✅ GO — STRONG"
+                stake_line = f"  STAKE: {UNDER_STAKE:.2f}u"
+            else:
+                status = "⛔ NO BET — standard tier paused"
+                skip = (
+                    str(row.get("under_skip_reason") or UNDER_STANDARD_SKIP_REASON).strip()
+                )
+                stake_line = f"  {skip}"
             lines.extend([
-                f"  {away} @ {home}",
+                f"  {status}  {away} @ {home}",
                 f"  Pick:       UNDER {total_s}  ({_format_odds(row.get('under_odds'))})",
                 h_line,
                 a_line,
                 f"  Combined:   {combined_s}{tag}",
                 f"  Wind:       {_wind_display(row)}",
+                stake_line,
                 f"  Game:       {_game_time_et(row.get('game_start_utc'))}",
                 "",
             ])
