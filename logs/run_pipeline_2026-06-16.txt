@@ -130,3 +130,18 @@ Today: 1 staked / 1 qualified / 0 juice-blocked / 6 sp-gate-blocked
 [score_today] prediction_engine_log wrote 1 row(s) for 2026-06-16 -> C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\outputs\reports\prediction_engine_log.csv
 [score_today] Logged score_today_log game_date_et=2026-06-16 ml=0 under=1 rl=0 email_sent=1
 [run_pipeline] sleep-until-due: next pending at 2026-06-16 17:10 ET (~25740s)
+Traceback (most recent call last):
+  File "C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\batch\jobs\run_pipeline.py", line 2890, in <module>
+    main()
+  File "C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\batch\jobs\run_pipeline.py", line 2868, in main
+    run_loop(
+  File "C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\batch\jobs\run_pipeline.py", line 2382, in run_loop
+    if _sleep_until_next_pending_or_poll(
+       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\batch\jobs\run_pipeline.py", line 752, in _sleep_until_next_pending_or_poll
+    time.sleep(delta)
+KeyboardInterrupt
+[run_pipeline] force-unlock: runner_lock not present (nothing to clear)
+[run_pipeline] db=C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\data\mlb_stats.db
+[run_pipeline] mode=loop poll_seconds=60 ghost=False stale_minutes=30 timeout_minutes=30 sleep_until_due=True scope_job_date_et='2026-06-16' exit_when_no_pending=True
+[run_pipeline] sleep-until-due: next pending at 2026-06-16 17:10 ET (~1560s)
