@@ -6,21 +6,22 @@ Compute 5-start linearly-decayed WMA of pitcher performance and upsert
 into pitcher_rolling_stats.
 
 METRICS (all computed per qualifying start, then WMA applied):
-  era_wma     = (earned_runs * 9.0) / innings_pitched
-  k_per_9_wma = (strikeouts_pit * 9.0) / innings_pitched
-  whip_wma    = (walks_allowed + hits_allowed) / innings_pitched
+  era_wma     = aggregate (all starts, context-blind)
+  era_wma_home / era_wma_away = split WMA using only home or away starts
+  k_per_9_wma, whip_wma (+ home/away splits)
 
 QUALIFIER: innings_pitched >= 3.0  (starters only)
 
 WEIGHTS: G-1=5, G-2=4, G-3=3, G-4=2, G-5=1  (divisor=15)
 WINDOW:  5 prior qualifying starts (exclusive of current game)
-MINIMUM: 2 prior starts required before emitting a non-NULL value
+MINIMUM: 2 prior starts for aggregate; 3 for home/away split columns
 
 SOURCE:  player_game_stats + game_probable_pitchers + games
 TARGET:  pitcher_rolling_stats (upsert on player_id, game_pk)
 
 USAGE:
   python -m batch.pipeline.build_pitcher_wma --seasons 2025 2026
+  python -m batch.pipeline.build_pitcher_wma --backfill
   python -m batch.pipeline.build_pitcher_wma --seasons 2026 --dry-run
   python -m batch.pipeline.build_pitcher_wma --seasons 2026 --verbose
 """
@@ -39,12 +40,14 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from core.db.connection import connect as db_connect, get_db_path
+from core.db.pitcher_rolling_schema import ensure_pitcher_rolling_splits
 
 # ── WMA constants ──────────────────────────────────────────────────────────────
 WMA_WEIGHTS: list[int] = [5, 4, 3, 2, 1]
 WMA_WINDOW: int = len(WMA_WEIGHTS)        # 5
 WMA_DIVISOR: float = float(sum(WMA_WEIGHTS))  # 15.0
 WMA_MIN_STARTS: int = 2
+WMA_MIN_STARTS_SPLIT: int = 3
 MIN_IP: float = 3.0  # qualifying start threshold
 
 
@@ -81,6 +84,7 @@ class PitcherStartRow:
     """One qualifying start for a pitcher."""
     game_date_et: str
     game_pk: int
+    is_home: bool
     era: float | None
     k_per_9: float | None
     whip: float | None
@@ -97,16 +101,24 @@ class PitcherWMAResult:
     era_wma: float | None
     k_per_9_wma: float | None
     whip_wma: float | None
+    starts_in_window_home: int
+    era_wma_home: float | None
+    k_per_9_wma_home: float | None
+    whip_wma_home: float | None
+    starts_in_window_away: int
+    era_wma_away: float | None
+    k_per_9_wma_away: float | None
+    whip_wma_away: float | None
 
 
-def _wma(values: list[float | None]) -> float | None:
+def _wma(values: list[float | None], *, min_starts: int = WMA_MIN_STARTS) -> float | None:
     """
     Apply WMA weights to a list ordered most-recent first.
-    Returns None if fewer than WMA_MIN_STARTS usable values.
+    Returns None if fewer than min_starts usable values.
     """
     usable = [v for v in values if v is not None]
     n = len(usable)
-    if n < WMA_MIN_STARTS:
+    if n < min_starts:
         return None
     weights = WMA_WEIGHTS[:n]
     divisor = float(sum(weights))
@@ -129,15 +141,17 @@ def _compute_wma_for_pitcher(
     results: list[PitcherWMAResult] = []
 
     for game_date, game_pk, season, team_id in scheduled_games:
-        # Prior qualifying starts strictly before this game
         prior = [
             s for s in start_history
             if (s.game_date_et, s.game_pk) < (game_date, game_pk)
         ]
-        # Most recent first, capped at window
         prior_window = prior[-WMA_WINDOW:][::-1]
+        prior_home = [s for s in prior if s.is_home][-WMA_WINDOW:][::-1]
+        prior_away = [s for s in prior if not s.is_home][-WMA_WINDOW:][::-1]
 
         n = len(prior_window)
+        nh = len(prior_home)
+        na = len(prior_away)
         results.append(PitcherWMAResult(
             player_id=_player_id,
             game_pk=game_pk,
@@ -148,6 +162,26 @@ def _compute_wma_for_pitcher(
             era_wma=_wma([s.era for s in prior_window]),
             k_per_9_wma=_wma([s.k_per_9 for s in prior_window]),
             whip_wma=_wma([s.whip for s in prior_window]),
+            starts_in_window_home=nh,
+            era_wma_home=_wma(
+                [s.era for s in prior_home], min_starts=WMA_MIN_STARTS_SPLIT
+            ),
+            k_per_9_wma_home=_wma(
+                [s.k_per_9 for s in prior_home], min_starts=WMA_MIN_STARTS_SPLIT
+            ),
+            whip_wma_home=_wma(
+                [s.whip for s in prior_home], min_starts=WMA_MIN_STARTS_SPLIT
+            ),
+            starts_in_window_away=na,
+            era_wma_away=_wma(
+                [s.era for s in prior_away], min_starts=WMA_MIN_STARTS_SPLIT
+            ),
+            k_per_9_wma_away=_wma(
+                [s.k_per_9 for s in prior_away], min_starts=WMA_MIN_STARTS_SPLIT
+            ),
+            whip_wma_away=_wma(
+                [s.whip for s in prior_away], min_starts=WMA_MIN_STARTS_SPLIT
+            ),
         ))
     return results
 
@@ -206,6 +240,8 @@ def _load_start_history(
             pgs.player_id,
             g.game_date_et,
             pgs.game_pk,
+            pgs.team_id,
+            g.home_team_id,
             pgs.innings_pitched,
             pgs.earned_runs,
             pgs.strikeouts_pit,
@@ -222,19 +258,34 @@ def _load_start_history(
     """
     rows = con.execute(sql, [*seasons, MIN_IP]).fetchall()
     result: dict[int, list[PitcherStartRow]] = {}
-    for (player_id, game_date, game_pk,
+    for (player_id, game_date, game_pk, team_id, home_team_id,
          ip, er, k, bb, h) in rows:
         if game_date is None:
             continue
         era, k9, whip = _start_metrics(ip, er, k, bb, h)
+        is_home = int(team_id) == int(home_team_id)
         result.setdefault(int(player_id), []).append(PitcherStartRow(
             game_date_et=str(game_date),
             game_pk=int(game_pk),
+            is_home=is_home,
             era=era,
             k_per_9=k9,
             whip=whip,
         ))
     return result
+
+
+def _discover_seasons(con: sqlite3.Connection) -> list[int]:
+    row = con.execute(
+        """
+        SELECT MIN(season), MAX(season)
+        FROM games
+        WHERE game_type = 'R'
+        """
+    ).fetchone()
+    if not row or row[0] is None:
+        return [2025, 2026]
+    return list(range(int(row[0]), int(row[1]) + 1))
 
 
 # ── upsert ────────────────────────────────────────────────────────────────────
@@ -249,30 +300,47 @@ def _upsert_results(
     for r in results:
         if verbose:
             era_s = f"{r.era_wma:.3f}" if r.era_wma is not None else "NULL"
-            k9_s = f"{r.k_per_9_wma:.3f}" if r.k_per_9_wma is not None else "NULL"
-            whip_s = f"{r.whip_wma:.3f}" if r.whip_wma is not None else "NULL"
+            eh_s = f"{r.era_wma_home:.3f}" if r.era_wma_home is not None else "NULL"
+            ea_s = f"{r.era_wma_away:.3f}" if r.era_wma_away is not None else "NULL"
             print(
                 f"  pid={r.player_id}  pk={r.game_pk}  date={r.game_date_et}"
-                f"  starts={r.starts_in_window}"
-                f"  era={era_s}  k9={k9_s}  whip={whip_s}"
+                f"  agg={era_s}  home={eh_s}({r.starts_in_window_home})"
+                f"  away={ea_s}({r.starts_in_window_away})"
             )
         if not dry_run:
             con.execute(
                 """
                 INSERT INTO pitcher_rolling_stats
                     (player_id, game_pk, game_date_et, season, team_id,
-                     starts_in_window, era_wma, k_per_9_wma, whip_wma)
-                VALUES (?,?,?,?,?,?,?,?,?)
+                     starts_in_window, era_wma, k_per_9_wma, whip_wma,
+                     starts_in_window_home, era_wma_home, k_per_9_wma_home,
+                     whip_wma_home, starts_in_window_away, era_wma_away,
+                     k_per_9_wma_away, whip_wma_away)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(player_id, game_pk) DO UPDATE SET
-                    starts_in_window = excluded.starts_in_window,
-                    era_wma          = excluded.era_wma,
-                    k_per_9_wma      = excluded.k_per_9_wma,
-                    whip_wma         = excluded.whip_wma,
-                    updated_at       = datetime('now')
+                    starts_in_window      = excluded.starts_in_window,
+                    era_wma               = excluded.era_wma,
+                    k_per_9_wma           = excluded.k_per_9_wma,
+                    whip_wma              = excluded.whip_wma,
+                    starts_in_window_home = excluded.starts_in_window_home,
+                    era_wma_home          = excluded.era_wma_home,
+                    k_per_9_wma_home      = excluded.k_per_9_wma_home,
+                    whip_wma_home         = excluded.whip_wma_home,
+                    starts_in_window_away = excluded.starts_in_window_away,
+                    era_wma_away          = excluded.era_wma_away,
+                    k_per_9_wma_away      = excluded.k_per_9_wma_away,
+                    whip_wma_away         = excluded.whip_wma_away,
+                    updated_at            = datetime('now')
                 """,
-                (r.player_id, r.game_pk, r.game_date_et, r.season,
-                 r.team_id, r.starts_in_window,
-                 r.era_wma, r.k_per_9_wma, r.whip_wma),
+                (
+                    r.player_id, r.game_pk, r.game_date_et, r.season,
+                    r.team_id, r.starts_in_window,
+                    r.era_wma, r.k_per_9_wma, r.whip_wma,
+                    r.starts_in_window_home, r.era_wma_home,
+                    r.k_per_9_wma_home, r.whip_wma_home,
+                    r.starts_in_window_away, r.era_wma_away,
+                    r.k_per_9_wma_away, r.whip_wma_away,
+                ),
             )
         updated += 1
     if not dry_run:
@@ -294,8 +362,10 @@ def _print_sample(con: sqlite3.Connection, seasons: list[int]) -> None:
             p.full_name,
             prs.starts_in_window,
             prs.era_wma,
-            prs.k_per_9_wma,
-            prs.whip_wma
+            prs.era_wma_home,
+            prs.era_wma_away,
+            prs.starts_in_window_home,
+            prs.starts_in_window_away
         FROM pitcher_rolling_stats prs
         JOIN players p ON p.player_id = prs.player_id
         WHERE prs.season IN ({ph})
@@ -305,29 +375,35 @@ def _print_sample(con: sqlite3.Connection, seasons: list[int]) -> None:
         """,
         seasons,
     ).fetchall()
-    print("\n── Sample output (10 rows, most recent first) ───────────────")
-    print(f"  {'date':<12} {'pk':<10} {'pitcher':<24} {'starts':<7} {'era':<7} {'k/9':<7} {'whip'}")
-    print(f"  {'─'*12} {'─'*10} {'─'*24} {'─'*7} {'─'*7} {'─'*7} {'─'*6}")
-    for date, pk, name, starts, era, k9, whip in rows:
-        era_s = f"{era:.3f}" if era is not None else "  NULL"
-        k9_s = f"{k9:.3f}" if k9 is not None else "  NULL"
-        whip_s = f"{whip:.3f}" if whip is not None else "  NULL"
-        print(f"  {date:<12} {pk:<10} {name:<24} {starts:<7} {era_s:<7} {k9_s:<7} {whip_s}")
+    print("\n-- Sample output (10 rows, most recent first) ----------------")
+    print(
+        f"  {'date':<12} {'pitcher':<22} {'agg':<7} {'home':<7} {'away':<7} "
+        f"{'n_h':<4} {'n_a'}"
+    )
+    for date, _pk, name, _starts, era, eh, ea, nh, na in rows:
+        era_s = f"{era:.2f}" if era is not None else "NULL"
+        eh_s = f"{eh:.2f}" if eh is not None else "NULL"
+        ea_s = f"{ea:.2f}" if ea is not None else "NULL"
+        print(f"  {date:<12} {name:<22} {era_s:<7} {eh_s:<7} {ea_s:<7} {nh:<4} {na}")
 
     r = con.execute(
         f"""
         SELECT COUNT(*) AS total,
                SUM(CASE WHEN era_wma IS NOT NULL THEN 1 ELSE 0 END) AS filled,
-               SUM(CASE WHEN era_wma IS NULL     THEN 1 ELSE 0 END) AS null_rows
+               SUM(CASE WHEN era_wma_home IS NOT NULL THEN 1 ELSE 0 END) AS home_filled
         FROM pitcher_rolling_stats
         WHERE season IN ({ph})
         """,
         seasons,
     ).fetchone()
     if r:
-        total, filled, nulls = r
+        total, filled, home_filled = r
         pct = 100.0 * filled / total if total else 0.0
-        print(f"\n  Coverage: {filled}/{total} rows filled ({pct:.1f}%)  |  NULL: {nulls}\n")
+        hpct = 100.0 * home_filled / total if total else 0.0
+        print(
+            f"\n  Aggregate filled: {filled}/{total} ({pct:.1f}%)"
+            f"  |  Home split filled: {home_filled}/{total} ({hpct:.1f}%)\n"
+        )
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
@@ -336,35 +412,54 @@ def main() -> None:
     p = argparse.ArgumentParser(
         description="Build 5-start WMA pitcher stats into pitcher_rolling_stats."
     )
-    p.add_argument("--seasons", nargs="+", type=int, default=[2025, 2026])
+    p.add_argument("--seasons", nargs="+", type=int, default=None)
+    p.add_argument(
+        "--backfill",
+        action="store_true",
+        help="Recompute all regular-season years in the database",
+    )
     p.add_argument("--db", default=None)
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--verbose", action="store_true")
     p.add_argument("--skip-sample", action="store_true")
     args = p.parse_args()
 
-    seasons = sorted(set(args.seasons))
-    if not seasons:
-        print("[build_pitcher_wma] ERROR: --seasons must include at least one year", file=sys.stderr)
-        sys.exit(2)
     db_path = str(Path(args.db).resolve()) if args.db else str(Path(get_db_path()).resolve())
+    con = db_connect(db_path, timeout=60)
+    con.row_factory = sqlite3.Row
+
+    ensure_pitcher_rolling_splits(con)
+
+    if args.backfill:
+        seasons = _discover_seasons(con)
+    elif args.seasons:
+        seasons = sorted(set(args.seasons))
+    else:
+        seasons = [2025, 2026]
+
+    if not seasons:
+        print("[build_pitcher_wma] ERROR: no seasons to process", file=sys.stderr)
+        sys.exit(2)
 
     print(f"[build_pitcher_wma] seasons={seasons}  db={db_path}")
     if args.dry_run:
         print("[build_pitcher_wma] DRY RUN — no writes")
 
-    con = db_connect(db_path, timeout=60)
-    con.row_factory = sqlite3.Row
-
     print("[build_pitcher_wma] Loading scheduled starts from game_probable_pitchers…")
     scheduled = _load_scheduled_games(con, seasons)
-    print(f"[build_pitcher_wma] {sum(len(v) for v in scheduled.values())} assignments across {len(scheduled)} pitchers")
+    print(
+        f"[build_pitcher_wma] {sum(len(v) for v in scheduled.values())} assignments "
+        f"across {len(scheduled)} pitchers"
+    )
 
     print("[build_pitcher_wma] Loading qualifying start history from player_game_stats…")
     history = _load_start_history(con, seasons)
-    print(f"[build_pitcher_wma] {sum(len(v) for v in history.values())} qualifying starts across {len(history)} pitchers")
+    print(
+        f"[build_pitcher_wma] {sum(len(v) for v in history.values())} qualifying starts "
+        f"across {len(history)} pitchers"
+    )
 
-    print("[build_pitcher_wma] Computing WMA values…")
+    print("[build_pitcher_wma] Computing WMA values (aggregate + home/away splits)…")
     all_results: list[PitcherWMAResult] = []
     for player_id, games in sorted(scheduled.items()):
         starts = history.get(player_id, [])
@@ -374,12 +469,16 @@ def main() -> None:
                 "SELECT full_name FROM players WHERE player_id = ?", (player_id,)
             ).fetchone()
             name = name_row["full_name"] if name_row else str(player_id)
-            print(f"\n── {name} (pid={player_id})  {len(pr_results)} games ──")
+            print(f"\n-- {name} (pid={player_id})  {len(pr_results)} games --")
         all_results.extend(pr_results)
 
     non_null = sum(1 for r in all_results if r.era_wma is not None)
+    home_null = sum(1 for r in all_results if r.era_wma_home is not None)
     print(f"[build_pitcher_wma] Computed {len(all_results)} entries")
-    print(f"[build_pitcher_wma] Non-NULL ERA WMA: {non_null}  |  NULL: {len(all_results) - non_null}")
+    print(
+        f"[build_pitcher_wma] Non-NULL aggregate ERA: {non_null}"
+        f"  |  Non-NULL home split: {home_null}"
+    )
 
     action = "[DRY RUN] Would write" if args.dry_run else "Writing"
     print(f"[build_pitcher_wma] {action} {len(all_results)} rows…")
@@ -387,12 +486,10 @@ def main() -> None:
     print(f"[build_pitcher_wma] {'Would update' if args.dry_run else 'Updated'}: {updated}")
 
     if not args.dry_run and not args.skip_sample:
-        # Windows consoles may still be cp1252 even if UTF-8 is preferred; avoid hard-failing
-        # a pipeline job due to box-drawing characters in sample output.
         try:
             _print_sample(con, seasons)
         except UnicodeEncodeError:
-            print("[build_pitcher_wma] NOTE: console encoding could not render sample output; skipping sample prints.")
+            print("[build_pitcher_wma] NOTE: skipping sample prints (console encoding)")
 
     con.close()
     print("[build_pitcher_wma] Done.")

@@ -78,6 +78,11 @@ class PitcherProfile:
     k_per_9_wma: float | None = None
     whip_wma: float | None = None
     starts_in_window: int = 0
+    era_wma_home: float | None = None
+    k_per_9_wma_home: float | None = None
+    whip_wma_home: float | None = None
+    starts_in_window_home: int = 0
+    era_wma_away: float | None = None
 
 
 # Backwards-compatible name (briefs / external prompts refer to "starter" profile).
@@ -247,7 +252,9 @@ def fetch_dressing_bundle(con: sqlite3.Connection, game_pk: int, game_date_et: s
             ph = ",".join("?" * len(pids))
             cur = con.execute(
                 f"""
-                SELECT prs.player_id, prs.era_wma, prs.k_per_9_wma, prs.whip_wma, prs.starts_in_window
+                SELECT prs.player_id, prs.era_wma, prs.k_per_9_wma, prs.whip_wma,
+                       prs.starts_in_window, prs.era_wma_home, prs.k_per_9_wma_home,
+                       prs.whip_wma_home, prs.starts_in_window_home, prs.era_wma_away
                 FROM pitcher_rolling_stats prs
                 JOIN games g ON g.game_pk = prs.game_pk
                 WHERE prs.player_id IN ({ph})
@@ -513,6 +520,25 @@ def _pitcher_profile_from_starter_row(
     )
     whip_wma = float(wma["whip_wma"]) if wma and wma.get("whip_wma") is not None else None
     starts_in_window = int(wma["starts_in_window"]) if wma and wma.get("starts_in_window") is not None else 0
+    era_wma_home = (
+        float(wma["era_wma_home"]) if wma and wma.get("era_wma_home") is not None else None
+    )
+    k_per_9_wma_home = (
+        float(wma["k_per_9_wma_home"])
+        if wma and wma.get("k_per_9_wma_home") is not None
+        else None
+    )
+    whip_wma_home = (
+        float(wma["whip_wma_home"]) if wma and wma.get("whip_wma_home") is not None else None
+    )
+    starts_in_window_home = (
+        int(wma["starts_in_window_home"])
+        if wma and wma.get("starts_in_window_home") is not None
+        else 0
+    )
+    era_wma_away = (
+        float(wma["era_wma_away"]) if wma and wma.get("era_wma_away") is not None else None
+    )
 
     return PitcherProfile(
         player_id=pid,
@@ -530,6 +556,11 @@ def _pitcher_profile_from_starter_row(
         k_per_9_wma=k_per_9_wma,
         whip_wma=whip_wma,
         starts_in_window=starts_in_window,
+        era_wma_home=era_wma_home,
+        k_per_9_wma_home=k_per_9_wma_home,
+        whip_wma_home=whip_wma_home,
+        starts_in_window_home=starts_in_window_home,
+        era_wma_away=era_wma_away,
     )
 
 

@@ -33,6 +33,8 @@
 -- ============================================================
 -- # CHANGE LOG (latest first)
 -- # -------------------------
+-- # 2026-06-19  pitcher_rolling_stats: era_wma_home/away split columns
+-- #              (context-aware WMA; fixes mixed home/away signal blending)
 -- # 2026-06-10  bet_ledger: signal_type, pick_side, source columns (classification + write path).
 -- # 2026-05-16  game_signal_log: one row per game per day (upsert); all scored games.
 -- # 2026-05-02  bet_snapshots: prior-report source of truth (matches ensure_bet_snapshots /
@@ -367,6 +369,14 @@ CREATE TABLE IF NOT EXISTS pitcher_rolling_stats (
     era_wma         REAL,
     k_per_9_wma     REAL,
     whip_wma        REAL,
+    era_wma_home       REAL,
+    era_wma_away       REAL,
+    k_per_9_wma_home   REAL,
+    k_per_9_wma_away   REAL,
+    whip_wma_home      REAL,
+    whip_wma_away      REAL,
+    starts_in_window_home INTEGER NOT NULL DEFAULT 0,
+    starts_in_window_away INTEGER NOT NULL DEFAULT 0,
     updated_at      DATETIME NOT NULL DEFAULT (datetime('now')),
     UNIQUE (player_id, game_pk)
 );

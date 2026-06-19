@@ -218,6 +218,9 @@ SELECT
     COALESCE(prs_hg.k_per_9_wma, prs_hl.k_per_9_wma)            AS hsp_k_per_9_wma,
     COALESCE(prs_hg.whip_wma, prs_hl.whip_wma)                  AS hsp_whip_wma,
     COALESCE(prs_hg.starts_in_window, prs_hl.starts_in_window)  AS hsp_starts_in_window,
+    COALESCE(prs_hg.era_wma_home, prs_hl.era_wma_home)          AS hsp_era_wma_home,
+    COALESCE(prs_hg.starts_in_window_home, prs_hl.starts_in_window_home)
+                                                                AS hsp_starts_in_window_home,
 
     COALESCE(prs_ag.era_wma, prs_al.era_wma)                    AS asp_era_wma,
     COALESCE(prs_ag.k_per_9_wma, prs_al.k_per_9_wma)            AS asp_k_per_9_wma,
@@ -543,15 +546,55 @@ def compute_ou_rl_signals(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _resolve_home_sp_gate_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Set hsp_era_wma_gate / hsp_era_wma_source for home-SP gate signals."""
+    from batch.pipeline.pitcher_wma_context import WMA_MIN_HOME_SPLIT_STARTS
+
+    out = df.copy()
+    gate_eras: list[float | None] = []
+    gate_starts: list[int] = []
+    gate_sources: list[str] = []
+
+    for i in out.index:
+        home_era = out.loc[i, "hsp_era_wma_home"] if "hsp_era_wma_home" in out.columns else None
+        home_st = (
+            out.loc[i, "hsp_starts_in_window_home"]
+            if "hsp_starts_in_window_home" in out.columns
+            else None
+        )
+        agg_era = out.loc[i, "hsp_era_wma"]
+        agg_st = out.loc[i, "hsp_starts_in_window"]
+
+        if pd.notna(home_era) and int(home_st or 0) >= WMA_MIN_HOME_SPLIT_STARTS:
+            gate_eras.append(float(home_era))
+            gate_starts.append(int(home_st))
+            gate_sources.append("home_split")
+        elif pd.notna(agg_era):
+            gate_eras.append(float(agg_era))
+            gate_starts.append(int(agg_st or 0))
+            gate_sources.append("aggregate_fallback")
+        else:
+            gate_eras.append(None)
+            gate_starts.append(0)
+            gate_sources.append("missing")
+
+    out["hsp_era_wma_gate"] = gate_eras
+    out["hsp_starts_in_window_gate"] = gate_starts
+    out["hsp_era_wma_source"] = gate_sources
+    return out
+
+
 def _apply_owm_signal(df: pd.DataFrame) -> pd.DataFrame:
     """OWM — home hot offense vs struggling away SP, with strong home SP gate."""
     out = df.copy()
 
+    out = _resolve_home_sp_gate_columns(df)
+
     home_ops = pd.to_numeric(out.get("h_rolling_ops_wma"), errors="coerce")
     away_era = pd.to_numeric(out.get("asp_era_wma"), errors="coerce")
-    home_era = pd.to_numeric(out.get("hsp_era_wma"), errors="coerce")
+    home_era = pd.to_numeric(out.get("hsp_era_wma_gate"), errors="coerce")
     away_starts = pd.to_numeric(out.get("asp_starts_in_window"), errors="coerce").fillna(0)
-    home_starts = pd.to_numeric(out.get("hsp_starts_in_window"), errors="coerce").fillna(0)
+    home_starts = pd.to_numeric(out.get("hsp_starts_in_window_gate"), errors="coerce").fillna(0)
 
     away_sp_ok = away_era.notna() & (away_starts >= MIN_SP_STARTS)
     home_sp_ok = home_era.notna() & (home_starts >= MIN_SP_STARTS)
@@ -569,9 +612,11 @@ def _apply_owm_signal(df: pd.DataFrame) -> pd.DataFrame:
             block_reasons.append("")
             continue
         era_val = float(home_era.loc[i])
+        src = str(out.loc[i, "hsp_era_wma_source"] or "")
+        ctx = "home-context" if src == "home_split" else "aggregate"
         block_reasons.append(
-            f"OWM blocked — home SP ERA WMA {era_val:.2f} >= {OWM_HOME_SP_ERA_MAX:.1f} "
-            f"(need Strong SP < {OWM_HOME_SP_ERA_MAX:.1f})"
+            f"OWM blocked — home SP ERA WMA ({ctx}) {era_val:.2f} >= "
+            f"{OWM_HOME_SP_ERA_MAX:.1f} (need Strong SP < {OWM_HOME_SP_ERA_MAX:.1f})"
         )
     out["owm_block_reason"] = block_reasons
 
@@ -580,12 +625,12 @@ def _apply_owm_signal(df: pd.DataFrame) -> pd.DataFrame:
 
 def _apply_away_dog_rl_signal(df: pd.DataFrame) -> pd.DataFrame:
     """Standalone Away Dog +1.5 when away ML +101–+130 and total ≤ 8.5."""
-    out = df.copy()
+    out = _resolve_home_sp_gate_columns(df)
     away_ml = pd.to_numeric(out.get("away_ml"), errors="coerce")
     home_ml = pd.to_numeric(out.get("home_ml"), errors="coerce")
     total_line = pd.to_numeric(out.get("total_line"), errors="coerce")
-    home_era = pd.to_numeric(out.get("hsp_era_wma"), errors="coerce")
-    home_starts = pd.to_numeric(out.get("hsp_starts_in_window"), errors="coerce").fillna(0)
+    home_era = pd.to_numeric(out.get("hsp_era_wma_gate"), errors="coerce")
+    home_starts = pd.to_numeric(out.get("hsp_starts_in_window_gate"), errors="coerce").fillna(0)
 
     away_dog = away_ml.notna() & home_ml.notna() & (away_ml > home_ml)
     band_ok = away_dog & (away_ml >= AWAY_DOG_RL_ML_MIN) & (away_ml <= AWAY_DOG_RL_ML_MAX)
@@ -604,8 +649,10 @@ def _apply_away_dog_rl_signal(df: pd.DataFrame) -> pd.DataFrame:
     for i in out.index:
         if bool(out.loc[i, "away_dog_rl_sp_gate_blocked"]):
             era_val = float(home_era.loc[i])
+            src = str(out.loc[i, "hsp_era_wma_source"] or "")
+            ctx = "home-context" if src == "home_split" else "aggregate"
             block_reasons.append(
-                f"Away Dog RL blocked — home SP ERA WMA {era_val:.2f} < "
+                f"Away Dog RL blocked — home SP ERA WMA ({ctx}) {era_val:.2f} < "
                 f"{AWAY_DOG_RL_HOME_SP_ERA_MIN:.1f} "
                 f"(need Weak SP >= {AWAY_DOG_RL_HOME_SP_ERA_MIN:.1f})"
             )
@@ -1018,12 +1065,18 @@ def build_report(
                 home_ml_s = f"{int(home_ml_raw):+d}"
             else:
                 home_ml_s = "n/a"
+            src = str(row.get("hsp_era_wma_source") or "")
+            gate_era = row.get("hsp_era_wma_gate", row.get("hsp_era_wma"))
+            ctx = "home-context" if src == "home_split" else "aggregate"
+            n_note = ""
+            if src == "home_split" and pd.notna(row.get("hsp_starts_in_window_home")):
+                n_note = f", n={int(row['hsp_starts_in_window_home'])} home starts"
             lines.append(
                 f"  ✅ GO  [{matchup}]  →  {row['home_team']} ML {home_ml_s}\n"
                 f"      Home offense OPS WMA: {row['h_rolling_ops_wma']:.3f}\n"
                 f"      Away SP ERA WMA: {row['asp_era_wma']:.2f}\n"
-                f"      DATA: home SP ERA WMA {row['hsp_era_wma']:.2f} "
-                f"(gate < {OWM_HOME_SP_ERA_MAX:.1f} — Strong)"
+                f"      DATA: home SP ERA WMA ({ctx}) {float(gate_era):.2f} "
+                f"(gate < {OWM_HOME_SP_ERA_MAX:.1f} — Strong{n_note})"
             )
 
     blocked_owm = scored[
@@ -1199,6 +1252,10 @@ def build_output_csv(scored: pd.DataFrame) -> pd.DataFrame:
         "bookmaker",
         "captured_at_utc",
         "hsp_era_wma",
+        "hsp_era_wma_home",
+        "hsp_era_wma_gate",
+        "hsp_era_wma_source",
+        "hsp_starts_in_window_home",
         "asp_era_wma",
         "h_rolling_ops_wma",
         "hsp_starts_in_window",

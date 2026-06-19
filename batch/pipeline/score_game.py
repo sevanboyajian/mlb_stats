@@ -30,6 +30,10 @@ from batch.pipeline.edge_utils import (
     compute_edge,
     score_to_model_prob,
 )
+from batch.pipeline.pitcher_wma_context import (
+    format_home_sp_data_line,
+    home_sp_era_for_gate,
+)
 
 # ── Tier helpers (ScoredGame policy) ───────────────────────────────────────
 # Higher index = less confident. min_tier returns the worse (less confident) tier.
@@ -852,9 +856,10 @@ def _eval_owm(g: FullyDressedGame, game_month: int) -> SignalFinding:
     )
     home_sp_wma_ok = (
         home_sp is not None
-        and home_sp.era_wma is not None
-        and getattr(home_sp, "starts_in_window", 0) >= OWM_MIN_HOME_SP_STARTS
+        and home_sp_era_for_gate(home_sp)[0] is not None
+        and home_sp_era_for_gate(home_sp)[1] >= OWM_MIN_HOME_SP_STARTS
     )
+    gate_era, gate_starts, gate_source = home_sp_era_for_gate(home_sp)
 
     # Market gate — not heavy dog; cap extreme home favorites
     mkt = g.market
@@ -872,7 +877,11 @@ def _eval_owm(g: FullyDressedGame, game_month: int) -> SignalFinding:
     # Core firing conditions
     ops_ok = home_wma_ok and float(home_off.rolling_ops_wma) >= OWM_OPS_THRESHOLD
     era_ok = pitcher_wma_ok and float(away_sp.era_wma) >= OWM_ERA_THRESHOLD
-    home_sp_strong = home_sp_wma_ok and float(home_sp.era_wma) < OWM_HOME_SP_ERA_MAX
+    home_sp_strong = (
+        home_sp_wma_ok
+        and gate_era is not None
+        and float(gate_era) < OWM_HOME_SP_ERA_MAX
+    )
     core_match = ops_ok and era_ok
 
     fires = core_match and home_sp_strong and market_ok and month_ok
@@ -880,19 +889,21 @@ def _eval_owm(g: FullyDressedGame, game_month: int) -> SignalFinding:
     if fires:
         ops_val = float(home_off.rolling_ops_wma)
         era_val = float(away_sp.era_wma)
-        home_era_val = float(home_sp.era_wma)
+        home_era_val = float(gate_era) if gate_era is not None else 0.0
+        ctx = "home-context" if gate_source == "home_split" else "aggregate"
         sp_name = away_sp.name or g.identifiers.away_team_abbr
         reason = (
             f"OWM — Home {g.identifiers.home_team_abbr} offense hot "
             f"(OPS WMA {ops_val:.3f} >= {OWM_OPS_THRESHOLD}) vs struggling away "
             f"SP {sp_name} (ERA WMA {era_val:.2f} >= {OWM_ERA_THRESHOLD}). "
-            f"Home SP ERA WMA {home_era_val:.2f} < {OWM_HOME_SP_ERA_MAX:.1f} (Strong). "
+            f"Home SP ERA WMA ({ctx}) {home_era_val:.2f} < {OWM_HOME_SP_ERA_MAX:.1f} (Strong). "
             f"Matchup signal — independent of wind."
         )
     elif core_match and home_sp_wma_ok and not home_sp_strong:
-        home_era_val = float(home_sp.era_wma)
+        home_era_val = float(gate_era) if gate_era is not None else 0.0
+        ctx = "home-context" if gate_source == "home_split" else "aggregate"
         reason = (
-            f"OWM blocked — home SP ERA WMA {home_era_val:.2f} >= "
+            f"OWM blocked — home SP ERA WMA ({ctx}) {home_era_val:.2f} >= "
             f"{OWM_HOME_SP_ERA_MAX:.1f} (need Strong SP < {OWM_HOME_SP_ERA_MAX:.1f})"
         )
     else:
@@ -1013,18 +1024,14 @@ def _eval_under_era(g: FullyDressedGame) -> SignalFinding:
 
 def _away_dog_rl_home_sp_gate_block_reason(home_sp: object | None) -> str | None:
     """Block when home SP ERA WMA is strong (< 5.0) with sufficient sample."""
-    if home_sp is None:
-        return None
-    era = getattr(home_sp, "era_wma", None)
-    starts = int(getattr(home_sp, "starts_in_window", 0) or 0)
+    era, starts, source = home_sp_era_for_gate(home_sp)
     if era is None or starts < AWAY_DOG_RL_MIN_HOME_SP_STARTS:
         return None
-    era_f = float(era)
-    if era_f < AWAY_DOG_RL_HOME_SP_ERA_MIN:
+    if era < AWAY_DOG_RL_HOME_SP_ERA_MIN:
+        gate_desc = f"gate >= {AWAY_DOG_RL_HOME_SP_ERA_MIN:.1f} — need Weak SP"
         return (
-            f"Away Dog RL blocked — home SP ERA WMA {era_f:.2f} < "
-            f"{AWAY_DOG_RL_HOME_SP_ERA_MIN:.1f} "
-            f"(need Weak SP >= {AWAY_DOG_RL_HOME_SP_ERA_MIN:.1f})"
+            f"Away Dog RL blocked — "
+            f"{format_home_sp_data_line(era, source=source, starts=starts, gate_desc=gate_desc)}"
         )
     return None
 
@@ -1585,11 +1592,19 @@ def score_game(g: FullyDressedGame, home_streak: int, game_month: int) -> Scored
     owm = _eval_owm(g, game_month)
     if owm.fires:
         home_sp = g.matchup.home_sp
-        if home_sp is not None and home_sp.era_wma is not None:
-            extra_flags.append(
-                f"home SP ERA WMA {float(home_sp.era_wma):.2f} "
-                f"(gate < {OWM_HOME_SP_ERA_MAX:.1f} — Strong)"
-            )
+        if home_sp is not None:
+            gate_era, gate_starts, gate_source = home_sp_era_for_gate(home_sp)
+            if gate_era is not None:
+                ctx = "home-context" if gate_source == "home_split" else "aggregate"
+                n_note = (
+                    f", n={gate_starts} home starts"
+                    if gate_source == "home_split"
+                    else ""
+                )
+                extra_flags.append(
+                    f"home SP ERA WMA ({ctx}) {float(gate_era):.2f} "
+                    f"(gate < {OWM_HOME_SP_ERA_MAX:.1f} — Strong{n_note})"
+                )
     elif (owm.edge_basis or "").startswith("OWM blocked — home SP ERA WMA"):
         extra_flags.append(owm.edge_basis)
     mvb = _eval_mv_b(g, game_month, extra_flags)
