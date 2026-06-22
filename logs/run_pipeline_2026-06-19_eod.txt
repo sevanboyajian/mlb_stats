@@ -359,5 +359,3 @@ NOTE: Standard tier PAUSED (sub-breakeven). Only STRONG tier staked.
 [job] id=3369 type=email_runlog_eod job_date_et=2026-06-19 game_group_id=0 scheduled_time=2026-06-19 21:47 ET
 [job] command='python batch/jobs/email_run_log.py --date 2026-06-19 --kind eod'
 [job] start_et=2026-06-19 21:48:09 ET (claimed)
-[job] end_et=2026-06-19 21:48:10 ET status=complete rc=0
-[run_pipeline] no pending pipeline_jobs; exiting (--exit-when-no-pending).
