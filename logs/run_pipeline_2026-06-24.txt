@@ -1,0 +1,2438 @@
+[run_pipeline] force-unlock: runner_lock not present (nothing to clear)
+[run_pipeline] db=C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\data\mlb_stats.db
+[run_pipeline] mode=loop poll_seconds=60 ghost=False stale_minutes=30 timeout_minutes=30 sleep_until_due=True scope_job_date_et='2026-06-24' exit_when_no_pending=True
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 06:00 ET (~4200s)
+
+[job] id=3546 type=stats_pull job_date_et=2026-06-24 game_group_id=0 scheduled_time=2026-06-24 06:00 ET
+[job] command='python batch/ingestion/load_mlb_stats.py'
+[job] start_et=2026-06-24 06:00:04 ET (claimed)
+[job] end_et=2026-06-24 06:00:21 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 06:05 ET (~300s)
+
+[job] id=3547 type=load_today job_date_et=2026-06-24 game_group_id=0 scheduled_time=2026-06-24 06:05 ET
+[job] command='python batch/ingestion/load_today.py --date 2026-06-24'
+[job] start_et=2026-06-24 06:05:21 ET (claimed)
+[job] end_et=2026-06-24 06:05:24 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 06:07 ET (~120s)
+
+[job] id=3548 type=load_weather job_date_et=2026-06-24 game_group_id=0 scheduled_time=2026-06-24 06:07 ET
+[job] command='python batch/ingestion/load_weather.py --date 2026-06-24'
+[job] start_et=2026-06-24 06:07:24 ET (claimed)
+[job] end_et=2026-06-24 06:10:04 ET status=complete rc=0
+
+[job] id=3549 type=odds_pull job_date_et=2026-06-24 game_group_id=0 scheduled_time=2026-06-24 06:08 ET
+[job] command='python batch/ingestion/load_odds.py --pregame --markets game --date 2026-06-24'
+[job] start_et=2026-06-24 06:10:04 ET (claimed)
+[job] end_et=2026-06-24 06:10:05 ET status=complete rc=0
+
+[job] id=3550 type=build_team_wma job_date_et=2026-06-24 game_group_id=0 scheduled_time=2026-06-24 06:09 ET
+[job] command='python -m batch.pipeline.build_team_wma --seasons 2025 2026'
+[job] start_et=2026-06-24 06:10:05 ET (claimed)
+[job] end_et=2026-06-24 06:10:05 ET status=complete rc=0
+
+[job] id=3552 type=day_setup job_date_et=2026-06-24 game_group_id=0 scheduled_time=2026-06-24 06:10 ET
+[job] command='python batch/jobs/schedule_pipeline_day.py --groups-only --date-et 2026-06-24'
+[job] start_et=2026-06-24 06:10:05 ET (claimed)
+[job] end_et=2026-06-24 06:10:05 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 06:11 ET (~60s)
+
+[job] id=3551 type=build_pitcher_wma job_date_et=2026-06-24 game_group_id=0 scheduled_time=2026-06-24 06:11 ET
+[job] command='python -m batch.pipeline.build_pitcher_wma --seasons 2025 2026'
+[job] start_et=2026-06-24 06:11:05 ET (claimed)
+[job] end_et=2026-06-24 06:11:06 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 06:12 ET (~60s)
+
+[job] id=3553 type=grade_daily job_date_et=2026-06-24 game_group_id=0 scheduled_time=2026-06-24 06:12 ET
+[job] command='python batch/jobs/grade_daily.py --date 2026-06-23 --trigger scheduled_job'
+[job] start_et=2026-06-24 06:12:06 ET (claimed)
+[job] end_et=2026-06-24 06:12:09 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 06:15 ET (~180s)
+
+[job] id=3554 type=prior_report job_date_et=2026-06-24 game_group_id=0 scheduled_time=2026-06-24 06:15 ET
+[job] command='python batch/pipeline/generate_daily_brief.py --session prior --date 2026-06-24 --as-of "2026-06-24 06:15"'
+[job] start_et=2026-06-24 06:15:09 ET (claimed)
+[job] end_et=2026-06-24 06:15:14 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 06:20 ET (~300s)
+
+[job] id=3556 type=early_peek job_date_et=2026-06-24 game_group_id=0 scheduled_time=2026-06-24 06:20 ET
+[job] command='python batch/pipeline/generate_daily_brief.py --session morning --date 2026-06-24 --as-of "2026-06-24 06:20"'
+[job] start_et=2026-06-24 06:20:14 ET (claimed)
+[job] end_et=2026-06-24 06:20:18 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 06:22 ET (~120s)
+
+[job] id=3557 type=email_runlog_morning job_date_et=2026-06-24 game_group_id=0 scheduled_time=2026-06-24 06:22 ET
+[job] command='python batch/jobs/email_run_log.py --date 2026-06-24 --kind morning'
+[job] start_et=2026-06-24 06:22:18 ET (claimed)
+[job] end_et=2026-06-24 06:22:20 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 10:00 ET (~13080s)
+
+[job] id=3555 type=score_today job_date_et=2026-06-24 game_group_id=0 scheduled_time=2026-06-24 10:00 ET
+[job] command='python batch/analysis/prediction/score_today.py --db data/mlb_stats.db --date 2026-06-24'
+[job] start_et=2026-06-24 10:00:20 ET (claimed)
+[job] end_et=2026-06-24 10:00:26 ET status=complete rc=0
+[score_today] Completed — outputs saved to C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\outputs\reports\score_today_2026-06-24.txt
+[score_today] stdout (truncated):
+=================================================
+MLB SCOUT — PREDICTION ENGINE DAILY REPORT
+Wednesday, June 24, 2026
+Generated: 10:00 AM ET
+=================================================
+Model: LogReg (trained 2024)  |  Filter: >=20 GP
+-------------------------------------------------
+TODAY: 0ML  0RL  1AwayDogRL  2Under  1OWM  signal(s) found
+=================================================
+
+
+── MONEYLINE PICKS ──────────────────────────────
+[Backtest: -150/-199 tier → 72.7% acc, +14.7% ROI]
+[Backtest: -300+ tier    → 85.2% acc, +10.9% ROI]
+
+  No moneyline picks today.
+── RUN LINE PICKS ───────────────────────────────
+[Backtest: ML <=-301 → 63.2% cover, +21.1% ROI]
+[Note: 2026 YTD only 3 games — small sample]
+
+  No run line picks today.
+── UNDER PICKS ──────────────────────────────────
+Backtest (posted total, 2019-2025): N=966 | Under rate: 48.7% | ROI: -7.1% at -110
+Strong (combined <5.0 + wind in):  N=99  |  Under rate: 54.5% | ROI: +4.1% at -110 (+8.9% at actual odds)
+NOTE: Standard tier PAUSED (sub-breakeven). Only STRONG tier staked.
+[Suppressed venues: Fenway Park, Oracle Park]
+
+  ⛔ NO BET — standard tier paused  CHC @ NYM
+  Pick:       UNDER ?  (n/a)
+  Home SP:    NYM — 3.27 ERA WMA
+  Away SP:    CHC — 1.16 ERA WMA
+  Combined:   4.43
+  Wind:       OUT
+  standard tier paused — combined ERA >= 5.0 or wind not IN
+  Game:       7:10 PM ET
+
+  ⛔ NO BET — standard tier paused  LAD @ MIN
+  Pick:       UNDER 7.5  (+100)
+  Home SP:    MIN — 2.46 ERA WMA
+  Away SP:    LAD — 3.28 ERA WMA
+  Combined:   5.74
+  Wind:       OUT
+  standard tier paused — combined ERA >= 5.0 or wind not IN
+  Game:       7:40 PM ET
+
+
+── AWAY DOG RL PICKS ────────────────────────────
+[Away ML +101–+130 | total ≤ 8.5 | away underdog]
+[Gate: home SP ERA WMA >= 5.0 (Weak SP) or insufficient SP data]
+[Backtest May–Aug 2019–2025: 66.1% cover, n=1,059]
+[Cap 4 per day | Juice gate: -190 or better]
+Today: 1 staked / 1 qualified / 0 juice-blocked / 1 sp-gate-blocked
+
+  GO (1/1)  KC @ TB
+  Pick:      …
+[score_today] prediction_engine_log wrote 2 row(s) for 2026-06-24 -> C:\Users\sevan\OneDrive\Documents\Python_Scripts\mlb_stats\outputs\reports\prediction_engine_log.csv
+[score_today] Logged score_today_log game_date_et=2026-06-24 ml=0 under=2 rl=0 email_sent=1
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 10:40 ET (~2400s)
+
+[job] id=3559 type=odds_pull job_date_et=2026-06-24 game_group_id=1 scheduled_time=2026-06-24 10:40 ET
+[job] command='python batch/ingestion/load_odds.py --pregame --markets game --date 2026-06-24'
+[job] context: group_id=1 window=[2026-06-24 10:35 ET -> 2026-06-24 10:45 ET]
+[job] start_et=2026-06-24 10:40:26 ET (claimed)
+[job] end_et=2026-06-24 10:40:27 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 10:45 ET (~300s)
+
+[job] id=3568 type=odds_check job_date_et=2026-06-24 game_group_id=1 scheduled_time=2026-06-24 10:45 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=1 window=[2026-06-24 10:35 ET -> 2026-06-24 10:50 ET]
+[job] start_et=2026-06-24 10:45:27 ET (claimed)
+[job] end_et=2026-06-24 10:45:27 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3568 attempt=1/5 (will run after next poll loop)
+
+[job] id=3568 type=odds_check job_date_et=2026-06-24 game_group_id=1 scheduled_time=2026-06-24 10:45 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=1 window=[2026-06-24 10:35 ET -> 2026-06-24 10:50 ET]
+[job] start_et=2026-06-24 10:45:27 ET (claimed)
+[job] end_et=2026-06-24 10:45:28 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3568 attempt=2/5 (will run after next poll loop)
+
+[job] id=3568 type=odds_check job_date_et=2026-06-24 game_group_id=1 scheduled_time=2026-06-24 10:45 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=1 window=[2026-06-24 10:35 ET -> 2026-06-24 10:50 ET]
+[job] start_et=2026-06-24 10:45:28 ET (claimed)
+[job] end_et=2026-06-24 10:45:28 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3568 attempt=3/5 (will run after next poll loop)
+
+[job] id=3568 type=odds_check job_date_et=2026-06-24 game_group_id=1 scheduled_time=2026-06-24 10:45 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=1 window=[2026-06-24 10:35 ET -> 2026-06-24 10:50 ET]
+[job] start_et=2026-06-24 10:45:28 ET (claimed)
+[job] end_et=2026-06-24 10:45:28 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3568 attempt=4/5 (will run after next poll loop)
+
+[job] id=3568 type=odds_check job_date_et=2026-06-24 game_group_id=1 scheduled_time=2026-06-24 10:45 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=1 window=[2026-06-24 10:35 ET -> 2026-06-24 10:50 ET]
+[job] start_et=2026-06-24 10:45:28 ET (claimed)
+[job] end_et=2026-06-24 10:45:28 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3568 attempt=5/5 (will run after next poll loop)
+
+[job] id=3568 type=odds_check job_date_et=2026-06-24 game_group_id=1 scheduled_time=2026-06-24 10:45 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=1 window=[2026-06-24 10:35 ET -> 2026-06-24 10:50 ET]
+[job] start_et=2026-06-24 10:45:28 ET (claimed)
+[job] end_et=2026-06-24 10:45:28 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] SKIPPED (terminal, max retries) job_id=3568 type=odds_check — status=skipped; downstream deps will proceed
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+! PIPELINE ALERT: JOB SKIPPED (terminal — max retries; deps unblocked)
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  time_utc:     2026-06-24T14:45:28Z
+  job_id:       3568
+  job_type:     odds_check
+  job_date_et:  2026-06-24
+  started_utc:  2026-06-24T14:45:28Z
+  finished_utc: 2026-06-24T14:45:28Z
+  error_tail:
+    3:10 PM ET     closing ML odds present
+      ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+      ✓  KC@TB           6:40 PM ET     closing ML odds present
+      ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+      ✓  NYY@DET         6:40 PM ET     closing ML odds present
+      ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+      ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+      ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+      ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+      ✓  AZ@STL          7:45 PM ET     closing ML odds present
+      ✓  ATL@SD          8:40 PM ET     closing ML odds present
+      ✓  ATH@SF          9:45 PM ET     closing ML odds present
+      ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+    
+      ✗  1 game(s) have no odds: CHC@NYM
+    
+      Options:
+        1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+           Then wait 30–60 min for books to post lines and rerun this check
+        2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+           (those games will show N/A odds and skip signal evaluation) | terminal=skipped after 5 attempts (deps unblocked — assume manual follow-up)
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 11:25 ET (~2400s)
+
+[job] id=3577 type=weather job_date_et=2026-06-24 game_group_id=1 scheduled_time=2026-06-24 11:25 ET
+[job] command='python batch/ingestion/load_weather.py --date 2026-06-24'
+[job] context: group_id=1 window=[2026-06-24 11:10 ET -> 2026-06-24 11:40 ET]
+[job] start_et=2026-06-24 11:25:28 ET (claimed)
+[job] end_et=2026-06-24 11:25:42 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 11:40 ET (~900s)
+
+[job] id=3560 type=odds_pull job_date_et=2026-06-24 game_group_id=2 scheduled_time=2026-06-24 11:40 ET
+[job] command='python batch/ingestion/load_odds.py --pregame --markets game --date 2026-06-24'
+[job] context: group_id=2 window=[2026-06-24 11:35 ET -> 2026-06-24 11:45 ET]
+[job] start_et=2026-06-24 11:40:42 ET (claimed)
+[job] end_et=2026-06-24 11:40:43 ET status=complete rc=0
+
+[job] id=3586 type=group_brief job_date_et=2026-06-24 game_group_id=1 scheduled_time=2026-06-24 11:40 ET
+[job] command='python batch/pipeline/generate_daily_brief.py --session primary --date 2026-06-24 --as-of "2026-06-24 11:40" --game-group-id 1'
+[job] context: group_id=1 window=[2026-06-24 11:40 ET -> 2026-06-24 11:42 ET]
+[job] start_et=2026-06-24 11:40:43 ET (claimed)
+[job] end_et=2026-06-24 11:40:48 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 11:42 ET (~120s)
+
+[job] id=3595 type=ledger_snapshot job_date_et=2026-06-24 game_group_id=1 scheduled_time=2026-06-24 11:42 ET
+[job] command='python batch/pipeline/daily_results_report.py --date 2026-06-24'
+[job] context: group_id=1 window=[2026-06-24 11:40 ET -> 2026-06-24 12:10 ET]
+[job] start_et=2026-06-24 11:42:48 ET (claimed)
+[job] end_et=2026-06-24 11:42:48 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 11:45 ET (~180s)
+
+[job] id=3569 type=odds_check job_date_et=2026-06-24 game_group_id=2 scheduled_time=2026-06-24 11:45 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=2 window=[2026-06-24 11:35 ET -> 2026-06-24 11:50 ET]
+[job] start_et=2026-06-24 11:45:48 ET (claimed)
+[job] end_et=2026-06-24 11:45:48 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3569 attempt=1/5 (will run after next poll loop)
+
+[job] id=3569 type=odds_check job_date_et=2026-06-24 game_group_id=2 scheduled_time=2026-06-24 11:45 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=2 window=[2026-06-24 11:35 ET -> 2026-06-24 11:50 ET]
+[job] start_et=2026-06-24 11:45:48 ET (claimed)
+[job] end_et=2026-06-24 11:45:48 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3569 attempt=2/5 (will run after next poll loop)
+
+[job] id=3569 type=odds_check job_date_et=2026-06-24 game_group_id=2 scheduled_time=2026-06-24 11:45 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=2 window=[2026-06-24 11:35 ET -> 2026-06-24 11:50 ET]
+[job] start_et=2026-06-24 11:45:48 ET (claimed)
+[job] end_et=2026-06-24 11:45:49 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3569 attempt=3/5 (will run after next poll loop)
+
+[job] id=3569 type=odds_check job_date_et=2026-06-24 game_group_id=2 scheduled_time=2026-06-24 11:45 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=2 window=[2026-06-24 11:35 ET -> 2026-06-24 11:50 ET]
+[job] start_et=2026-06-24 11:45:49 ET (claimed)
+[job] end_et=2026-06-24 11:45:49 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3569 attempt=4/5 (will run after next poll loop)
+
+[job] id=3569 type=odds_check job_date_et=2026-06-24 game_group_id=2 scheduled_time=2026-06-24 11:45 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=2 window=[2026-06-24 11:35 ET -> 2026-06-24 11:50 ET]
+[job] start_et=2026-06-24 11:45:49 ET (claimed)
+[job] end_et=2026-06-24 11:45:49 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3569 attempt=5/5 (will run after next poll loop)
+
+[job] id=3569 type=odds_check job_date_et=2026-06-24 game_group_id=2 scheduled_time=2026-06-24 11:45 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=2 window=[2026-06-24 11:35 ET -> 2026-06-24 11:50 ET]
+[job] start_et=2026-06-24 11:45:49 ET (claimed)
+[job] end_et=2026-06-24 11:45:49 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] SKIPPED (terminal, max retries) job_id=3569 type=odds_check — status=skipped; downstream deps will proceed
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+! PIPELINE ALERT: JOB SKIPPED (terminal — max retries; deps unblocked)
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  time_utc:     2026-06-24T15:45:49Z
+  job_id:       3569
+  job_type:     odds_check
+  job_date_et:  2026-06-24
+  started_utc:  2026-06-24T15:45:49Z
+  finished_utc: 2026-06-24T15:45:49Z
+  error_tail:
+    3:10 PM ET     closing ML odds present
+      ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+      ✓  KC@TB           6:40 PM ET     closing ML odds present
+      ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+      ✓  NYY@DET         6:40 PM ET     closing ML odds present
+      ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+      ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+      ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+      ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+      ✓  AZ@STL          7:45 PM ET     closing ML odds present
+      ✓  ATL@SD          8:40 PM ET     closing ML odds present
+      ✓  ATH@SF          9:45 PM ET     closing ML odds present
+      ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+    
+      ✗  1 game(s) have no odds: CHC@NYM
+    
+      Options:
+        1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+           Then wait 30–60 min for books to post lines and rerun this check
+        2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+           (those games will show N/A odds and skip signal evaluation) | terminal=skipped after 5 attempts (deps unblocked — assume manual follow-up)
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 12:25 ET (~2400s)
+
+[job] id=3578 type=weather job_date_et=2026-06-24 game_group_id=2 scheduled_time=2026-06-24 12:25 ET
+[job] command='python batch/ingestion/load_weather.py --date 2026-06-24'
+[job] context: group_id=2 window=[2026-06-24 12:10 ET -> 2026-06-24 12:40 ET]
+[job] start_et=2026-06-24 12:25:49 ET (claimed)
+[job] end_et=2026-06-24 12:26:05 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 12:40 ET (~840s)
+
+[job] id=3561 type=odds_pull job_date_et=2026-06-24 game_group_id=3 scheduled_time=2026-06-24 12:40 ET
+[job] command='python batch/ingestion/load_odds.py --pregame --markets game --date 2026-06-24'
+[job] context: group_id=3 window=[2026-06-24 12:35 ET -> 2026-06-24 12:45 ET]
+[job] start_et=2026-06-24 12:40:05 ET (claimed)
+[job] end_et=2026-06-24 12:40:05 ET status=complete rc=0
+
+[job] id=3587 type=group_brief job_date_et=2026-06-24 game_group_id=2 scheduled_time=2026-06-24 12:40 ET
+[job] command='python batch/pipeline/generate_daily_brief.py --session primary --date 2026-06-24 --as-of "2026-06-24 12:40" --game-group-id 2'
+[job] context: group_id=2 window=[2026-06-24 12:40 ET -> 2026-06-24 12:42 ET]
+[job] start_et=2026-06-24 12:40:05 ET (claimed)
+[job] end_et=2026-06-24 12:40:10 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 12:42 ET (~120s)
+
+[job] id=3596 type=ledger_snapshot job_date_et=2026-06-24 game_group_id=2 scheduled_time=2026-06-24 12:42 ET
+[job] command='python batch/pipeline/daily_results_report.py --date 2026-06-24'
+[job] context: group_id=2 window=[2026-06-24 12:40 ET -> 2026-06-24 13:10 ET]
+[job] start_et=2026-06-24 12:42:10 ET (claimed)
+[job] end_et=2026-06-24 12:42:10 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 12:45 ET (~180s)
+
+[job] id=3570 type=odds_check job_date_et=2026-06-24 game_group_id=3 scheduled_time=2026-06-24 12:45 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=3 window=[2026-06-24 12:35 ET -> 2026-06-24 12:50 ET]
+[job] start_et=2026-06-24 12:45:10 ET (claimed)
+[job] end_et=2026-06-24 12:45:10 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3570 attempt=1/5 (will run after next poll loop)
+
+[job] id=3570 type=odds_check job_date_et=2026-06-24 game_group_id=3 scheduled_time=2026-06-24 12:45 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=3 window=[2026-06-24 12:35 ET -> 2026-06-24 12:50 ET]
+[job] start_et=2026-06-24 12:45:10 ET (claimed)
+[job] end_et=2026-06-24 12:45:11 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3570 attempt=2/5 (will run after next poll loop)
+
+[job] id=3570 type=odds_check job_date_et=2026-06-24 game_group_id=3 scheduled_time=2026-06-24 12:45 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=3 window=[2026-06-24 12:35 ET -> 2026-06-24 12:50 ET]
+[job] start_et=2026-06-24 12:45:11 ET (claimed)
+[job] end_et=2026-06-24 12:45:11 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3570 attempt=3/5 (will run after next poll loop)
+
+[job] id=3570 type=odds_check job_date_et=2026-06-24 game_group_id=3 scheduled_time=2026-06-24 12:45 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=3 window=[2026-06-24 12:35 ET -> 2026-06-24 12:50 ET]
+[job] start_et=2026-06-24 12:45:11 ET (claimed)
+[job] end_et=2026-06-24 12:45:11 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3570 attempt=4/5 (will run after next poll loop)
+
+[job] id=3570 type=odds_check job_date_et=2026-06-24 game_group_id=3 scheduled_time=2026-06-24 12:45 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=3 window=[2026-06-24 12:35 ET -> 2026-06-24 12:50 ET]
+[job] start_et=2026-06-24 12:45:11 ET (claimed)
+[job] end_et=2026-06-24 12:45:11 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3570 attempt=5/5 (will run after next poll loop)
+
+[job] id=3570 type=odds_check job_date_et=2026-06-24 game_group_id=3 scheduled_time=2026-06-24 12:45 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=3 window=[2026-06-24 12:35 ET -> 2026-06-24 12:50 ET]
+[job] start_et=2026-06-24 12:45:11 ET (claimed)
+[job] end_et=2026-06-24 12:45:11 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] SKIPPED (terminal, max retries) job_id=3570 type=odds_check — status=skipped; downstream deps will proceed
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+! PIPELINE ALERT: JOB SKIPPED (terminal — max retries; deps unblocked)
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  time_utc:     2026-06-24T16:45:11Z
+  job_id:       3570
+  job_type:     odds_check
+  job_date_et:  2026-06-24
+  started_utc:  2026-06-24T16:45:11Z
+  finished_utc: 2026-06-24T16:45:11Z
+  error_tail:
+    3:10 PM ET     closing ML odds present
+      ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+      ✓  KC@TB           6:40 PM ET     closing ML odds present
+      ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+      ✓  NYY@DET         6:40 PM ET     closing ML odds present
+      ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+      ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+      ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+      ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+      ✓  AZ@STL          7:45 PM ET     closing ML odds present
+      ✓  ATL@SD          8:40 PM ET     closing ML odds present
+      ✓  ATH@SF          9:45 PM ET     closing ML odds present
+      ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+    
+      ✗  1 game(s) have no odds: CHC@NYM
+    
+      Options:
+        1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+           Then wait 30–60 min for books to post lines and rerun this check
+        2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+           (those games will show N/A odds and skip signal evaluation) | terminal=skipped after 5 attempts (deps unblocked — assume manual follow-up)
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 13:25 ET (~2400s)
+
+[job] id=3579 type=weather job_date_et=2026-06-24 game_group_id=3 scheduled_time=2026-06-24 13:25 ET
+[job] command='python batch/ingestion/load_weather.py --date 2026-06-24'
+[job] context: group_id=3 window=[2026-06-24 13:10 ET -> 2026-06-24 13:40 ET]
+[job] start_et=2026-06-24 13:25:11 ET (claimed)
+[job] end_et=2026-06-24 13:25:28 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 13:40 ET (~900s)
+
+[job] id=3562 type=odds_pull job_date_et=2026-06-24 game_group_id=4 scheduled_time=2026-06-24 13:40 ET
+[job] command='python batch/ingestion/load_odds.py --pregame --markets game --date 2026-06-24'
+[job] context: group_id=4 window=[2026-06-24 13:35 ET -> 2026-06-24 13:45 ET]
+[job] start_et=2026-06-24 13:40:28 ET (claimed)
+[job] end_et=2026-06-24 13:40:29 ET status=complete rc=0
+
+[job] id=3588 type=group_brief job_date_et=2026-06-24 game_group_id=3 scheduled_time=2026-06-24 13:40 ET
+[job] command='python batch/pipeline/generate_daily_brief.py --session primary --date 2026-06-24 --as-of "2026-06-24 13:40" --game-group-id 3'
+[job] context: group_id=3 window=[2026-06-24 13:40 ET -> 2026-06-24 13:42 ET]
+[job] start_et=2026-06-24 13:40:29 ET (claimed)
+[job] end_et=2026-06-24 13:40:34 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 13:42 ET (~120s)
+
+[job] id=3597 type=ledger_snapshot job_date_et=2026-06-24 game_group_id=3 scheduled_time=2026-06-24 13:42 ET
+[job] command='python batch/pipeline/daily_results_report.py --date 2026-06-24'
+[job] context: group_id=3 window=[2026-06-24 13:40 ET -> 2026-06-24 14:10 ET]
+[job] start_et=2026-06-24 13:42:34 ET (claimed)
+[job] end_et=2026-06-24 13:42:34 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 13:45 ET (~180s)
+
+[job] id=3571 type=odds_check job_date_et=2026-06-24 game_group_id=4 scheduled_time=2026-06-24 13:45 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=4 window=[2026-06-24 13:35 ET -> 2026-06-24 13:50 ET]
+[job] start_et=2026-06-24 13:45:34 ET (claimed)
+[job] end_et=2026-06-24 13:45:35 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3571 attempt=1/5 (will run after next poll loop)
+
+[job] id=3571 type=odds_check job_date_et=2026-06-24 game_group_id=4 scheduled_time=2026-06-24 13:45 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=4 window=[2026-06-24 13:35 ET -> 2026-06-24 13:50 ET]
+[job] start_et=2026-06-24 13:45:35 ET (claimed)
+[job] end_et=2026-06-24 13:45:35 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3571 attempt=2/5 (will run after next poll loop)
+
+[job] id=3571 type=odds_check job_date_et=2026-06-24 game_group_id=4 scheduled_time=2026-06-24 13:45 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=4 window=[2026-06-24 13:35 ET -> 2026-06-24 13:50 ET]
+[job] start_et=2026-06-24 13:45:35 ET (claimed)
+[job] end_et=2026-06-24 13:45:35 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3571 attempt=3/5 (will run after next poll loop)
+
+[job] id=3571 type=odds_check job_date_et=2026-06-24 game_group_id=4 scheduled_time=2026-06-24 13:45 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=4 window=[2026-06-24 13:35 ET -> 2026-06-24 13:50 ET]
+[job] start_et=2026-06-24 13:45:35 ET (claimed)
+[job] end_et=2026-06-24 13:45:35 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3571 attempt=4/5 (will run after next poll loop)
+
+[job] id=3571 type=odds_check job_date_et=2026-06-24 game_group_id=4 scheduled_time=2026-06-24 13:45 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=4 window=[2026-06-24 13:35 ET -> 2026-06-24 13:50 ET]
+[job] start_et=2026-06-24 13:45:35 ET (claimed)
+[job] end_et=2026-06-24 13:45:36 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3571 attempt=5/5 (will run after next poll loop)
+
+[job] id=3571 type=odds_check job_date_et=2026-06-24 game_group_id=4 scheduled_time=2026-06-24 13:45 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=4 window=[2026-06-24 13:35 ET -> 2026-06-24 13:50 ET]
+[job] start_et=2026-06-24 13:45:36 ET (claimed)
+[job] end_et=2026-06-24 13:45:36 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] SKIPPED (terminal, max retries) job_id=3571 type=odds_check — status=skipped; downstream deps will proceed
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+! PIPELINE ALERT: JOB SKIPPED (terminal — max retries; deps unblocked)
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  time_utc:     2026-06-24T17:45:36Z
+  job_id:       3571
+  job_type:     odds_check
+  job_date_et:  2026-06-24
+  started_utc:  2026-06-24T17:45:36Z
+  finished_utc: 2026-06-24T17:45:36Z
+  error_tail:
+    3:10 PM ET     closing ML odds present
+      ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+      ✓  KC@TB           6:40 PM ET     closing ML odds present
+      ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+      ✓  NYY@DET         6:40 PM ET     closing ML odds present
+      ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+      ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+      ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+      ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+      ✓  AZ@STL          7:45 PM ET     closing ML odds present
+      ✓  ATL@SD          8:40 PM ET     closing ML odds present
+      ✓  ATH@SF          9:45 PM ET     closing ML odds present
+      ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+    
+      ✗  1 game(s) have no odds: CHC@NYM
+    
+      Options:
+        1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+           Then wait 30–60 min for books to post lines and rerun this check
+        2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+           (those games will show N/A odds and skip signal evaluation) | terminal=skipped after 5 attempts (deps unblocked — assume manual follow-up)
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 14:25 ET (~2400s)
+
+[job] id=3580 type=weather job_date_et=2026-06-24 game_group_id=4 scheduled_time=2026-06-24 14:25 ET
+[job] command='python batch/ingestion/load_weather.py --date 2026-06-24'
+[job] context: group_id=4 window=[2026-06-24 14:10 ET -> 2026-06-24 14:40 ET]
+[job] start_et=2026-06-24 14:25:36 ET (claimed)
+[job] end_et=2026-06-24 14:25:52 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 14:37 ET (~720s)
+
+[job] id=3563 type=odds_pull job_date_et=2026-06-24 game_group_id=5 scheduled_time=2026-06-24 14:37 ET
+[job] command='python batch/ingestion/load_odds.py --pregame --markets game --date 2026-06-24'
+[job] context: group_id=5 window=[2026-06-24 14:32 ET -> 2026-06-24 14:42 ET]
+[job] start_et=2026-06-24 14:37:52 ET (claimed)
+[job] end_et=2026-06-24 14:37:53 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 14:40 ET (~180s)
+
+[job] id=3589 type=group_brief job_date_et=2026-06-24 game_group_id=4 scheduled_time=2026-06-24 14:40 ET
+[job] command='python batch/pipeline/generate_daily_brief.py --session primary --date 2026-06-24 --as-of "2026-06-24 14:40" --game-group-id 4'
+[job] context: group_id=4 window=[2026-06-24 14:40 ET -> 2026-06-24 14:42 ET]
+[job] start_et=2026-06-24 14:40:53 ET (claimed)
+[job] end_et=2026-06-24 14:40:57 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 14:42 ET (~120s)
+
+[job] id=3572 type=odds_check job_date_et=2026-06-24 game_group_id=5 scheduled_time=2026-06-24 14:42 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=5 window=[2026-06-24 14:32 ET -> 2026-06-24 14:47 ET]
+[job] start_et=2026-06-24 14:42:57 ET (claimed)
+[job] end_et=2026-06-24 14:42:58 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3572 attempt=1/5 (will run after next poll loop)
+
+[job] id=3598 type=ledger_snapshot job_date_et=2026-06-24 game_group_id=4 scheduled_time=2026-06-24 14:42 ET
+[job] command='python batch/pipeline/daily_results_report.py --date 2026-06-24'
+[job] context: group_id=4 window=[2026-06-24 14:40 ET -> 2026-06-24 15:10 ET]
+[job] start_et=2026-06-24 14:42:58 ET (claimed)
+[job] end_et=2026-06-24 14:42:58 ET status=complete rc=0
+
+[job] id=3572 type=odds_check job_date_et=2026-06-24 game_group_id=5 scheduled_time=2026-06-24 14:42 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=5 window=[2026-06-24 14:32 ET -> 2026-06-24 14:47 ET]
+[job] start_et=2026-06-24 14:42:58 ET (claimed)
+[job] end_et=2026-06-24 14:42:58 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3572 attempt=2/5 (will run after next poll loop)
+
+[job] id=3572 type=odds_check job_date_et=2026-06-24 game_group_id=5 scheduled_time=2026-06-24 14:42 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=5 window=[2026-06-24 14:32 ET -> 2026-06-24 14:47 ET]
+[job] start_et=2026-06-24 14:42:58 ET (claimed)
+[job] end_et=2026-06-24 14:42:58 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3572 attempt=3/5 (will run after next poll loop)
+
+[job] id=3572 type=odds_check job_date_et=2026-06-24 game_group_id=5 scheduled_time=2026-06-24 14:42 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=5 window=[2026-06-24 14:32 ET -> 2026-06-24 14:47 ET]
+[job] start_et=2026-06-24 14:42:58 ET (claimed)
+[job] end_et=2026-06-24 14:42:58 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3572 attempt=4/5 (will run after next poll loop)
+
+[job] id=3572 type=odds_check job_date_et=2026-06-24 game_group_id=5 scheduled_time=2026-06-24 14:42 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=5 window=[2026-06-24 14:32 ET -> 2026-06-24 14:47 ET]
+[job] start_et=2026-06-24 14:42:58 ET (claimed)
+[job] end_et=2026-06-24 14:42:59 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3572 attempt=5/5 (will run after next poll loop)
+
+[job] id=3572 type=odds_check job_date_et=2026-06-24 game_group_id=5 scheduled_time=2026-06-24 14:42 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=5 window=[2026-06-24 14:32 ET -> 2026-06-24 14:47 ET]
+[job] start_et=2026-06-24 14:42:59 ET (claimed)
+[job] end_et=2026-06-24 14:42:59 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] SKIPPED (terminal, max retries) job_id=3572 type=odds_check — status=skipped; downstream deps will proceed
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+! PIPELINE ALERT: JOB SKIPPED (terminal — max retries; deps unblocked)
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  time_utc:     2026-06-24T18:42:59Z
+  job_id:       3572
+  job_type:     odds_check
+  job_date_et:  2026-06-24
+  started_utc:  2026-06-24T18:42:59Z
+  finished_utc: 2026-06-24T18:42:59Z
+  error_tail:
+    3:10 PM ET     closing ML odds present
+      ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+      ✓  KC@TB           6:40 PM ET     closing ML odds present
+      ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+      ✓  NYY@DET         6:40 PM ET     closing ML odds present
+      ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+      ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+      ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+      ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+      ✓  AZ@STL          7:45 PM ET     closing ML odds present
+      ✓  ATL@SD          8:40 PM ET     closing ML odds present
+      ✓  ATH@SF          9:45 PM ET     closing ML odds present
+      ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+    
+      ✗  1 game(s) have no odds: CHC@NYM
+    
+      Options:
+        1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+           Then wait 30–60 min for books to post lines and rerun this check
+        2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+           (those games will show N/A odds and skip signal evaluation) | terminal=skipped after 5 attempts (deps unblocked — assume manual follow-up)
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 15:22 ET (~2400s)
+
+[job] id=3581 type=weather job_date_et=2026-06-24 game_group_id=5 scheduled_time=2026-06-24 15:22 ET
+[job] command='python batch/ingestion/load_weather.py --date 2026-06-24'
+[job] context: group_id=5 window=[2026-06-24 15:07 ET -> 2026-06-24 15:37 ET]
+[job] start_et=2026-06-24 15:22:59 ET (claimed)
+[job] end_et=2026-06-24 15:23:15 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 15:37 ET (~840s)
+
+[job] id=3590 type=group_brief job_date_et=2026-06-24 game_group_id=5 scheduled_time=2026-06-24 15:37 ET
+[job] command='python batch/pipeline/generate_daily_brief.py --session primary --date 2026-06-24 --as-of "2026-06-24 15:37" --game-group-id 5'
+[job] context: group_id=5 window=[2026-06-24 15:37 ET -> 2026-06-24 15:39 ET]
+[job] start_et=2026-06-24 15:37:15 ET (claimed)
+[job] end_et=2026-06-24 15:37:19 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 15:39 ET (~120s)
+
+[job] id=3599 type=ledger_snapshot job_date_et=2026-06-24 game_group_id=5 scheduled_time=2026-06-24 15:39 ET
+[job] command='python batch/pipeline/daily_results_report.py --date 2026-06-24'
+[job] context: group_id=5 window=[2026-06-24 15:37 ET -> 2026-06-24 16:07 ET]
+[job] start_et=2026-06-24 15:39:19 ET (claimed)
+[job] end_et=2026-06-24 15:39:19 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 17:10 ET (~5460s)
+
+[job] id=3564 type=odds_pull job_date_et=2026-06-24 game_group_id=6 scheduled_time=2026-06-24 17:10 ET
+[job] command='python batch/ingestion/load_odds.py --pregame --markets game --date 2026-06-24'
+[job] context: group_id=6 window=[2026-06-24 17:05 ET -> 2026-06-24 17:15 ET]
+[job] start_et=2026-06-24 17:10:19 ET (claimed)
+[job] end_et=2026-06-24 17:10:20 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 17:15 ET (~300s)
+
+[job] id=3573 type=odds_check job_date_et=2026-06-24 game_group_id=6 scheduled_time=2026-06-24 17:15 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=6 window=[2026-06-24 17:05 ET -> 2026-06-24 17:20 ET]
+[job] start_et=2026-06-24 17:15:20 ET (claimed)
+[job] end_et=2026-06-24 17:15:20 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3573 attempt=1/5 (will run after next poll loop)
+
+[job] id=3573 type=odds_check job_date_et=2026-06-24 game_group_id=6 scheduled_time=2026-06-24 17:15 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=6 window=[2026-06-24 17:05 ET -> 2026-06-24 17:20 ET]
+[job] start_et=2026-06-24 17:15:20 ET (claimed)
+[job] end_et=2026-06-24 17:15:21 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3573 attempt=2/5 (will run after next poll loop)
+
+[job] id=3573 type=odds_check job_date_et=2026-06-24 game_group_id=6 scheduled_time=2026-06-24 17:15 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=6 window=[2026-06-24 17:05 ET -> 2026-06-24 17:20 ET]
+[job] start_et=2026-06-24 17:15:21 ET (claimed)
+[job] end_et=2026-06-24 17:15:21 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3573 attempt=3/5 (will run after next poll loop)
+
+[job] id=3573 type=odds_check job_date_et=2026-06-24 game_group_id=6 scheduled_time=2026-06-24 17:15 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=6 window=[2026-06-24 17:05 ET -> 2026-06-24 17:20 ET]
+[job] start_et=2026-06-24 17:15:21 ET (claimed)
+[job] end_et=2026-06-24 17:15:21 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3573 attempt=4/5 (will run after next poll loop)
+
+[job] id=3573 type=odds_check job_date_et=2026-06-24 game_group_id=6 scheduled_time=2026-06-24 17:15 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=6 window=[2026-06-24 17:05 ET -> 2026-06-24 17:20 ET]
+[job] start_et=2026-06-24 17:15:21 ET (claimed)
+[job] end_et=2026-06-24 17:15:21 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3573 attempt=5/5 (will run after next poll loop)
+
+[job] id=3573 type=odds_check job_date_et=2026-06-24 game_group_id=6 scheduled_time=2026-06-24 17:15 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=6 window=[2026-06-24 17:05 ET -> 2026-06-24 17:20 ET]
+[job] start_et=2026-06-24 17:15:21 ET (claimed)
+[job] end_et=2026-06-24 17:15:21 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] SKIPPED (terminal, max retries) job_id=3573 type=odds_check — status=skipped; downstream deps will proceed
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+! PIPELINE ALERT: JOB SKIPPED (terminal — max retries; deps unblocked)
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  time_utc:     2026-06-24T21:15:21Z
+  job_id:       3573
+  job_type:     odds_check
+  job_date_et:  2026-06-24
+  started_utc:  2026-06-24T21:15:21Z
+  finished_utc: 2026-06-24T21:15:21Z
+  error_tail:
+    3:10 PM ET     closing ML odds present
+      ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+      ✓  KC@TB           6:40 PM ET     closing ML odds present
+      ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+      ✓  NYY@DET         6:40 PM ET     closing ML odds present
+      ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+      ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+      ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+      ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+      ✓  AZ@STL          7:45 PM ET     closing ML odds present
+      ✓  ATL@SD          8:40 PM ET     closing ML odds present
+      ✓  ATH@SF          9:45 PM ET     closing ML odds present
+      ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+    
+      ✗  1 game(s) have no odds: CHC@NYM
+    
+      Options:
+        1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+           Then wait 30–60 min for books to post lines and rerun this check
+        2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+           (those games will show N/A odds and skip signal evaluation) | terminal=skipped after 5 attempts (deps unblocked — assume manual follow-up)
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 17:55 ET (~2400s)
+
+[job] id=3582 type=weather job_date_et=2026-06-24 game_group_id=6 scheduled_time=2026-06-24 17:55 ET
+[job] command='python batch/ingestion/load_weather.py --date 2026-06-24'
+[job] context: group_id=6 window=[2026-06-24 17:40 ET -> 2026-06-24 18:10 ET]
+[job] start_et=2026-06-24 17:55:21 ET (claimed)
+[job] end_et=2026-06-24 17:55:38 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 18:10 ET (~900s)
+
+[job] id=3565 type=odds_pull job_date_et=2026-06-24 game_group_id=7 scheduled_time=2026-06-24 18:10 ET
+[job] command='python batch/ingestion/load_odds.py --pregame --markets game --date 2026-06-24'
+[job] context: group_id=7 window=[2026-06-24 18:05 ET -> 2026-06-24 18:15 ET]
+[job] start_et=2026-06-24 18:10:38 ET (claimed)
+[job] end_et=2026-06-24 18:10:39 ET status=complete rc=0
+
+[job] id=3591 type=group_brief job_date_et=2026-06-24 game_group_id=6 scheduled_time=2026-06-24 18:10 ET
+[job] command='python batch/pipeline/generate_daily_brief.py --session primary --date 2026-06-24 --as-of "2026-06-24 18:10" --game-group-id 6'
+[job] context: group_id=6 window=[2026-06-24 18:10 ET -> 2026-06-24 18:12 ET]
+[job] start_et=2026-06-24 18:10:39 ET (claimed)
+[job] end_et=2026-06-24 18:10:46 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 18:12 ET (~120s)
+
+[job] id=3600 type=ledger_snapshot job_date_et=2026-06-24 game_group_id=6 scheduled_time=2026-06-24 18:12 ET
+[job] command='python batch/pipeline/daily_results_report.py --date 2026-06-24'
+[job] context: group_id=6 window=[2026-06-24 18:10 ET -> 2026-06-24 18:40 ET]
+[job] start_et=2026-06-24 18:12:46 ET (claimed)
+[job] end_et=2026-06-24 18:12:46 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 18:15 ET (~180s)
+
+[job] id=3574 type=odds_check job_date_et=2026-06-24 game_group_id=7 scheduled_time=2026-06-24 18:15 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=7 window=[2026-06-24 18:05 ET -> 2026-06-24 18:20 ET]
+[job] start_et=2026-06-24 18:15:46 ET (claimed)
+[job] end_et=2026-06-24 18:15:46 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3574 attempt=1/5 (will run after next poll loop)
+
+[job] id=3574 type=odds_check job_date_et=2026-06-24 game_group_id=7 scheduled_time=2026-06-24 18:15 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=7 window=[2026-06-24 18:05 ET -> 2026-06-24 18:20 ET]
+[job] start_et=2026-06-24 18:15:46 ET (claimed)
+[job] end_et=2026-06-24 18:15:46 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3574 attempt=2/5 (will run after next poll loop)
+
+[job] id=3574 type=odds_check job_date_et=2026-06-24 game_group_id=7 scheduled_time=2026-06-24 18:15 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=7 window=[2026-06-24 18:05 ET -> 2026-06-24 18:20 ET]
+[job] start_et=2026-06-24 18:15:46 ET (claimed)
+[job] end_et=2026-06-24 18:15:47 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3574 attempt=3/5 (will run after next poll loop)
+
+[job] id=3574 type=odds_check job_date_et=2026-06-24 game_group_id=7 scheduled_time=2026-06-24 18:15 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=7 window=[2026-06-24 18:05 ET -> 2026-06-24 18:20 ET]
+[job] start_et=2026-06-24 18:15:47 ET (claimed)
+[job] end_et=2026-06-24 18:15:47 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3574 attempt=4/5 (will run after next poll loop)
+
+[job] id=3574 type=odds_check job_date_et=2026-06-24 game_group_id=7 scheduled_time=2026-06-24 18:15 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=7 window=[2026-06-24 18:05 ET -> 2026-06-24 18:20 ET]
+[job] start_et=2026-06-24 18:15:47 ET (claimed)
+[job] end_et=2026-06-24 18:15:47 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3574 attempt=5/5 (will run after next poll loop)
+
+[job] id=3574 type=odds_check job_date_et=2026-06-24 game_group_id=7 scheduled_time=2026-06-24 18:15 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=7 window=[2026-06-24 18:05 ET -> 2026-06-24 18:20 ET]
+[job] start_et=2026-06-24 18:15:47 ET (claimed)
+[job] end_et=2026-06-24 18:15:47 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] SKIPPED (terminal, max retries) job_id=3574 type=odds_check — status=skipped; downstream deps will proceed
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+! PIPELINE ALERT: JOB SKIPPED (terminal — max retries; deps unblocked)
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  time_utc:     2026-06-24T22:15:47Z
+  job_id:       3574
+  job_type:     odds_check
+  job_date_et:  2026-06-24
+  started_utc:  2026-06-24T22:15:47Z
+  finished_utc: 2026-06-24T22:15:47Z
+  error_tail:
+    3:10 PM ET     closing ML odds present
+      ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+      ✓  KC@TB           6:40 PM ET     closing ML odds present
+      ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+      ✓  NYY@DET         6:40 PM ET     closing ML odds present
+      ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+      ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+      ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+      ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+      ✓  AZ@STL          7:45 PM ET     closing ML odds present
+      ✓  ATL@SD          8:40 PM ET     closing ML odds present
+      ✓  ATH@SF          9:45 PM ET     closing ML odds present
+      ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+    
+      ✗  1 game(s) have no odds: CHC@NYM
+    
+      Options:
+        1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+           Then wait 30–60 min for books to post lines and rerun this check
+        2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+           (those games will show N/A odds and skip signal evaluation) | terminal=skipped after 5 attempts (deps unblocked — assume manual follow-up)
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 18:55 ET (~2400s)
+
+[job] id=3583 type=weather job_date_et=2026-06-24 game_group_id=7 scheduled_time=2026-06-24 18:55 ET
+[job] command='python batch/ingestion/load_weather.py --date 2026-06-24'
+[job] context: group_id=7 window=[2026-06-24 18:40 ET -> 2026-06-24 19:10 ET]
+[job] start_et=2026-06-24 18:55:47 ET (claimed)
+[job] end_et=2026-06-24 18:56:04 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 19:10 ET (~840s)
+
+[job] id=3566 type=odds_pull job_date_et=2026-06-24 game_group_id=8 scheduled_time=2026-06-24 19:10 ET
+[job] command='python batch/ingestion/load_odds.py --pregame --markets game --date 2026-06-24'
+[job] context: group_id=8 window=[2026-06-24 19:05 ET -> 2026-06-24 19:15 ET]
+[job] start_et=2026-06-24 19:10:04 ET (claimed)
+[job] end_et=2026-06-24 19:10:06 ET status=complete rc=0
+
+[job] id=3592 type=group_brief job_date_et=2026-06-24 game_group_id=7 scheduled_time=2026-06-24 19:10 ET
+[job] command='python batch/pipeline/generate_daily_brief.py --session primary --date 2026-06-24 --as-of "2026-06-24 19:10" --game-group-id 7'
+[job] context: group_id=7 window=[2026-06-24 19:10 ET -> 2026-06-24 19:12 ET]
+[job] start_et=2026-06-24 19:10:06 ET (claimed)
+[job] end_et=2026-06-24 19:10:09 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 19:12 ET (~120s)
+
+[job] id=3601 type=ledger_snapshot job_date_et=2026-06-24 game_group_id=7 scheduled_time=2026-06-24 19:12 ET
+[job] command='python batch/pipeline/daily_results_report.py --date 2026-06-24'
+[job] context: group_id=7 window=[2026-06-24 19:10 ET -> 2026-06-24 19:40 ET]
+[job] start_et=2026-06-24 19:12:09 ET (claimed)
+[job] end_et=2026-06-24 19:12:09 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 19:15 ET (~180s)
+
+[job] id=3575 type=odds_check job_date_et=2026-06-24 game_group_id=8 scheduled_time=2026-06-24 19:15 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=8 window=[2026-06-24 19:05 ET -> 2026-06-24 19:20 ET]
+[job] start_et=2026-06-24 19:15:09 ET (claimed)
+[job] end_et=2026-06-24 19:15:10 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3575 attempt=1/5 (will run after next poll loop)
+
+[job] id=3575 type=odds_check job_date_et=2026-06-24 game_group_id=8 scheduled_time=2026-06-24 19:15 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=8 window=[2026-06-24 19:05 ET -> 2026-06-24 19:20 ET]
+[job] start_et=2026-06-24 19:15:10 ET (claimed)
+[job] end_et=2026-06-24 19:15:10 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3575 attempt=2/5 (will run after next poll loop)
+
+[job] id=3575 type=odds_check job_date_et=2026-06-24 game_group_id=8 scheduled_time=2026-06-24 19:15 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=8 window=[2026-06-24 19:05 ET -> 2026-06-24 19:20 ET]
+[job] start_et=2026-06-24 19:15:10 ET (claimed)
+[job] end_et=2026-06-24 19:15:10 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3575 attempt=3/5 (will run after next poll loop)
+
+[job] id=3575 type=odds_check job_date_et=2026-06-24 game_group_id=8 scheduled_time=2026-06-24 19:15 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=8 window=[2026-06-24 19:05 ET -> 2026-06-24 19:20 ET]
+[job] start_et=2026-06-24 19:15:10 ET (claimed)
+[job] end_et=2026-06-24 19:15:10 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3575 attempt=4/5 (will run after next poll loop)
+
+[job] id=3575 type=odds_check job_date_et=2026-06-24 game_group_id=8 scheduled_time=2026-06-24 19:15 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=8 window=[2026-06-24 19:05 ET -> 2026-06-24 19:20 ET]
+[job] start_et=2026-06-24 19:15:10 ET (claimed)
+[job] end_et=2026-06-24 19:15:10 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3575 attempt=5/5 (will run after next poll loop)
+
+[job] id=3575 type=odds_check job_date_et=2026-06-24 game_group_id=8 scheduled_time=2026-06-24 19:15 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=8 window=[2026-06-24 19:05 ET -> 2026-06-24 19:20 ET]
+[job] start_et=2026-06-24 19:15:10 ET (claimed)
+[job] end_et=2026-06-24 19:15:11 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] SKIPPED (terminal, max retries) job_id=3575 type=odds_check — status=skipped; downstream deps will proceed
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+! PIPELINE ALERT: JOB SKIPPED (terminal — max retries; deps unblocked)
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  time_utc:     2026-06-24T23:15:11Z
+  job_id:       3575
+  job_type:     odds_check
+  job_date_et:  2026-06-24
+  started_utc:  2026-06-24T23:15:10Z
+  finished_utc: 2026-06-24T23:15:11Z
+  error_tail:
+    3:10 PM ET     closing ML odds present
+      ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+      ✓  KC@TB           6:40 PM ET     closing ML odds present
+      ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+      ✓  NYY@DET         6:40 PM ET     closing ML odds present
+      ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+      ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+      ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+      ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+      ✓  AZ@STL          7:45 PM ET     closing ML odds present
+      ✓  ATL@SD          8:40 PM ET     closing ML odds present
+      ✓  ATH@SF          9:45 PM ET     closing ML odds present
+      ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+    
+      ✗  1 game(s) have no odds: CHC@NYM
+    
+      Options:
+        1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+           Then wait 30–60 min for books to post lines and rerun this check
+        2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+           (those games will show N/A odds and skip signal evaluation) | terminal=skipped after 5 attempts (deps unblocked — assume manual follow-up)
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 19:55 ET (~2400s)
+
+[job] id=3584 type=weather job_date_et=2026-06-24 game_group_id=8 scheduled_time=2026-06-24 19:55 ET
+[job] command='python batch/ingestion/load_weather.py --date 2026-06-24'
+[job] context: group_id=8 window=[2026-06-24 19:40 ET -> 2026-06-24 20:10 ET]
+[job] start_et=2026-06-24 19:55:11 ET (claimed)
+[job] end_et=2026-06-24 19:55:26 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 20:10 ET (~900s)
+
+[job] id=3593 type=group_brief job_date_et=2026-06-24 game_group_id=8 scheduled_time=2026-06-24 20:10 ET
+[job] command='python batch/pipeline/generate_daily_brief.py --session primary --date 2026-06-24 --as-of "2026-06-24 20:10" --game-group-id 8'
+[job] context: group_id=8 window=[2026-06-24 20:10 ET -> 2026-06-24 20:12 ET]
+[job] start_et=2026-06-24 20:10:26 ET (claimed)
+[job] end_et=2026-06-24 20:10:28 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 20:12 ET (~120s)
+
+[job] id=3602 type=ledger_snapshot job_date_et=2026-06-24 game_group_id=8 scheduled_time=2026-06-24 20:12 ET
+[job] command='python batch/pipeline/daily_results_report.py --date 2026-06-24'
+[job] context: group_id=8 window=[2026-06-24 20:10 ET -> 2026-06-24 20:40 ET]
+[job] start_et=2026-06-24 20:12:28 ET (claimed)
+[job] end_et=2026-06-24 20:12:29 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 20:15 ET (~180s)
+
+[job] id=3567 type=odds_pull job_date_et=2026-06-24 game_group_id=9 scheduled_time=2026-06-24 20:15 ET
+[job] command='python batch/ingestion/load_odds.py --pregame --markets game --date 2026-06-24'
+[job] context: group_id=9 window=[2026-06-24 20:10 ET -> 2026-06-24 20:20 ET]
+[job] start_et=2026-06-24 20:15:29 ET (claimed)
+[job] end_et=2026-06-24 20:15:31 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 20:20 ET (~300s)
+
+[job] id=3576 type=odds_check job_date_et=2026-06-24 game_group_id=9 scheduled_time=2026-06-24 20:20 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=9 window=[2026-06-24 20:10 ET -> 2026-06-24 20:25 ET]
+[job] start_et=2026-06-24 20:20:31 ET (claimed)
+[job] end_et=2026-06-24 20:20:31 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3576 attempt=1/5 (will run after next poll loop)
+
+[job] id=3576 type=odds_check job_date_et=2026-06-24 game_group_id=9 scheduled_time=2026-06-24 20:20 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=9 window=[2026-06-24 20:10 ET -> 2026-06-24 20:25 ET]
+[job] start_et=2026-06-24 20:20:31 ET (claimed)
+[job] end_et=2026-06-24 20:20:31 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3576 attempt=2/5 (will run after next poll loop)
+
+[job] id=3576 type=odds_check job_date_et=2026-06-24 game_group_id=9 scheduled_time=2026-06-24 20:20 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=9 window=[2026-06-24 20:10 ET -> 2026-06-24 20:25 ET]
+[job] start_et=2026-06-24 20:20:31 ET (claimed)
+[job] end_et=2026-06-24 20:20:31 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3576 attempt=3/5 (will run after next poll loop)
+
+[job] id=3576 type=odds_check job_date_et=2026-06-24 game_group_id=9 scheduled_time=2026-06-24 20:20 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=9 window=[2026-06-24 20:10 ET -> 2026-06-24 20:25 ET]
+[job] start_et=2026-06-24 20:20:31 ET (claimed)
+[job] end_et=2026-06-24 20:20:31 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3576 attempt=4/5 (will run after next poll loop)
+
+[job] id=3576 type=odds_check job_date_et=2026-06-24 game_group_id=9 scheduled_time=2026-06-24 20:20 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=9 window=[2026-06-24 20:10 ET -> 2026-06-24 20:25 ET]
+[job] start_et=2026-06-24 20:20:32 ET (claimed)
+[job] end_et=2026-06-24 20:20:32 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] RETRY — job_id=3576 attempt=5/5 (will run after next poll loop)
+
+[job] id=3576 type=odds_check job_date_et=2026-06-24 game_group_id=9 scheduled_time=2026-06-24 20:20 ET
+[job] command='python diagnostics/check_odds_ready.py --date 2026-06-24'
+[job] context: group_id=9 window=[2026-06-24 20:10 ET -> 2026-06-24 20:25 ET]
+[job] start_et=2026-06-24 20:20:32 ET (claimed)
+[job] end_et=2026-06-24 20:20:32 ET failure rc=1
+[job] error_tail=Checking odds readiness for 2026-06-24 (16 games)...
+  ✓  TEX@MIA         12:10 PM ET    closing ML odds present
+  ✓  CHC@NYM         1:10 PM ET     closing ML odds present
+  ✓  CLE@CWS         2:10 PM ET     closing ML odds present
+  ✓  BOS@COL         3:10 PM ET     closing ML odds present
+  ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+  ✓  KC@TB           6:40 PM ET     closing ML odds present
+  ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+  ✓  NYY@DET         6:40 PM ET     closing ML odds present
+  ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+  ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+  ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+  ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+  ✓  AZ@STL          7:45 PM ET     closing ML odds present
+  ✓  ATL@SD          8:40 PM ET     closing ML odds present
+  ✓  ATH@SF          9:45 PM ET     closing ML odds present
+  ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+
+  ✗  1 game(s) have no odds: CHC@NYM
+
+  Options:
+    1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+       Then wait 30–60 min for books to post lines and rerun this check
+    2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+       (those games will show N/A odds and skip signal evaluation)
+[job] SKIPPED (terminal, max retries) job_id=3576 type=odds_check — status=skipped; downstream deps will proceed
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+! PIPELINE ALERT: JOB SKIPPED (terminal — max retries; deps unblocked)
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  time_utc:     2026-06-25T00:20:32Z
+  job_id:       3576
+  job_type:     odds_check
+  job_date_et:  2026-06-24
+  started_utc:  2026-06-25T00:20:32Z
+  finished_utc: 2026-06-25T00:20:32Z
+  error_tail:
+    3:10 PM ET     closing ML odds present
+      ✓  BAL@LAA         4:07 PM ET     closing ML odds present
+      ✓  KC@TB           6:40 PM ET     closing ML odds present
+      ✓  SEA@PIT         6:40 PM ET     closing ML odds present
+      ✓  NYY@DET         6:40 PM ET     closing ML odds present
+      ✓  PHI@WSH         6:45 PM ET     closing ML odds present
+      ✓  HOU@TOR         7:07 PM ET     closing ML odds present
+      ✓  MIL@CIN         7:10 PM ET     closing ML odds present
+      ✓  LAD@MIN         7:40 PM ET     closing ML odds present
+      ✓  AZ@STL          7:45 PM ET     closing ML odds present
+      ✓  ATL@SD          8:40 PM ET     closing ML odds present
+      ✓  ATH@SF          9:45 PM ET     closing ML odds present
+      ✗  CHC@NYM         7:10 PM ET     NO ODDS IN DB — books may not have posted yet
+    
+      ✗  1 game(s) have no odds: CHC@NYM
+    
+      Options:
+        1. Re-run: python batch/ingestion/load_odds.py --pregame --markets game
+           Then wait 30–60 min for books to post lines and rerun this check
+        2. Run:    python batch/pipeline/generate_daily_brief.py --warn-missing
+           (those games will show N/A odds and skip signal evaluation) | terminal=skipped after 5 attempts (deps unblocked — assume manual follow-up)
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 21:00 ET (~2400s)
+
+[job] id=3585 type=weather job_date_et=2026-06-24 game_group_id=9 scheduled_time=2026-06-24 21:00 ET
+[job] command='python batch/ingestion/load_weather.py --date 2026-06-24'
+[job] context: group_id=9 window=[2026-06-24 20:45 ET -> 2026-06-24 21:15 ET]
+[job] start_et=2026-06-24 21:00:32 ET (claimed)
+[job] end_et=2026-06-24 21:00:48 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 21:15 ET (~900s)
+
+[job] id=3594 type=group_brief job_date_et=2026-06-24 game_group_id=9 scheduled_time=2026-06-24 21:15 ET
+[job] command='python batch/pipeline/generate_daily_brief.py --session primary --date 2026-06-24 --as-of "2026-06-24 21:15" --game-group-id 9'
+[job] context: group_id=9 window=[2026-06-24 21:15 ET -> 2026-06-24 21:17 ET]
+[job] start_et=2026-06-24 21:15:48 ET (claimed)
+[job] end_et=2026-06-24 21:15:50 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 21:17 ET (~120s)
+
+[job] id=3603 type=ledger_snapshot job_date_et=2026-06-24 game_group_id=9 scheduled_time=2026-06-24 21:17 ET
+[job] command='python batch/pipeline/daily_results_report.py --date 2026-06-24'
+[job] context: group_id=9 window=[2026-06-24 21:15 ET -> 2026-06-24 21:45 ET]
+[job] start_et=2026-06-24 21:17:50 ET (claimed)
+[job] end_et=2026-06-24 21:17:50 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 21:50 ET (~1980s)
+
+[job] id=3604 type=schedule_next_day_globals job_date_et=2026-06-24 game_group_id=0 scheduled_time=2026-06-24 21:50 ET
+[job] command='python batch/jobs/schedule_pipeline_day.py --globals-only --date-et 2026-06-25'
+[job] start_et=2026-06-24 21:50:50 ET (claimed)
+[job] end_et=2026-06-24 21:50:50 ET status=complete rc=0
+[run_pipeline] sleep-until-due: next pending at 2026-06-24 21:51 ET (~60s)
+
+[job] id=3605 type=daily_backup job_date_et=2026-06-24 game_group_id=0 scheduled_time=2026-06-24 21:51 ET
+[job] command='python batch/utils/daily_backup.py --date-et 2026-06-24'
+[job] start_et=2026-06-24 21:51:51 ET (claimed)
+[job] end_et=2026-06-24 21:53:52 ET status=complete rc=0
+
+[job] id=3606 type=email_runlog_eod job_date_et=2026-06-24 game_group_id=0 scheduled_time=2026-06-24 21:52 ET
+[job] command='python batch/jobs/email_run_log.py --date 2026-06-24 --kind eod'
+[job] start_et=2026-06-24 21:53:52 ET (claimed)
+[job] end_et=2026-06-24 21:53:53 ET status=complete rc=0
+[run_pipeline] no pending pipeline_jobs; exiting (--exit-when-no-pending).
