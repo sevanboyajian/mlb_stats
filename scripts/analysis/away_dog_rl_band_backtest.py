@@ -218,7 +218,14 @@ def month_breakdown(df: pd.DataFrame) -> list[str]:
     return lines
 
 
-def apply_base_gates(games: pd.DataFrame, odds: pd.DataFrame, min_games: int) -> pd.DataFrame:
+def apply_base_gates(
+    games: pd.DataFrame,
+    odds: pd.DataFrame,
+    min_games: int,
+    *,
+    require_sp_gate: bool = True,
+    require_rl_juice: bool = True,
+) -> pd.DataFrame:
     df = games.merge(odds, on="game_pk", how="inner")
 
     for col in (
@@ -231,7 +238,7 @@ def apply_base_gates(games: pd.DataFrame, odds: pd.DataFrame, min_games: int) ->
     df["month"] = df["game_date_et"].map(_month_from_date)
     df = df[df["month"].isin(MAY_AUG_MONTHS)].copy()
 
-    df = df[
+    mask = (
         (df["h_games_played"] >= min_games)
         & (df["a_games_played"] >= min_games)
         & df["away_ml"].notna()
@@ -240,11 +247,13 @@ def apply_base_gates(games: pd.DataFrame, odds: pd.DataFrame, min_games: int) ->
         & (df["away_ml"] > df["home_ml"])
         & df["total_line"].notna()
         & (df["total_line"] <= TOTAL_MAX)
-        & df["away_rl_odds"].notna()
-        & (df["away_rl_odds"] >= RL_JUICE_MIN)
-        & df["hsp_era"].notna()
-        & (df["hsp_era"] >= HOME_SP_ERA_MIN)
-    ].copy()
+    )
+    if require_rl_juice:
+        mask = mask & df["away_rl_odds"].notna() & (df["away_rl_odds"] >= RL_JUICE_MIN)
+    if require_sp_gate:
+        mask = mask & df["hsp_era"].notna() & (df["hsp_era"] >= HOME_SP_ERA_MIN)
+
+    df = df[mask].copy()
 
     covers: list[bool] = []
     pushes: list[bool] = []
@@ -272,36 +281,98 @@ def band_filter(df: pd.DataFrame, lo: int, hi: int) -> pd.DataFrame:
     return df[mask].copy()
 
 
+def gate_funnel(games: pd.DataFrame, odds: pd.DataFrame, min_games: int) -> list[str]:
+    """Document how many games survive each cumulative filter."""
+    df = games.merge(odds, on="game_pk", how="inner")
+    for col in (
+        "home_ml", "away_ml", "total_line", "away_rl_odds", "hsp_era",
+        "h_games_played", "a_games_played",
+    ):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    df["month"] = df["game_date_et"].map(_month_from_date)
+
+    steps: list[tuple[str, pd.Series]] = [
+        ("May-Aug with closing odds", df["month"].isin(MAY_AUG_MONTHS)),
+        (f"Both teams >= {min_games} GP", (df["h_games_played"] >= min_games) & (df["a_games_played"] >= min_games)),
+        ("Away underdog (away ML > home ML)", (df["away_ml"] > 0) & (df["away_ml"] > df["home_ml"])),
+        (f"Total line <= {TOTAL_MAX}", df["total_line"] <= TOTAL_MAX),
+        (f"Away RL juice >= {RL_JUICE_MIN}", df["away_rl_odds"] >= RL_JUICE_MIN),
+        (f"Home SP ERA WMA >= {HOME_SP_ERA_MIN}", df["hsp_era"] >= HOME_SP_ERA_MIN),
+    ]
+    lines = ["GATE FUNNEL (cumulative):"]
+    pool = df.copy()
+    for label, mask in steps:
+        pool = pool[mask.reindex(pool.index).fillna(False)]
+        lines.append(f"  {label:<40} N={len(pool):5d}")
+    lines.append(
+        "  NOTE: pitcher_rolling_stats SP gate only populated 2022+ in this DB; "
+        "2019-2021 drop at SP gate."
+    )
+    return lines
+
+
+def pipeline_validation(games: pd.DataFrame, odds: pd.DataFrame, min_games: int) -> list[str]:
+    """Reproduce headline benchmark slice (no SP / optional juice gates)."""
+    headline = apply_base_gates(
+        games, odds, min_games, require_sp_gate=False, require_rl_juice=False,
+    )
+    with_juice = apply_base_gates(
+        games, odds, min_games, require_sp_gate=False, require_rl_juice=True,
+    )
+    a_head = summarize_slice(band_filter(headline, *ML_BAND_A), "headline A")
+    a_juice = summarize_slice(band_filter(with_juice, *ML_BAND_A), "A+juice")
+    b_juice = summarize_slice(band_filter(with_juice, *ML_BAND_B), "B+juice")
+
+    lines = [
+        "PIPELINE VALIDATION (headline benchmark reproduction):",
+        (
+            f"  Band A, no SP/juice gates: N={a_head.n}  "
+            f"Cover={fmt_pct(a_head.cover_pct).strip()}  "
+            f"(target ~{CONTROL_N:,} / {CONTROL_COVER_PCT:.1f}%)"
+        ),
+        (
+            f"  Band A, juice gate only:   N={a_juice.n}  "
+            f"Cover={fmt_pct(a_juice.cover_pct).strip()}"
+        ),
+        (
+            f"  Band B, juice gate only:   N={b_juice.n}  "
+            f"Cover={fmt_pct(b_juice.cover_pct).strip()}  "
+            "(no SP gate — historical reference only)"
+        ),
+        (
+            "  Live-signal sections A-D below apply ALL gates "
+            f"(SP >= {HOME_SP_ERA_MIN}, RL >= {RL_JUICE_MIN})."
+        ),
+    ]
+    return lines
+
+
 def control_check(stats: SliceStats) -> list[str]:
-    lines = ["  CONTROL CHECK (Band A vs known benchmark 66.1% / n≈1,059):"]
+    lines = ["  CONTROL CHECK (Band A full live gates vs headline benchmark):"]
     if stats.cover_pct is None:
-        lines.append("  ⚠ Band A has no qualifying games — pipeline issue.")
+        lines.append("  WARN: Band A has no qualifying games -- pipeline issue.")
         return lines
 
-    n_ok = abs(stats.n - CONTROL_N) / CONTROL_N <= 0.05 if CONTROL_N else False
     cover_ok = abs(stats.cover_pct - CONTROL_COVER_PCT) <= 5.0
 
     lines.append(
-        f"  Actual: N={stats.n}  Cover={stats.cover_pct:.1f}%  "
-        f"(benchmark {CONTROL_COVER_PCT:.1f}%, n={CONTROL_N:,})"
+        f"  Full gates: N={stats.n}  Cover={stats.cover_pct:.1f}%  "
+        f"(headline ref {CONTROL_COVER_PCT:.1f}%, n={CONTROL_N:,} without SP gate)"
     )
-    if not cover_ok:
+    if cover_ok:
         lines.append(
-            f"  ⚠ Cover rate diverges by {stats.cover_pct - CONTROL_COVER_PCT:+.1f}pp "
-            f"(>{5.0}pp threshold) — verify SP/odds joins before trusting Band B."
-        )
-        lines.append(
-            "  NOTE: Benchmark may predate home SP >= 5.0 or RL juice gates; "
-            "full gate stack can reduce N vs headline backtest."
-        )
-    elif not n_ok:
-        pct_diff = 100.0 * (stats.n - CONTROL_N) / CONTROL_N
-        lines.append(
-            f"  ⚠ N differs by {pct_diff:+.1f}% from benchmark "
-            f"(within 5% expected if odds join complete)."
+            f"  OK: Cover within 5pp of headline ({stats.cover_pct - CONTROL_COVER_PCT:+.1f}pp)."
         )
     else:
-        lines.append("  ✓ Band A aligns with benchmark — pipeline trusted.")
+        lines.append(
+            f"  WARN: Cover diverges by {stats.cover_pct - CONTROL_COVER_PCT:+.1f}pp "
+            "-- verify joins if >5pp."
+        )
+    lines.append(
+        "  N is lower than headline because home SP >= 5.0 gate + RL juice gate "
+        "and pitcher_rolling_stats only covers 2022+."
+    )
     return lines
 
 
@@ -344,12 +415,12 @@ def band_b_verdict(stats: SliceStats) -> list[str]:
 def open_item_recommendation(stats_b: SliceStats) -> str:
     if stats_b.cover_pct is not None and stats_b.n >= 200 and stats_b.cover_pct >= 62.0:
         return (
-            "OPEN ITEM #10b: EXTEND — update score_today.py / generate_daily_brief.py "
-            f"away ML band to +101–+160 (Band B cover {stats_b.cover_pct:.1f}%, N={stats_b.n})."
+            "OPEN ITEM #10b: EXTEND -- update score_today.py / generate_daily_brief.py "
+            f"away ML band to +101-+160 (Band B cover {stats_b.cover_pct:.1f}%, N={stats_b.n})."
         )
     if stats_b.n < 200 or (stats_b.cover_pct is not None and stats_b.cover_pct < 62.0):
         return (
-            "OPEN ITEM #10b: DEFER — keep +101–+130 band "
+            "OPEN ITEM #10b: DEFER -- keep +101-+130 band "
             f"(Band B cover {fmt_pct(stats_b.cover_pct).strip()}, N={stats_b.n})."
         )
     return "OPEN ITEM #10b: REVIEW — inconclusive; manual review required."
@@ -368,40 +439,46 @@ def build_report(
     df_combined: pd.DataFrame,
     df_b_all: pd.DataFrame,
     seasons: list[int],
+    funnel_lines: list[str],
+    validation_lines: list[str],
 ) -> str:
     ts = datetime.now(tz=ET).strftime("%Y-%m-%d %I:%M %p %Z")
     lines = [
         "=" * 60,
-        "AWAY DOG RL ML BAND BACKTEST — Open Item #10b",
+        "AWAY DOG RL ML BAND BACKTEST -- Open Item #10b",
         f"Generated: {ts}",
-        f"Seasons: {seasons}  |  Window: May–Aug  |  Min GP: {MIN_GAMES}",
-        "Gates: away underdog | total ≤ 8.5 | away RL ≥ -190 | home SP ERA WMA ≥ 5.0",
+        f"Seasons: {seasons}  |  Window: May-Aug  |  Min GP: {MIN_GAMES}",
+        "Gates: away underdog | total <= 8.5 | away RL >= -190 | home SP ERA WMA >= 5.0",
         "=" * 60,
         "",
-        "SECTION A — Band A: away ML +101 to +130 (control)",
+        *funnel_lines,
+        "",
+        *validation_lines,
+        "",
+        "SECTION A -- Band A: away ML +101 to +130 (control)",
         *format_slice_block(band_a),
         *season_breakdown(df_a),
         *month_breakdown(df_a),
         *control_check(band_a),
         "",
-        "SECTION B — Band B: away ML +131 to +160 (proposed extension)",
+        "SECTION B -- Band B: away ML +131 to +160 (proposed extension)",
         *format_slice_block(band_b),
         *season_breakdown(df_b),
         *month_breakdown(df_b),
         *band_b_verdict(band_b),
         "",
         "  Band B sub-slices:",
-        f"    +131–+145: N={band_b_low.n}  Cover={fmt_pct(band_b_low.cover_pct).strip()}  "
+        f"    +131-+145: N={band_b_low.n}  Cover={fmt_pct(band_b_low.cover_pct).strip()}  "
         f"ROI@med={fmt_roi(band_b_low.roi_avg).strip()}",
-        f"    +146–+160: N={band_b_high.n}  Cover={fmt_pct(band_b_high.cover_pct).strip()}  "
+        f"    +146-+160: N={band_b_high.n}  Cover={fmt_pct(band_b_high.cover_pct).strip()}  "
         f"ROI@med={fmt_roi(band_b_high.roi_avg).strip()}",
         "",
-        "SECTION C — Combined: away ML +101 to +160",
+        "SECTION C -- Combined: away ML +101 to +160",
         *format_slice_block(band_combined),
         *season_breakdown(df_combined),
         *month_breakdown(df_combined),
         "",
-        "SECTION D — Band B dome sensitivity",
+        "SECTION D -- Band B dome sensitivity",
         "  With domes included:",
         *format_slice_block(band_b_no_dome),
         "  With domes excluded (Tropicana / Rogers Centre):",
@@ -467,6 +544,8 @@ def main() -> int:
         band_b_low_s, band_b_high_s,
         df_a, df_b, df_combined, df_b,
         seasons,
+        gate_funnel(games, odds, args.min_games),
+        pipeline_validation(games, odds, args.min_games),
     )
 
     REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -475,7 +554,8 @@ def main() -> int:
     csv_df = build_csv(pd.concat([df_a, df_b], ignore_index=True).drop_duplicates("game_pk"))
     csv_df.to_csv(CSV_PATH, index=False)
 
-    print(report)
+    sys.stdout.buffer.write((report + "\n\n").encode("utf-8", errors="replace"))
+    sys.stdout.buffer.flush()
     print(f"\n[away_dog_rl_band] Report: {REPORT_PATH}")
     print(f"[away_dog_rl_band] CSV:    {CSV_PATH}")
     return 0
